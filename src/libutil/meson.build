@@ -46,12 +46,6 @@ configdata_pub.set(
 
 subdir('nix-meson-build-support/libatomic')
 
-if host_machine.system() == 'sunos'
-  socket = cxx.find_library('socket')
-  network_service_library = cxx.find_library('nsl')
-  deps_other += [ socket, network_service_library ]
-endif
-
 blake3 = dependency(
   'libblake3',
   version : '>= 1.8.2',
@@ -195,14 +189,7 @@ if not cxx.has_header('widechar_width.h', required : false)
   include_dirs += include_directories('./widecharwidth')
 endif
 
-if host_machine.system() == 'linux'
-  subdir('linux')
-endif
-
-if host_machine.system() == 'freebsd'
-  subdir('freebsd')
-endif
-
+subdir('linux')
 subdir('unix')
 
 this_library = library(

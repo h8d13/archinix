@@ -46,8 +46,6 @@ if native_ln.found()
     '-s',
     meson.project_build_root() / '__nothing_link_target',
     meson.project_build_root() / '__nothing_symlink',
-    # native doesn't allow dangling symlinks, which the tests require
-    env : {'MSYS' : 'winsymlinks:lnk'},
     check : true,
   )
   can_link_symlink = run_command(
@@ -80,10 +78,8 @@ foreach funcspec : check_funcs
   configdata_priv.set(define_name, define_value)
 endforeach
 
-if host_machine.system() == 'linux'
-  has_landlock = cxx.has_header('linux/landlock.h')
-  configdata_priv.set('HAVE_LANDLOCK', has_landlock.to_int())
-endif
+has_landlock = cxx.has_header('linux/landlock.h')
+configdata_priv.set('HAVE_LANDLOCK', has_landlock.to_int())
 
 has_acl_support = cxx.has_header('sys/xattr.h') and cxx.has_function(
   'llistxattr',
@@ -96,11 +92,6 @@ configdata_pub.set(
   has_acl_support.to_int(),
   description : 'FIXME: It\'s a bit peculiar that this needs to be exposed. The reason is that that it effects whether the settings struct in a header has a particular field. This is also odd, because it means when there is no ACL support one will just get an "unknown setting" warning from their configuration.',
 )
-
-if host_machine.system() == 'darwin'
-  sandbox = cxx.find_library('sandbox')
-  deps_other += [ sandbox ]
-endif
 
 subdir('nix-meson-build-support/libatomic')
 
@@ -125,31 +116,20 @@ curl = dependency('libcurl', 'curl', version : '>= 8.17.0')
 
 deps_private += curl
 
-# seccomp only makes sense on Linux
-is_linux = host_machine.system() == 'linux'
 seccomp_required = get_option('seccomp-sandboxing')
-if not is_linux and seccomp_required.enabled()
-  warning('Force-enabling seccomp on non-Linux does not make sense')
-endif
 seccomp = dependency(
   'libseccomp',
   'seccomp',
   required : seccomp_required,
   version : '>=2.5.5',
 )
-if is_linux and not seccomp.found()
+if not seccomp.found()
   warning(
     'Sandbox security is reduced because libseccomp has not been found! Please provide libseccomp if it supports your CPU architecture.',
   )
 endif
 configdata_priv.set('HAVE_SECCOMP', seccomp.found().to_int())
 deps_private += seccomp
-
-if host_machine.system() == 'freebsd'
-  # libjail is not in freebsd.libc, but there's no discovery mechanism
-  libjail = declare_dependency(link_args : [ '-ljail' ])
-  deps_other += libjail
-endif
 
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
@@ -356,18 +336,7 @@ endif
 
 subdir('include/nix/store')
 
-if host_machine.system() == 'linux'
-  subdir('linux')
-endif
-
-if host_machine.system() == 'freebsd'
-  subdir('freebsd')
-endif
-
-if host_machine.system() == 'darwin'
-  subdir('darwin')
-endif
-
+subdir('linux')
 subdir('unix')
 
 this_library = library(

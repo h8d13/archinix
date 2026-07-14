@@ -85,10 +85,8 @@ createLinks(State & state, const std::filesystem::path & srcDir, const std::file
                     unlink(dstFile);
                     if (mkdir(
                             dstFile.c_str()
-#ifndef _WIN32 // TODO abstract mkdir perms for Windows
                                 ,
                             0755
-#endif
                             )
                         == -1)
                         throw SysError("creating directory '%1%'", dstFile);

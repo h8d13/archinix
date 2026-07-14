@@ -10,8 +10,9 @@
 
 #include <chrono>
 #include <future>
+#include <mutex>
 #include <string>
-#include <boost/unordered/unordered_flat_set.hpp>
+#include <boost/unordered/concurrent_flat_set.hpp>
 
 namespace nix {
 
@@ -505,7 +506,12 @@ private:
 
     std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
 
-    typedef boost::unordered_flat_set<ino_t> InodeHash;
+    /* Concurrent: shared by the optimiseStore worker threads. */
+    typedef boost::concurrent_flat_set<ino_t> InodeHash;
+
+    /* Whole-store optimise runs race on directory permission toggling;
+       one run at a time per process (workers parallelise inside). */
+    std::mutex optimiseStoreLock;
 
     InodeHash loadInodeHash();
     Strings readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
@@ -514,7 +520,8 @@ private:
         OptimiseStats & stats,
         const std::filesystem::path & path,
         InodeHash & inodeHash,
-        RepairFlag repair);
+        RepairFlag repair,
+        bool * parentToggled = nullptr);
 
     // Internal versions that are not wrapped in retry_sqlite.
     bool isValidPath_(State & state, const StorePath & path);

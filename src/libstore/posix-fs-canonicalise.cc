@@ -25,12 +25,10 @@ static void canonicaliseTimestampAndPermissions(const std::filesystem::path & pa
         }
     }
 
-#ifndef _WIN32 // TODO implement
     if (st.st_mtime != mtimeStore) {
         PosixStat st2 = st;
         st2.st_mtime = mtimeStore, setWriteTime(path, st2);
     }
-#endif
 }
 
 void canonicaliseTimestampAndPermissions(const std::filesystem::path & path)
@@ -43,15 +41,6 @@ static void canonicalisePathMetaData_(
 {
     checkInterrupt();
 
-#ifdef __APPLE__
-    /* Remove flags, in particular UF_IMMUTABLE which would prevent
-       the file from being garbage-collected. FIXME: Use
-       setattrlist() to remove other attributes as well. */
-    if (lchflags(path.c_str(), 0)) {
-        if (errno != ENOTSUP)
-            throw SysError("clearing flags of path %1%", PathFmt(path));
-    }
-#endif
 
     auto st = lstat(path);
 
@@ -81,7 +70,6 @@ static void canonicalisePathMetaData_(
     }
 #endif
 
-#ifndef _WIN32
     /* Fail if the file is not owned by the build user.  This prevents
        us from messing up the ownership/permissions of files
        hard-linked into the output (e.g. "ln /etc/shadow $out/foo").
@@ -97,19 +85,16 @@ static void canonicalisePathMetaData_(
             || (st.st_uid == geteuid() && (mode == 0444 || mode == 0555) && st.st_mtime == mtimeStore));
         return;
     }
-#endif
 
     inodesSeen.insert(Inode(st.st_dev, st.st_ino));
 
     canonicaliseTimestampAndPermissions(path, st);
 
-#ifndef _WIN32
     /* Change ownership to the current uid. */
     if (st.st_uid != geteuid()) {
         if (lchown(path.c_str(), geteuid(), getegid()) == -1)
             throw SysError("changing owner of %1% to %2%", PathFmt(path), geteuid());
     }
-#endif
 
     if (S_ISDIR(st.st_mode)) {
         for (auto & i : DirectoryIterator{path}) {

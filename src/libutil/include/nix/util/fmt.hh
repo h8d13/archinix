@@ -115,12 +115,7 @@ struct PathFmt
 {
     explicit PathFmt(const std::filesystem::path & p)
     {
-#ifdef _WIN32
-        auto s = p.u8string();
-        value = std::string(reinterpret_cast<const char *>(s.data()), s.size());
-#else
         value = p.string();
-#endif
     }
 
     std::string value;

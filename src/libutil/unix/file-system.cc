@@ -8,10 +8,6 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#ifdef __FreeBSD__
-#  include <sys/param.h>
-#  include <sys/mount.h>
-#endif
 
 #include "nix/util/file-system.hh"
 #include "nix/util/file-system-at.hh"
@@ -57,17 +53,10 @@ std::filesystem::path descriptorToPath(Descriptor fd)
     if (fd == STDERR_FILENO)
         return "<stderr>";
 
-#if defined(__linux__)
     try {
         return readLink("/proc/self/fd/" + std::to_string(fd));
     } catch (SystemError &) {
     }
-#elif HAVE_F_GETPATH
-    /* F_GETPATH requires PATH_MAX buffer per POSIX */
-    char buf[PATH_MAX];
-    if (fcntl(fd, F_GETPATH, buf) != -1)
-        return buf;
-#endif
 
     /* Fallback for unknown fd or unsupported platform */
     return "<fd " + std::to_string(fd) + ">";
@@ -144,13 +133,8 @@ void setWriteTime(
 #endif
 }
 
-#ifdef __FreeBSD__
-#  define MOUNTEDPATHS_PARAM , std::set<std::filesystem::path> & mountedPaths
-#  define MOUNTEDPATHS_ARG , mountedPaths
-#else
 #  define MOUNTEDPATHS_PARAM
 #  define MOUNTEDPATHS_ARG
-#endif
 
 static void _deletePath(
     Descriptor parentfd,
@@ -159,13 +143,6 @@ static void _deletePath(
     std::exception_ptr & ex MOUNTEDPATHS_PARAM)
 {
     checkInterrupt();
-#ifdef __FreeBSD__
-    // In case of emergency (unmount fails for some reason) not recurse into mountpoints.
-    // This prevents us from tearing up the nullfs-mounted nix store.
-    if (mountedPaths.find(path) != mountedPaths.end()) {
-        return;
-    }
-#endif
 
     auto name = CanonPath::fromFilename(path.filename().native());
 
@@ -275,18 +252,6 @@ void deletePath(const std::filesystem::path & path)
 void deletePath(const std::filesystem::path & path, uint64_t & bytesFreed)
 {
     // Activity act(*logger, lvlDebug, "recursively deleting path '%1%'", path);
-#ifdef __FreeBSD__
-    std::set<std::filesystem::path> mountedPaths;
-    struct statfs * mntbuf;
-    int count;
-    if ((count = getmntinfo(&mntbuf, MNT_WAIT)) < 0) {
-        throw SysError("getmntinfo");
-    }
-
-    for (int i = 0; i < count; i++) {
-        mountedPaths.emplace(mntbuf[i].f_mntonname);
-    }
-#endif
     bytesFreed = 0;
     _deletePath(path, bytesFreed MOUNTEDPATHS_ARG);
 }

@@ -22,9 +22,7 @@
 #include "nix/util/socket.hh"
 #include <variant>
 
-#ifndef _WIN32
 #  include <sys/socket.h>
-#endif
 
 #include <nlohmann/json.hpp>
 

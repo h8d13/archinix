@@ -9,9 +9,7 @@
 
 #include <atomic>
 
-#ifndef _WIN32
 #  include <sys/resource.h>
-#endif
 
 namespace nix {
 
@@ -80,7 +78,6 @@ protected:
 
 void PosixSourceAccessorBase::anchor() {}
 
-#ifndef _WIN32
 
 class PosixDirectorySourceAccessor;
 
@@ -583,210 +580,6 @@ try {
     throw SymlinkNotAllowed(e.path, "path '%s' is a symlink", showPath(e.path));
 }
 
-#else
-
-/**
- * A source accessor that uses the Windows filesystem.
- * @todo Should be moved into a separate file.
- */
-class WindowsSourceAccessor : public PosixSourceAccessorBase
-{
-    /**
-     * Optional root path to prefix all operations into the native file
-     * system. This allows prepending funny things like `C:\` that
-     * `CanonPath` intentionally doesn't support.
-     */
-    const std::filesystem::path root;
-
-public:
-
-    WindowsSourceAccessor();
-    WindowsSourceAccessor(std::filesystem::path && root, bool trackLastModified = false);
-
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override;
-
-    using SourceAccessor::readFile;
-
-    bool pathExists(const CanonPath & path) override;
-
-    std::optional<Stat> maybeLstat(const CanonPath & path) override;
-
-    DirEntries readDirectory(const CanonPath & path) override;
-
-    std::string readLink(const CanonPath & path) override;
-
-    std::optional<std::filesystem::path> getPhysicalPath(const CanonPath & path) override;
-
-private:
-
-    /**
-     * Throw an error if `path` or any of its ancestors are symlinks.
-     */
-    void assertNoSymlinks(CanonPath path);
-
-    std::optional<PosixStat> cachedLstat(const CanonPath & path);
-
-    std::filesystem::path makeAbsPath(const CanonPath & path);
-};
-
-WindowsSourceAccessor::WindowsSourceAccessor(std::filesystem::path && argRoot, bool trackLastModified)
-    : PosixSourceAccessorBase(trackLastModified)
-    , root(std::move(argRoot))
-{
-    assert(root.empty() || root.is_absolute());
-    displayPrefix = root.string();
-}
-
-WindowsSourceAccessor::WindowsSourceAccessor()
-    : WindowsSourceAccessor(std::filesystem::path{})
-{
-}
-
-std::filesystem::path WindowsSourceAccessor::makeAbsPath(const CanonPath & path)
-{
-    return root.empty()    ? (std::filesystem::path{path.abs()})
-           : path.isRoot() ? /* Don't append a slash for the root of the accessor, since
-                                it can be a non-directory (e.g. in the case of `fetchTree
-                                { type = "file" }`). */
-               root
-                           : root / path.rel();
-}
-
-void WindowsSourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback)
-{
-    assertNoSymlinks(path);
-
-    auto ap = makeAbsPath(path);
-
-    AutoCloseFD fd = toDescriptor(open(ap.string().c_str(), O_RDONLY));
-    if (!fd)
-        throw SysError("opening file '%1%'", ap.string());
-
-    auto size = getFileSize(fd.get());
-
-    sizeCallback(size);
-    FdSource source(fd.get());
-    /* The most important invariant we care about here is writing exactly size
-       bytes to the sink. drainInto should throw an EndOfFile if we fail to read
-       `size` bytes. */
-    source.drainInto(sink, size);
-}
-
-bool WindowsSourceAccessor::pathExists(const CanonPath & path)
-{
-    if (auto parent = path.parent())
-        assertNoSymlinks(*parent);
-    return nix::pathExists(makeAbsPath(path).string());
-}
-
-using Cache = boost::concurrent_flat_map<std::string, std::optional<PosixStat>>;
-static Cache cache;
-
-std::optional<PosixStat> WindowsSourceAccessor::cachedLstat(const CanonPath & path)
-{
-    // Note: we convert std::filesystem::path to std::string because the
-    // former is not hashable on libc++.
-    std::string absPath = makeAbsPath(path).string();
-
-    if (auto res = getConcurrent(cache, absPath))
-        return *res;
-
-    auto st = nix::maybeLstat(absPath.c_str());
-
-    if (cache.size() >= 16384)
-        cache.clear();
-    cache.emplace(std::move(absPath), st);
-
-    return st;
-}
-
-std::optional<SourceAccessor::Stat> WindowsSourceAccessor::maybeLstat(const CanonPath & path)
-{
-    if (auto parent = path.parent())
-        assertNoSymlinks(*parent);
-    auto st = cachedLstat(path);
-    if (!st)
-        return std::nullopt;
-
-    PosixSourceAccessorBase::maybeUpdateMtime(st->st_mtime);
-    return sourceAccessorStatFromPosixStat(*st);
-}
-
-SourceAccessor::DirEntries WindowsSourceAccessor::readDirectory(const CanonPath & path)
-{
-    assertNoSymlinks(path);
-    DirEntries res;
-    for (auto & entry : DirectoryIterator{makeAbsPath(path)}) {
-        checkInterrupt();
-        auto type = [&]() -> std::optional<Type> {
-            try {
-                /* WARNING: We are specifically not calling symlink_status()
-                 * here, because that always translates to `stat` call and
-                 * doesn't make use of any caching. Instead, we have to
-                 * rely on the myriad of `is_*` functions, which actually do
-                 * the caching. If you are in doubt then take a look at the
-                 * libstdc++ implementation [1] and the standard proposal
-                 * about the caching variations of directory_entry [2].
-
-                 * [1]:
-                 https://github.com/gcc-mirror/gcc/blob/8ea555b7b4725dbc5d9286f729166cd54ce5b615/libstdc%2B%2B-v3/include/bits/fs_dir.h#L341-L348
-                 * [2]: https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0317r1.html
-                 */
-
-                /* Check for symlink first, because other getters follow symlinks. */
-                if (entry.is_symlink())
-                    return tSymlink;
-                if (entry.is_regular_file())
-                    return tRegular;
-                if (entry.is_directory())
-                    return tDirectory;
-                if (entry.is_character_file())
-                    return tChar;
-                if (entry.is_block_file())
-                    return tBlock;
-                if (entry.is_fifo())
-                    return tFifo;
-                if (entry.is_socket())
-                    return tSocket;
-                return tUnknown;
-            } catch (std::filesystem::filesystem_error & e) {
-                // We cannot always stat the child. (Ideally there is no
-                // stat because the native directory entry has the type
-                // already, but this isn't always the case.)
-                if (e.code() == std::errc::permission_denied || e.code() == std::errc::operation_not_permitted)
-                    return std::nullopt;
-                else
-                    throw SystemError(e.code(), "getting status of '%s'", PathFmt(entry.path()));
-            }
-        }();
-        res.emplace(entry.path().filename().string(), type);
-    }
-    return res;
-}
-
-std::string WindowsSourceAccessor::readLink(const CanonPath & path)
-{
-    if (auto parent = path.parent())
-        assertNoSymlinks(*parent);
-    return nix::readLink(makeAbsPath(path)).string();
-}
-
-std::optional<std::filesystem::path> WindowsSourceAccessor::getPhysicalPath(const CanonPath & path)
-{
-    return makeAbsPath(path);
-}
-
-void WindowsSourceAccessor::assertNoSymlinks(CanonPath path)
-{
-    while (!path.isRoot()) {
-        auto st = cachedLstat(path);
-        if (st && S_ISLNK(st->st_mode))
-            throw SymlinkNotAllowed(path, "path '%s' is a symlink", showPath(path));
-        path.pop();
-    }
-}
-
-#endif
 
 } // namespace
 
@@ -798,7 +591,6 @@ ref<SourceAccessor> getFSSourceAccessor()
 
 ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root, bool trackLastModified, FinalSymlink finalSymlink)
 {
-#ifndef _WIN32
     assert(root.is_absolute());
     AutoCloseFD fd = openFileReadonly(root, finalSymlink);
 
@@ -881,9 +673,6 @@ ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root, bool trackL
 
     else
         throw Error("file %1% has an unsupported type", PathFmt(root));
-#else
-    return make_ref<WindowsSourceAccessor>(std::move(root), trackLastModified);
-#endif
 }
 
 } // namespace nix

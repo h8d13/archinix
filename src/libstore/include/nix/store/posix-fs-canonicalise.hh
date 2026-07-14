@@ -17,14 +17,12 @@ typedef std::set<Inode> InodesSeen;
 
 struct CanonicalizePathMetadataOptions
 {
-#ifndef _WIN32
     /**
      * If uidRange is not empty, this function will throw an error if it
      * encounters files owned by a user outside of the closed interval
      * [uidRange->first, uidRange->second].
      */
     std::optional<std::pair<uid_t, uid_t>> uidRange;
-#endif
 
 #if NIX_SUPPORT_ACL
     /**

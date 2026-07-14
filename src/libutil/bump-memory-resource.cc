@@ -5,18 +5,14 @@
 #include "nix/util/alignment.hh"
 #include "nix/util/logging.hh"
 
-#ifndef _WIN32
 #  include <charconv>
 
 #  include <sys/resource.h>
 #  include <sys/mman.h>
-#endif
 
 namespace nix {
 
-#ifndef _WIN32
 
-#  ifdef __linux__
 static bool canOvercommitLinux()
 try {
     auto policyS = readFile("/proc/sys/vm/overcommit_memory");
@@ -30,7 +26,6 @@ try {
     return false;
 }
 
-#  endif
 
 static bool checkRlimit(std::size_t reserveSize)
 {
@@ -48,21 +43,17 @@ static bool canOvercommit(std::size_t reserveSize)
     if constexpr (sizeof(void *) < 8)
         return false;
 
-#  ifdef __linux__
     static bool overcommitPossible = canOvercommitLinux();
     if (!overcommitPossible)
         return false;
-#  endif
 
     return checkRlimit(reserveSize);
 }
 
-#endif // _WIN32
 
 BumpMemoryResource::BumpMemoryResource(std::size_t reserveSize, std::pmr::memory_resource * upstream, bool dontDump)
     : upstreamResource(upstream)
 {
-#ifndef _WIN32
     if (!canOvercommit(reserveSize))
         return;
 
@@ -91,15 +82,12 @@ BumpMemoryResource::BumpMemoryResource(std::size_t reserveSize, std::pmr::memory
     if (!dumpEverything && dontDump && ::madvise(p, reserveSize, MADV_DONTDUMP))
         throw SysError("calling madvise");
 #  endif
-#endif
 }
 
 BumpMemoryResource::~BumpMemoryResource()
 {
-#ifndef _WIN32
     if (base)
         ::munmap(base, capacity);
-#endif
 }
 
 void * BumpMemoryResource::do_allocate(std::size_t bytes, std::size_t alignment)

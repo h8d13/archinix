@@ -8,9 +8,7 @@
 #include <fstream>
 #include <string>
 #include <regex>
-#ifndef _WIN32
 #  include <glob.h>
-#endif
 
 namespace nix {
 
@@ -564,7 +562,6 @@ nlohmann::json Args::toJSON()
 static void _completePath(AddCompletions & completions, std::string_view prefix, bool onlyDirs)
 {
     completions.setType(Completions::Type::Filenames);
-#ifndef _WIN32 // TODO implement globbing completions on Windows
     glob_t globbuf;
     int flags = GLOB_NOESCAPE;
 #  ifdef GLOB_ONLYDIR
@@ -583,7 +580,6 @@ static void _completePath(AddCompletions & completions, std::string_view prefix,
         }
     }
     globfree(&globbuf);
-#endif
 }
 
 void Args::completePath(AddCompletions & completions, size_t, std::string_view prefix)

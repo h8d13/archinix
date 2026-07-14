@@ -13,9 +13,7 @@
 #  include "nix/store/aws-creds.hh"
 #endif
 
-#ifdef __linux__
 #  include "nix/util/linux-namespaces.hh"
-#endif
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -88,12 +86,10 @@ std::optional<std::filesystem::path> FileTransferSettings::getDefaultSSLCertFile
 {
     /* Windows has no notion of a default location for the certificate bundles.
        Instead we use CURLSSLOPT_NATIVE_CA by default. */
-#ifndef _WIN32
     for (auto & fn :
          {"/etc/ssl/certs/ca-certificates.crt", "/nix/var/nix/profiles/default/etc/ssl/certs/ca-bundle.crt"})
         if (pathAccessible(fn))
             return fn;
-#endif
     return std::nullopt;
 }
 
@@ -531,14 +527,12 @@ struct curlFileTransfer : public FileTransfer
             return ((TransferItem *) userp)->readCallback(buffer, size, nitems);
         }
 
-#if !defined(_WIN32)
         static int cloexec_callback(void *, curl_socket_t curlfd, curlsocktype purpose)
         {
             unix::closeOnExec(curlfd);
             vomit("cloexec set for fd %i", curlfd);
             return CURL_SOCKOPT_OK;
         }
-#endif
 
         size_t seekCallback(curl_off_t offset, int origin) noexcept
         try {
@@ -668,15 +662,8 @@ struct curlFileTransfer : public FileTransfer
                .string().c_str() are safe. See the comment near CURLOPT_SSLKEY below. */
             if (auto & caFile = fileTransfer.settings.caFile.get())
                 curl_easy_setopt(req, CURLOPT_CAINFO, caFile->string().c_str());
-#ifdef _WIN32
-            /* Use native windows certificate store when the option is not specified explicitly. */
-            else
-                curl_easy_setopt(req, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
-#endif
 
-#if !defined(_WIN32)
             curl_easy_setopt(req, CURLOPT_SOCKOPTFUNCTION, cloexec_callback);
-#endif
             curl_easy_setopt(req, CURLOPT_CONNECTTIMEOUT, fileTransfer.settings.connectTimeout.get());
 
             /* Enable TCP keepalive to detect dead connections and server closures.
@@ -1061,18 +1048,14 @@ struct curlFileTransfer : public FileTransfer
     void workerThreadMain()
     {
 /* Cause this thread to be notified on SIGINT. */
-#ifndef _WIN32 // TODO need graceful async exit support on Windows?
         auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
-#endif
 
-#ifdef __linux__
         try {
             tryUnshareFilesystem();
         } catch (nix::Error & e) {
             e.addTrace({}, "in download thread");
             throw;
         }
-#endif
 
         std::map<CURL *, std::shared_ptr<TransferItem>> items;
 

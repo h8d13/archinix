@@ -6,9 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#if defined(__linux__)
 #  include <sys/syscall.h> /* pull __NR_* definitions */
-#endif
 
 #if defined(__linux__) && defined(__NR_openat2)
 #  define HAVE_OPENAT2 1
@@ -25,7 +23,6 @@
 
 namespace nix {
 
-#ifdef __linux__
 
 namespace linux {
 
@@ -55,7 +52,6 @@ std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t
 
 } // namespace linux
 
-#endif
 
 void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t mode)
 {
@@ -79,7 +75,6 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
     }
 #endif
 
-#ifdef __linux__
     AutoCloseFD pathFd = ::openat(dirFd, path.rel_c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
     if (!pathFd) {
         throw SysError([&] {
@@ -115,15 +110,11 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
 
     static std::atomic<bool> warned = false;
     warnOnce(warned, "kernel doesn't support fchmodat2 and procfs isn't mounted, falling back to fchmodat");
-#endif
 
     int res = ::fchmodat(
         dirFd,
         path.rel_c_str(),
         mode,
-#if defined(AT_SYMLINK_NOFOLLOW) && !defined(__linux__)
-        AT_SYMLINK_NOFOLLOW
-#else
         /* We would like to avoid following symlinks on Linux too. (Even though
            Linux doesn't support chmoding symlinks, we should still fail if we
            try, and not falsely succeed by following.) However, if we reach
@@ -132,7 +123,6 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
            AT_SYMLINK_NOFOLLOW cause failures even if there is no symlink
            being followed! */
         0
-#endif
     );
 
     if (res == -1) {
@@ -166,12 +156,7 @@ static AutoCloseFD openFileEnsureBeneathNoSymlinksIterative(
             getParentFd(), /* First iteration uses dirFd. */
             component.c_str(),
             O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-#ifdef __linux__
                 | O_PATH /* Linux-specific optimization. Files are open only for path resolution purposes. */
-#endif
-#ifdef __FreeBSD__
-                | O_RESOLVE_BENEATH /* Further guard against any possible SNAFUs. */
-#endif
         );
 
         if (!parentFd2) {

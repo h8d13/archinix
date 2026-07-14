@@ -16,11 +16,7 @@ struct ExecutablePath
     std::vector<std::filesystem::path> directories;
 
     constexpr static const OsChar separator =
-#ifdef WIN32
-        L';'
-#else
         ':'
-#endif
         ;
 
     /**

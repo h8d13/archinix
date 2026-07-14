@@ -19,10 +19,6 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
-#ifdef _WIN32
-#  include <windef.h>
-#  include <wchar.h>
-#endif
 
 #include <functional>
 #include <optional>
@@ -35,15 +31,11 @@
  * indicate symlinks by setting these mode bits when it detects a reparse point.
  */
 #ifndef S_IFLNK
-#  ifndef _WIN32
 #    error "S_IFLNK should be defined on non-Windows platforms"
-#  endif
 #  define S_IFLNK 0120000
 #endif
 #ifndef S_ISLNK
-#  ifndef _WIN32
 #    error "S_ISLNK should be defined on non-Windows platforms"
-#  endif
 #  define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
 #endif
 
@@ -100,44 +92,9 @@ bool isDirOrInDir(const std::filesystem::path & path, const std::filesystem::pat
  * `struct stat` is not 64-bit everywhere on Windows.
  */
 using PosixStat =
-#ifdef _WIN32
-    struct ::__stat64
-#else
     struct ::stat
-#endif
     ;
 
-#ifdef _WIN32
-namespace windows {
-
-/**
- * Convert Windows FILETIME to Unix time_t.
- */
-time_t fileTimeToUnixTime(const FILETIME & ft);
-
-/**
- * Fill a PosixStat structure from file attributes and timestamps.
- *
- * @param dwFileAttributes File attributes (FILE_ATTRIBUTE_*)
- * @param ftCreationTime Creation time
- * @param ftLastAccessTime Last access time
- * @param ftLastWriteTime Last write time
- * @param nFileSizeHigh High 32 bits of file size
- * @param nFileSizeLow Low 32 bits of file size
- * @param nNumberOfLinks Number of hard links (default 1)
- */
-void statFromFileInfo(
-    PosixStat & st,
-    DWORD dwFileAttributes,
-    const FILETIME & ftCreationTime,
-    const FILETIME & ftLastAccessTime,
-    const FILETIME & ftLastWriteTime,
-    DWORD nFileSizeHigh,
-    DWORD nFileSizeLow,
-    DWORD nNumberOfLinks = 1);
-
-} // namespace windows
-#endif
 
 /**
  * Get status of `path`.
@@ -502,7 +459,6 @@ bool chmodIfNeeded(const std::filesystem::path & path, mode_t mode, mode_t mask 
  */
 void chmod(const std::filesystem::path & path, mode_t mode);
 
-#ifndef _WIN32
 /**
  * Change ownership of a file, throwing an exception on error.
  *
@@ -511,7 +467,6 @@ void chmod(const std::filesystem::path & path, mode_t mode);
  * @param group New owner group ID.
  */
 void chown(const std::filesystem::path & path, uid_t owner, gid_t group);
-#endif
 
 /**
  * Remove a file, throwing an exception on error.

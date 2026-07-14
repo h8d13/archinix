@@ -32,17 +32,10 @@
 #include <stdio.h>
 #include <time.h>
 
-#ifndef _WIN32
 #  include <grp.h>
-#endif
 
-#ifdef __linux__
 #  include "nix/util/linux-namespaces.hh"
-#endif
 
-#ifdef __CYGWIN__
-#  include <windows.h>
-#endif
 
 #include <sqlite3.h>
 
@@ -161,7 +154,6 @@ LocalStore::LocalStore(ref<const Config> config)
         }
     }
 
-#ifndef _WIN32
     /* Optionally, create directories and set permissions for a
        multi-user install. */
     if (isRootUser() && localSettings.buildUsersGroup != "") {
@@ -181,7 +173,6 @@ LocalStore::LocalStore(ref<const Config> config)
             }
         }
     }
-#endif
 
     /* Ensure that the store and its parents are not symlinks. */
     if (!localSettings.allowSymlinkedStore) {
@@ -207,9 +198,7 @@ LocalStore::LocalStore(ref<const Config> config)
             AutoCloseFD fd = toDescriptor(open(
                 reservedPath.string().c_str(),
                 O_WRONLY | O_CREAT
-#ifndef _WIN32
                     | O_CLOEXEC
-#endif
                 ,
                 0600));
             int res = -1;
@@ -220,11 +209,7 @@ LocalStore::LocalStore(ref<const Config> config)
                 writeFull(fd.get(), std::string(gcSettings.reservedSize, 'X'));
                 [[gnu::unused]] auto res2 =
 
-#ifdef _WIN32
-                    SetEndOfFile(fd.get())
-#else
                     ftruncate(fd.get(), gcSettings.reservedSize)
-#endif
                     ;
             }
         }
@@ -516,15 +501,6 @@ void LocalStore::openDB(State & state, bool create)
                                      : SQLiteOpenMode::NoCreate;
     state.db = SQLite(dbDir / "db.sqlite", {.mode = openMode, .useWAL = settings.useSQLiteWAL});
 
-#ifdef __CYGWIN__
-    /* The cygwin version of sqlite3 has a patch which calls
-       SetDllDirectory("/usr/bin") on init. It was intended to fix extension
-       loading, which we don't use, and the effect of SetDllDirectory is
-       inherited by child processes, and causes libraries to be loaded from
-       /usr/bin instead of $PATH. This breaks quite a few things (e.g.
-       checkPhase on openssh), so we set it back to default behaviour. */
-    SetDllDirectoryW(L"");
-#endif
 
     /* !!! check whether sqlite has been built with foreign key
        support */
@@ -644,11 +620,9 @@ bool LocalStore::upgradeDBSchema(State & state, bool dryRun)
    bind mount.  So make the Nix store writable for this process. */
 void LocalStore::makeStoreWritable()
 {
-#ifdef __linux__
     if (!isRootUser())
         return;
     remountReadOnlyWritable(config->realStoreDir.get());
-#endif
 }
 
 void LocalStore::registerDrvOutput(const Realisation & info, CheckSigsFlag checkSigs)
@@ -956,14 +930,12 @@ void LocalStore::registerValidPath(const ValidPathInfo & info)
 
 void LocalStore::registerValidPaths(const ValidPathInfos & infos)
 {
-#ifndef _WIN32
     /* SQLite will fsync by default, but the new valid paths may not
        be fsync-ed.  So some may want to fsync them before registering
        the validity, at the expense of some speed of the path
        registering operation. */
     if (config->getLocalSettings().syncBeforeRegistering)
         sync();
-#endif
 
     return retrySQLite<void>([&]() {
         auto state(_state->lock());

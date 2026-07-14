@@ -129,11 +129,7 @@ public:
 };
 
 const uint32_t maxIdsPerBuild =
-#ifdef __linux__
     1 << 16
-#else
-    1
-#endif
     ;
 
 struct AutoAllocateUidSettings : public virtual Config
@@ -144,21 +140,13 @@ private:
 public:
     Setting<uint32_t> startId{
         this,
-#ifdef __linux__
         0x34000000,
-#else
-        56930,
-#endif
         "start-id",
         "The first UID and GID to use for dynamic ID allocation."};
 
     Setting<uint32_t> uidCount{
         this,
-#ifdef __linux__
         maxIdsPerBuild * 128,
-#else
-        128,
-#endif
         "id-count",
         "The number of UIDs/GIDs to use for dynamic ID allocation."};
 };
@@ -247,11 +235,9 @@ public:
           but reduces performance. The default is `false`.
         )"};
 
-#ifndef _WIN32
     // FIXME: remove this option, `fsync-store-paths` is faster.
     Setting<bool> syncBeforeRegistering{
         this, false, "sync-before-registering", "Whether to call `sync()` before registering a path as valid."};
-#endif
 
     Setting<bool> autoOptimiseStore{
         this,
@@ -337,7 +323,6 @@ public:
         true,
         Xp::AutoAllocateUids};
 
-#ifdef __linux__
     Setting<bool> useCgroups{
         this,
         false,
@@ -349,7 +334,6 @@ public:
           Cgroups are required and enabled automatically for derivations
           that require the `uid-range` system feature.
         )"};
-#endif
 
     Setting<bool> impersonateLinux26{
         this,
@@ -360,11 +344,7 @@ public:
 
     Setting<SandboxMode> sandboxMode{
         this,
-#if defined(__linux__) || defined(__FreeBSD__)
         smEnabled
-#else
-        smDisabled
-#endif
         ,
         "sandbox",
         R"(
@@ -418,7 +398,6 @@ public:
     Setting<bool> sandboxFallback{
         this, true, "sandbox-fallback", "Whether to disable sandboxing when the kernel doesn't allow it."};
 
-#ifndef _WIN32
     Setting<bool> requireDropSupplementaryGroups{
         this,
         isRootUser(),
@@ -439,9 +418,7 @@ public:
           (since `root` usually has permissions to call setgroups)
           and `false` otherwise.
         )"};
-#endif
 
-#ifdef __linux__
     Setting<std::string> sandboxShmSize{
         this,
         "50%",
@@ -454,9 +431,7 @@ public:
             description of the `size` option of `tmpfs` in mount(8). The default
             is `50%`.
         )"};
-#endif
 
-#if defined(__linux__) || defined(__FreeBSD__)
     Setting<AbsolutePath> sandboxBuildDir{
         this,
         "/build",
@@ -468,7 +443,6 @@ public:
 
             This directory is backed by [`build-dir`](#conf-build-dir) on the host.
         )"};
-#endif
 
     Setting<std::optional<AbsolutePath>> buildDir{
         this,
@@ -486,13 +460,6 @@ public:
         "allowed-impure-host-deps",
         "Which prefixes to allow derivations to ask for access to (primarily for Darwin)."};
 
-#ifdef __APPLE__
-    Setting<bool> darwinLogSandboxViolations{
-        this,
-        false,
-        "darwin-log-sandbox-violations",
-        "Whether to log Darwin sandbox access violations to the system log."};
-#endif
 
     Setting<bool> runDiffHook{
         this,
@@ -575,7 +542,6 @@ public:
               empty line. Entries have the same format as `sandbox-paths`.
         )"};
 
-#ifdef __linux__
     Setting<bool> filterSyscalls{
         this,
         true,
@@ -602,7 +568,6 @@ public:
           may be useful in certain scenarios (e.g. to spin up containers or
           set up userspace network interfaces in tests).
         )"};
-#endif
 
 #if NIX_SUPPORT_ACL
     Setting<StringSet> ignoredAcls{

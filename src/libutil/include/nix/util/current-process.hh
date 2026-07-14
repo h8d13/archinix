@@ -5,9 +5,7 @@
 #include <optional>
 #include <chrono>
 
-#ifndef _WIN32
 #  include <sys/resource.h>
-#endif
 
 #include "nix/util/types.hh"
 
@@ -25,13 +23,11 @@ std::chrono::microseconds getCpuUserTime();
 unsigned int getMaxCPU();
 
 // It does not seem possible to dynamically change stack size on Windows.
-#ifndef _WIN32
 /**
  * Increase the RLIMIT_STACK rlimit if it is currently smaller than `stackSize`.
  * @note Not thread safe. Calls to this should be wrapped in a std::call_once.
  */
 void ensureStackSizeAtLeast(size_t stackSize);
-#endif
 
 /**
  * Restore the original inherited Unix process context (such as signal

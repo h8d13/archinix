@@ -2,9 +2,7 @@
 ///@file
 
 #include <filesystem>
-#ifndef _WIN32
 #  include <sys/types.h>
-#endif
 
 #include "nix/util/types.hh"
 
@@ -12,12 +10,10 @@ namespace nix {
 
 std::string getUserName();
 
-#ifndef _WIN32
 /**
  * @return the given user's home directory from /etc/passwd.
  */
 std::filesystem::path getHomeOf(uid_t userId);
-#endif
 
 /**
  * @return $HOME or the user's home directory from /etc/passwd.

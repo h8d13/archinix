@@ -27,11 +27,9 @@
 #if HAVE_STATVFS
 #  include <sys/statvfs.h>
 #endif
-#ifndef _WIN32
 #  include <poll.h>
 #  include <sys/socket.h>
 #  include <sys/un.h>
-#endif
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -177,9 +175,7 @@ void LocalStore::findTempRoots(Roots & tempRoots, bool censor)
         debug("reading temporary root file %1%", PathFmt(path));
         AutoCloseFD fd(toDescriptor(open(
             path.string().c_str(),
-#ifndef _WIN32
             O_CLOEXEC |
-#endif
                 O_RDWR,
             0666)));
         if (!fd) {
@@ -405,9 +401,6 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
     auto fdServer = createUnixDomainSocket(socketPath, 0666);
 
     // TODO nonblocking socket on windows?
-#ifdef _WIN32
-    throw UnimplementedError("External GC client not implemented yet");
-#else
     if (fcntl(fdServer.get(), F_SETFL, fcntl(fdServer.get(), F_GETFL) | O_NONBLOCK) == -1)
         throw SysError("making socket %s non-blocking", PathFmt(socketPath));
 
@@ -512,7 +505,6 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             serverThread.join();
     });
 
-#endif
 
     /* Find the roots.  Since we've grabbed the GC lock, the set of
        permanent roots cannot increase now. */
@@ -877,14 +869,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         }
 
         int64_t overhead =
-#ifdef _WIN32
-            0
-#else
             [&] {
                 auto st = stat(linksDir);
                 return st.st_blocks * 512ULL;
             }()
-#endif
             ;
 
         printInfo("note: hard linking is currently saving %s", renderSize(unsharedSize - actualSize - overhead));

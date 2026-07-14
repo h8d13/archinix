@@ -3,15 +3,8 @@
 
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/fun.hh"
-#ifdef _WIN32
-#  include "nix/util/windows-async-pipe.hh"
-#endif
 
-#ifndef _WIN32
 #  include <poll.h>
-#else
-#  include <ioapiset.h>
-#endif
 
 namespace nix {
 
@@ -24,11 +17,7 @@ namespace nix {
  * multiple pipes.
  */
 using MuxablePipe =
-#ifndef _WIN32
     Pipe
-#else
-    windows::AsyncPipe
-#endif
     ;
 
 /**
@@ -38,31 +27,17 @@ using MuxablePipe =
  */
 struct MuxablePipePollState
 {
-#ifndef _WIN32
     std::vector<struct pollfd> pollStatus;
     std::map<int, size_t> fdToPollStatus;
-#else
-    OVERLAPPED_ENTRY oentries[0x20] = {0};
-    ULONG removed;
-    bool gotEOF = false;
-
-#endif
 
     /**
      * Check for ready (Unix) / completed (Windows) operations
      */
     void poll(
-#ifdef _WIN32
-        HANDLE ioport,
-#endif
         std::optional<unsigned int> timeout);
 
     using CommChannel =
-#ifndef _WIN32
         Descriptor
-#else
-        windows::AsyncPipe *
-#endif
         ;
 
     /**

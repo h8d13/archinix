@@ -16,11 +16,7 @@ StorePath StoreDirConfig::parseStorePath(std::string_view path) const
     // support remote stores whose store dir is a non-native path (e.g.
     // Windows <-> Unix ssh-ing).
     auto p =
-#ifdef _WIN32
-        std::filesystem::path(path)
-#else
         canonPath(std::string(path))
-#endif
         ;
     if (p.parent_path() != storeDir)
         throw BadStorePath("path %s is not in the Nix store", PathFmt(p));

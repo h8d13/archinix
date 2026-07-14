@@ -38,7 +38,6 @@ void connect(Socket fd, const std::filesystem::path & path);
  */
 AutoCloseFD connect(const std::filesystem::path & path);
 
-#ifndef _WIN32
 namespace unix {
 
 /**
@@ -92,6 +91,5 @@ struct ReceivedMessage
 ReceivedMessage receiveMessageWithFds(Descriptor sockfd, std::span<std::byte> data);
 
 } // namespace unix
-#endif
 
 } // namespace nix

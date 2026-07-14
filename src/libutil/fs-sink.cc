@@ -5,10 +5,6 @@
 #include "nix/util/file-system-at.hh"
 #include "nix/util/fs-sink.hh"
 
-#ifdef _WIN32
-#  include <fileapi.h>
-#  include "nix/util/file-path.hh"
-#endif
 
 #include "util-config-private.hh"
 
@@ -88,7 +84,6 @@ static std::filesystem::path append(const std::filesystem::path & src, const Can
     return dst;
 }
 
-#ifndef _WIN32
 /**
  * Return a descriptor and single-component name suitable for
  * `*at` operations. The returned `CanonPath` is always a pure
@@ -141,7 +136,6 @@ getParentFdAndName(Descriptor dirFd, const std::filesystem::path & dstPath, cons
     auto fd = parentFd.get();
     return {std::move(parentFd), fd, CanonPath::fromFilename(p.filename().native())};
 }
-#endif
 
 void RestoreSink::createDirectory(const CanonPath & path, DirectoryCreatedCallback callback)
 {
@@ -159,13 +153,8 @@ void RestoreSink::createDirectory(const CanonPath & path, DirectoryCreatedCallba
     dirSink.dirFd = openFileEnsureBeneathNoSymlinks(
         dirFd.get(),
         path,
-#ifdef _WIN32
-        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_DIRECTORY_FILE
-#else
         O_RDONLY | O_DIRECTORY | O_CLOEXEC,
         0
-#endif
     );
 
     if (!dirSink.dirFd)
@@ -176,7 +165,6 @@ void RestoreSink::createDirectory(const CanonPath & path, DirectoryCreatedCallba
 
 void RestoreSink::createDirectory(const CanonPath & path)
 {
-#ifndef _WIN32
     if (dirFd && path.isRoot())
         /* Trying to create a directory that we already have a file descriptor for. */
         throw Error("path %s already exists", PathFmt(append(dstPath, path)));
@@ -193,11 +181,6 @@ void RestoreSink::createDirectory(const CanonPath & path)
         if (!dirFd)
             throw SysError("opening directory %s", PathFmt(append(dstPath, path)));
     }
-#else
-    auto p = append(dstPath, path);
-    if (!std::filesystem::create_directory(p))
-        throw Error("path '%s' already exists", p.string());
-#endif
 };
 
 struct RestoreRegularFile : CreateRegularFileSink, FdSink
@@ -244,16 +227,6 @@ void RestoreSink::createRegularFile(const CanonPath & path, fun<void(CreateRegul
 {
     auto crf = RestoreRegularFile(
         startFsync,
-#ifdef _WIN32
-        CreateFileW(
-            append(dstPath, path).c_str(),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            NULL,
-            CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL,
-            NULL)
-#else
         [&]() {
             /* O_EXCL together with O_CREAT ensures symbolic links in the last
                component are not followed. */
@@ -261,7 +234,6 @@ void RestoreSink::createRegularFile(const CanonPath & path, fun<void(CreateRegul
             auto [_parentFd, fd, name] = getParentFdAndName(dirFd.get(), dstPath, path);
             return openFileEnsureBeneathNoSymlinks(fd, name, flags, 0666);
         }()
-#endif
     );
     if (!crf.fd)
         throw NativeSysError("creating file %1%", PathFmt(append(dstPath, path)));
@@ -273,11 +245,9 @@ void RestoreRegularFile::isExecutable()
 {
     // Windows doesn't have a notion of executable file permissions we
     // care about here, right?
-#ifndef _WIN32
     auto st = nix::fstat(fd.get());
     if (fchmod(fd.get(), st.st_mode | (S_IXUSR | S_IXGRP | S_IXOTH)) == -1)
         throw SysError("fchmod");
-#endif
 }
 
 void RestoreRegularFile::preallocateContents(uint64_t len)
@@ -303,13 +273,9 @@ void RestoreRegularFile::preallocateContents(uint64_t len)
 
 void RestoreSink::createSymlink(const CanonPath & path, const std::string & target)
 {
-#ifndef _WIN32
     auto [_parentFd, fd, name] = getParentFdAndName(dirFd.get(), dstPath, path);
     if (::symlinkat(requireCString(target), fd, name.rel_c_str()) == -1)
         throw SysError("creating symlink from %1% -> '%2%'", PathFmt(append(dstPath, path)), target);
-#else
-    nix::createSymlink(target, append(dstPath, path).string());
-#endif
 }
 
 void RegularFileSink::createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)> func)

@@ -248,14 +248,6 @@ struct AbsolutePath
             throw Error("not an absolute path: %s", PathFmt(_path));
     }
 
-#ifdef _WIN32
-    AbsolutePath(const wchar_t * s)
-        : _path(s)
-    {
-        if (!_path.is_absolute())
-            throw Error("not an absolute path: %s", PathFmt(_path));
-    }
-#endif
 
     const std::filesystem::path & path() const
     {

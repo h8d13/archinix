@@ -24,14 +24,10 @@ public:
 
     LegacySSHStoreConfig(const ParsedURL::Authority & authority, const Params & params);
 
-#ifndef _WIN32
     // Hack for getting remote build log output.
     // Intentionally not in `LegacySSHStoreConfig` so that it doesn't appear in
     // the documentation
     Setting<int> logFD{this, INVALID_DESCRIPTOR, "log-fd", "file descriptor to which SSH's stderr is connected"};
-#else
-    Descriptor logFD = INVALID_DESCRIPTOR;
-#endif
 
     Setting<Strings> remoteProgram{
         this, {"nix-store"}, "remote-program", "Path to the `nix-store` executable on the remote machine."};

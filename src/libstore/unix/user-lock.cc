@@ -13,7 +13,6 @@ namespace nix {
 
 UserLock::~UserLock() {}
 
-#ifdef __linux__
 
 static std::vector<gid_t> get_group_list(const char * username, gid_t group_id)
 {
@@ -35,7 +34,6 @@ static std::vector<gid_t> get_group_list(const char * username, gid_t group_id)
 
     return gids;
 }
-#endif
 
 namespace {
 
@@ -114,7 +112,6 @@ struct SimpleUserLock : UserLock
                 if (lock->uid == getuid() || lock->uid == geteuid())
                     throw Error("the Nix user should not be a member of '%s'", buildUsersGroup);
 
-#ifdef __linux__
                 /* Get the list of supplementary groups of this user. This is
                  * usually either empty or contains a group such as "kvm". */
 
@@ -123,7 +120,6 @@ struct SimpleUserLock : UserLock
                     if (gid != lock->gid)
                         lock->supplementaryGIDs.push_back(gid);
                 }
-#endif
 
                 return lock;
             }
@@ -169,9 +165,6 @@ struct AutoUserLock : UserLock
         bool useUserNamespace,
         const AutoAllocateUidSettings & uidSettings)
     {
-#if !defined(__linux__)
-        useUserNamespace = false;
-#endif
 
         experimentalFeatureSettings.require(Xp::AutoAllocateUids);
         assert(uidSettings.startId > 0);
@@ -236,15 +229,8 @@ std::unique_ptr<UserLock> acquireUserLock(
 
 bool useBuildUsers(const LocalSettings & localSettings)
 {
-#ifdef __linux__
     static bool b = (localSettings.buildUsersGroup != "" || localSettings.autoAllocateUids) && isRootUser();
     return b;
-#elif defined(__APPLE__) || defined(__FreeBSD__)
-    static bool b = localSettings.buildUsersGroup != "" && isRootUser();
-    return b;
-#else
-    return false;
-#endif
 }
 
 } // namespace nix

@@ -3,9 +3,6 @@
 
 #include "nix/util/file-descriptor.hh"
 
-#ifdef _WIN32
-#  include <winsock2.h>
-#endif
 
 namespace nix {
 
@@ -15,20 +12,9 @@ namespace nix {
  * of C types.
  */
 using Socket =
-#ifdef _WIN32
-    SOCKET
-#else
     int
-#endif
     ;
 
-#ifdef _WIN32
-/**
- * Windows gives this a different name
- */
-#  define SHUT_WR SD_SEND
-#  define SHUT_RDWR SD_BOTH
-#endif
 
 /**
  * Convert a `Descriptor` to a `Socket`
@@ -37,11 +23,7 @@ using Socket =
  */
 static inline Socket toSocket(Descriptor fd)
 {
-#ifdef _WIN32
-    return reinterpret_cast<Socket>(fd);
-#else
     return fd;
-#endif
 }
 
 /**
@@ -51,11 +33,7 @@ static inline Socket toSocket(Descriptor fd)
  */
 static inline Descriptor fromSocket(Socket fd)
 {
-#ifdef _WIN32
-    return reinterpret_cast<Descriptor>(fd);
-#else
     return fd;
-#endif
 }
 
 } // namespace nix

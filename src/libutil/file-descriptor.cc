@@ -6,12 +6,7 @@
 #include <span>
 #include <fcntl.h>
 #include <unistd.h>
-#ifdef _WIN32
-#  include <winnt.h>
-#  include <fileapi.h>
-#else
 #  include <poll.h>
-#endif
 
 namespace nix {
 
@@ -36,7 +31,6 @@ enum class PollDirection { In, Out };
 template<typename F>
 auto retryOnBlock([[maybe_unused]] Descriptor fd, [[maybe_unused]] PollDirection dir, F && f) -> decltype(f())
 {
-#ifndef _WIN32
     while (true) {
         try {
             return std::forward<F>(f)();
@@ -52,9 +46,6 @@ auto retryOnBlock([[maybe_unused]] Descriptor fd, [[maybe_unused]] PollDirection
             throw;
         }
     }
-#else
-    return std::forward<F>(f)();
-#endif
 }
 
 } // namespace
@@ -132,7 +123,6 @@ std::string readFile(Descriptor fd)
 
 void drainFD(Descriptor fd, Sink & sink, DrainFdSinkOpts opts)
 {
-#ifndef _WIN32
     // silence GCC maybe-uninitialized warning in finally
     int saved = 0;
 
@@ -148,7 +138,6 @@ void drainFD(Descriptor fd, Sink & sink, DrainFdSinkOpts opts)
                 throw SysError("making file descriptor blocking");
         }
     });
-#endif
 
     size_t bytesRead = 0;
     std::array<std::byte, 64 * 1024> buf;
@@ -167,11 +156,9 @@ void drainFD(Descriptor fd, Sink & sink, DrainFdSinkOpts opts)
         try {
             n = read(fd, std::span(buf.data(), toRead));
         } catch (SystemError & e) {
-#ifndef _WIN32
             if (!opts.block
                 && (e.is(std::errc::resource_unavailable_try_again) || e.is(std::errc::operation_would_block)))
                 break;
-#endif
             throw;
         }
 
@@ -194,9 +181,7 @@ std::string drainFD(Descriptor fd, DrainFdOpts opts)
     StringSink sink(reserveSize + 2);
     DrainFdSinkOpts sinkOpts{
         .expectedSize = opts.expected ? std::optional<size_t>(opts.size) : std::nullopt,
-#ifndef _WIN32
         .block = opts.block,
-#endif
     };
     drainFD(fd, sink, sinkOpts);
     return std::move(sink.s);
@@ -266,11 +251,7 @@ void AutoCloseFD::close()
 {
     if (fd != INVALID_DESCRIPTOR) {
         if (
-#ifdef _WIN32
-            ::CloseHandle(fd)
-#else
             ::close(fd)
-#endif
             == -1)
             /* This should never happen. */
             throw NativeSysError("closing file descriptor %1%", fd);
@@ -280,12 +261,10 @@ void AutoCloseFD::close()
 
 void AutoCloseFD::startFsync() const
 {
-#ifdef __linux__
     if (fd != -1) {
         /* Ignore failure, since fsync must be run later anyway. This is just a performance optimization. */
         ::sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE);
     }
-#endif
 }
 
 AutoCloseFD::operator bool() const

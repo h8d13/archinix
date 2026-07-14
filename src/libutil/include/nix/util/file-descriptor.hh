@@ -13,10 +13,6 @@
 #include "nix/util/error.hh"
 #include "nix/util/os-string.hh"
 
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#endif
 
 namespace nix {
 
@@ -27,19 +23,11 @@ struct Source;
  * Operating System capability
  */
 using Descriptor =
-#ifdef _WIN32
-    HANDLE
-#else
     int
-#endif
     ;
 
 const Descriptor INVALID_DESCRIPTOR =
-#ifdef _WIN32
-    INVALID_HANDLE_VALUE
-#else
     -1
-#endif
     ;
 
 /**
@@ -49,11 +37,7 @@ const Descriptor INVALID_DESCRIPTOR =
  */
 static inline Descriptor toDescriptor(int fd)
 {
-#ifdef _WIN32
-    return reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-#else
     return fd;
-#endif
 }
 
 /**
@@ -161,12 +145,10 @@ struct DrainFdSinkOpts
      */
     std::optional<std::make_unsigned_t<off_t>> expectedSize = {};
 
-#ifndef _WIN32
     /**
      * Whether to block on read.
      */
     bool block = true;
-#endif
 };
 
 /**
@@ -185,12 +167,10 @@ struct DrainFdOpts
      */
     bool expected = false;
 
-#ifndef _WIN32
     /**
      * Whether to block on read.
      */
     bool block = true;
-#endif
 };
 
 /**
@@ -216,11 +196,7 @@ void drainFD(Descriptor fd, Sink & sink, DrainFdSinkOpts opts = {});
 [[gnu::always_inline]]
 inline Descriptor getStandardInput()
 {
-#ifndef _WIN32
     return STDIN_FILENO;
-#else
-    return GetStdHandle(STD_INPUT_HANDLE);
-#endif
 }
 
 /**
@@ -229,11 +205,7 @@ inline Descriptor getStandardInput()
 [[gnu::always_inline]]
 inline Descriptor getStandardOutput()
 {
-#ifndef _WIN32
     return STDOUT_FILENO;
-#else
-    return GetStdHandle(STD_OUTPUT_HANDLE);
-#endif
 }
 
 /**
@@ -242,11 +214,7 @@ inline Descriptor getStandardOutput()
 [[gnu::always_inline]]
 inline Descriptor getStandardError()
 {
-#ifndef _WIN32
     return STDERR_FILENO;
-#else
-    return GetStdHandle(STD_ERROR_HANDLE);
-#endif
 }
 
 /**
@@ -300,15 +268,12 @@ public:
     AutoCloseFD readSide, writeSide;
 
     void create(
-#ifndef _WIN32
         bool nonBlocking = false
-#endif
     );
 
     void close();
 };
 
-#ifndef _WIN32 // Not needed on Windows, where we don't fork
 namespace unix {
 
 /**
@@ -344,18 +309,8 @@ struct SelfPipe
 };
 
 } // namespace unix
-#endif
 
 MakeError(EndOfFile, Error);
 
-#ifdef _WIN32
-
-/**
- * Windows specific replacement for POSIX `lseek` that operates on a `HANDLE` and not
- * a file descriptor.
- */
-off_t lseek(Descriptor fd, off_t offset, int whence);
-
-#endif
 
 } // namespace nix

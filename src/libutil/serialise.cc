@@ -12,11 +12,7 @@
 #include <boost/coroutine2/coroutine.hpp>
 #include <boost/coroutine2/protected_fixedsize_stack.hpp>
 
-#ifdef _WIN32
-#  include <fileapi.h>
-#else
 #  include <poll.h>
-#endif
 
 namespace nix {
 
@@ -269,26 +265,6 @@ bool FdSource::hasData()
         return true;
 
     while (true) {
-#ifdef _WIN32
-        /* Windows' fd_set is a bounded handle array, so FD_SET can't
-           overflow; on Unix use poll() since fd may exceed FD_SETSIZE. */
-        fd_set fds;
-        FD_ZERO(&fds);
-        Socket sock = toSocket(fd);
-        FD_SET(sock, &fds);
-
-        struct timeval timeout;
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 0;
-
-        auto n = select(sock + 1, &fds, nullptr, nullptr, &timeout);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            throw SysError("polling file descriptor");
-        }
-        return FD_ISSET(sock, &fds);
-#else
         struct pollfd pfd;
         pfd.fd = fd;
         pfd.events = POLLIN;
@@ -301,7 +277,6 @@ bool FdSource::hasData()
             throw SysError("polling file descriptor");
         }
         return n > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
-#endif
     }
 }
 
@@ -328,7 +303,6 @@ void FdSource::skip(size_t len)
         }
     }
 
-#ifndef _WIN32
     /* If we can, seek forward in the file to skip the rest. */
     if (isSeekable && len) {
         if (len > static_cast<size_t>(std::numeric_limits<off_t>::max()))
@@ -343,7 +317,6 @@ void FdSource::skip(size_t len)
             return;
         }
     }
-#endif
 
     /* Otherwise, skip by reading. */
     if (len)

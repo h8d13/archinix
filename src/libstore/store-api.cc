@@ -24,9 +24,6 @@
 #include <filesystem>
 #include <nlohmann/json.hpp>
 
-#ifdef _WIN32
-#  include "nix/util/windows-known-folders.hh"
-#endif
 
 using json = nlohmann::json;
 
@@ -75,11 +72,7 @@ StoreConfigBase::StoreDirSetting::StoreDirSetting(Config * options, FilePathType
               case FilePathType::Native:
                   return canonStoreDir(envOverrides.transform([](const auto & s) { return std::filesystem::path(s); })
                                            .or_else([]() -> std::optional<std::filesystem::path> {
-#ifdef _WIN32
-                                               return windows::known_folders::getProgramData() / "nix" / "store";
-#else
                                                return std::filesystem::path{NIX_STORE_DIR};
-#endif
                                            })
                                            .value());
               }
@@ -1272,14 +1265,7 @@ const std::filesystem::path & StoreConfig::getLogDir() const
         return getEnvOsNonEmpty(OS_STR("NIX_LOG_DIR"))
             .transform([](auto && s) { return std::filesystem::path(s); })
             .or_else([]() -> std::optional<std::filesystem::path> {
-#ifdef _WIN32
-#  ifdef NIX_LOG_DIR
-#    error "NIX_LOG_DIR should not be defined on Windows"
-#  endif
-                return windows::known_folders::getProgramData() / "nix" / "log";
-#else
                 return NIX_LOG_DIR;
-#endif
             })
             .transform([](auto && s) { return canonPath(s); })
             .value();

@@ -30,9 +30,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#ifdef _WIN32
-#  include <errhandlingapi.h>
-#endif
 
 namespace nix {
 
@@ -496,100 +493,6 @@ int handleExceptions(const std::string & programName, fun<void()> body);
 #  define nixUnreachableWhenHardened std::unreachable
 #endif
 
-#ifdef _WIN32
-
-namespace windows {
-
-/**
- * Windows Error type.
- *
- * Unless you need to catch a specific error number, don't catch this in
- * portable code. Catch `SystemError` instead.
- */
-class WinError : public CloneableError<WinError, SystemError>
-{
-    void anchor() override;
-
-public:
-    DWORD lastError;
-
-    /**
-     * Construct using the explicitly-provided error number.
-     * `FormatMessageA` will be used to try to add additional
-     * information to the message.
-     */
-    template<typename... Args>
-    WinError(DWORD lastError, Args &&... args)
-        : CloneableError(
-              DisambigVarArgs{},
-              std::error_code(lastError, std::system_category()),
-              renderError(lastError),
-              std::forward<Args>(args)...)
-        , lastError(lastError)
-    {
-    }
-
-    /**
-     * Construct using the explicitly-provided error number.
-     * `FormatMessageA` will be used to try to add additional
-     * information to the message.
-     *
-     * Unlike above, the `HintFmt` already exists rather than being made on
-     * the spot.
-     */
-    WinError(DWORD lastError, const HintFmt & hf)
-        : CloneableError(
-              DisambigHintFmt{}, std::error_code(lastError, std::system_category()), renderError(lastError), hf)
-        , lastError(lastError)
-    {
-    }
-
-    /**
-     * Construct using `GetLastError()` and the ambient "last error".
-     *
-     * Be sure to not perform another last-error-modifying operation
-     * before calling this constructor!
-     */
-    template<typename... Args>
-    WinError(Args &&... args)
-        : WinError(GetLastError(), std::forward<Args>(args)...)
-    {
-    }
-
-    /**
-     * Construct using `GetLastError()` and a function that produces a
-     * `HintFmt`. `GetLastError()` is called first, then the function is
-     * called, so the function is safe to modify the last error.
-     */
-    WinError(auto && mkHintFmt)
-        requires std::invocable<decltype(mkHintFmt)> && std::same_as<std::invoke_result_t<decltype(mkHintFmt)>, HintFmt>
-        : WinError(captureLastError(std::forward<decltype(mkHintFmt)>(mkHintFmt)))
-    {
-    }
-
-private:
-    /**
-     * Helper to ensure GetLastError() is captured before mkHintFmt is called.
-     * C++ argument evaluation order is unspecified, so we can't rely on
-     * `WinError(GetLastError(), mkHintFmt())` evaluating GetLastError() first.
-     */
-    static std::pair<DWORD, HintFmt> captureLastError(auto && mkHintFmt)
-    {
-        DWORD e = GetLastError();
-        return {e, mkHintFmt()};
-    }
-
-    WinError(std::pair<DWORD, HintFmt> && p)
-        : WinError(p.first, std::move(p.second))
-    {
-    }
-
-    static std::string renderError(DWORD lastError);
-};
-
-} // namespace windows
-
-#endif
 
 /**
  * Convenience alias for when we use a `errno`-based error handling
@@ -597,11 +500,7 @@ private:
  * Windows.
  */
 using NativeSysError =
-#ifdef _WIN32
-    windows::WinError
-#else
     SysError
-#endif
     ;
 
 } // namespace nix

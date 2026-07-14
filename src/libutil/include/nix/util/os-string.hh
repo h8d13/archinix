@@ -19,11 +19,7 @@ namespace nix {
  * avoid including a much more complex header.
  */
 using OsChar =
-#if defined(_WIN32) && !defined(__CYGWIN__)
-    wchar_t
-#else
     char
-#endif
     ;
 
 /**
@@ -56,7 +52,6 @@ std::string os_string_to_string(OsString s);
 OsString string_to_os_string(std::string_view s);
 OsString string_to_os_string(std::string s);
 
-#ifndef _WIN32
 
 inline std::string os_string_to_string(OsStringView s)
 {
@@ -78,7 +73,6 @@ inline OsString string_to_os_string(std::string s)
     return s;
 }
 
-#endif
 
 /**
  * Convert a list of `std::string` to `OsStrings`.
@@ -86,34 +80,14 @@ inline OsString string_to_os_string(std::string s)
  */
 inline OsStrings toOsStrings(std::list<std::string> ss)
 {
-#ifndef _WIN32
     // On Unix, OsStrings is std::list<std::string>, so just move
     return ss;
-#else
-    OsStrings result;
-    for (auto & s : ss)
-        result.push_back(string_to_os_string(std::move(s)));
-    return result;
-#endif
 }
 
 /**
  * Create string literals with the native character width of paths
  */
-#ifndef _WIN32
 #  define OS_STR(s) s
-#else
-#  define OS_STR(s) L##s
-#endif
 
-#ifdef _WIN32
-
-template<class C>
-C tokenizeString(OsStringView s, OsStringView separators = OS_STR(" \t\n\r"));
-
-extern template std::list<OsString> tokenizeString(OsStringView s, OsStringView separators);
-extern template std::vector<OsString> tokenizeString(OsStringView s, OsStringView separators);
-
-#endif
 
 } // namespace nix

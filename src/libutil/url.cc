@@ -765,19 +765,6 @@ std::filesystem::path urlPathToPath(std::span<const std::string> urlPath)
     if (it->empty()) {
         ++it;
         result = "/";
-#ifdef _WIN32
-        // On Windows, check if next segment is a drive letter (e.g., "C:").
-        // If it isn't then this is something like a UNC path rather than a
-        // DOS path.
-        if (it != urlPath.end()) {
-            std::filesystem::path segment{*it};
-            if (segment.has_root_name()) {
-                segment /= "/";
-                result = std::move(segment);
-                ++it;
-            }
-        }
-#endif
     }
 
     // Append remaining segments

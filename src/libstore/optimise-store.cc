@@ -1,15 +1,16 @@
 #include "nix/store/local-store.hh"
 #include "nix/store/local-settings.hh"
+#include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/thread-pool.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/file-system.hh"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
-#ifdef __APPLE__
-#  include <regex>
-#endif
+#include <random>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -82,7 +83,7 @@ Strings LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & pa
     while (errno = 0, dirent = readdir(dir.get())) { /* sic */
         checkInterrupt();
 
-        if (inodeHash.count(dirent->d_ino)) {
+        if (inodeHash.contains(dirent->d_ino)) {
             debug("'%1%' is already linked", dirent->d_name);
             continue;
         }
@@ -99,29 +100,34 @@ Strings LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & pa
 }
 
 void LocalStore::optimisePath_(
-    Activity * act, OptimiseStats & stats, const std::filesystem::path & path, InodeHash & inodeHash, RepairFlag repair)
+    Activity * act,
+    OptimiseStats & stats,
+    const std::filesystem::path & path,
+    InodeHash & inodeHash,
+    RepairFlag repair,
+    bool * parentToggled)
 {
     checkInterrupt();
 
     auto st = lstat(path);
 
-#ifdef __APPLE__
-    /* HFS/macOS has some undocumented security feature disabling hardlinking for
-       special files within .app dirs. Known affected paths include
-       *.app/Contents/{PkgInfo,Resources/\*.lproj,_CodeSignature} and .DS_Store.
-       See https://github.com/NixOS/nix/issues/1443 and
-       https://github.com/NixOS/nix/pull/2230 for more discussion. */
-
-    if (std::regex_search(path.string(), std::regex("\\.app/Contents/.+$"))) {
-        debug("%s is not allowed to be linked in macOS", PathFmt(path));
-        return;
-    }
-#endif
-
     if (S_ISDIR(st.st_mode)) {
         Strings names = readDirectoryIgnoringInodes(path, inodeHash);
+
+        /* The first child that relinks makes this directory writable;
+           restore it once after all children instead of per file. */
+        bool toggled = false;
+        Finally restore([&]() {
+            if (toggled) {
+                try {
+                    canonicaliseTimestampAndPermissions(path);
+                } catch (...) {
+                    ignoreExceptionInDestructor();
+                }
+            }
+        });
         for (auto & i : names)
-            optimisePath_(act, stats, path / i, inodeHash, repair);
+            optimisePath_(act, stats, path / i, inodeHash, repair, &toggled);
         return;
     }
 
@@ -143,7 +149,7 @@ void LocalStore::optimisePath_(
     }
 
     /* This can still happen on top-level files. */
-    if (st.st_nlink > 1 && inodeHash.count(st.st_ino)) {
+    if (st.st_nlink > 1 && inodeHash.contains(st.st_ino)) {
         debug("%s is already linked, with %d other file(s)", PathFmt(path), st.st_nlink - 2);
         return;
     }
@@ -160,37 +166,50 @@ void LocalStore::optimisePath_(
     Hash hash = hashPath(makeFSSourceAccessor(path), FileSerialisationMethod::NixArchive, HashAlgorithm::SHA256).hash;
     debug("%s has hash '%s'", PathFmt(path), hash.to_string(HashFormat::Nix32, true));
 
-    /* Check if this is a known hash. */
-    std::filesystem::path linkPath = std::filesystem::path{linksDir} / hash.to_string(HashFormat::Nix32, false);
+    /* Check if this is a known hash. Single component parse: this runs
+       once per file. */
+    std::filesystem::path linkPath{linksDir.native() + '/' + hash.to_string(HashFormat::Nix32, false)};
+
+    auto stLink = maybeLstat(linkPath);
 
     /* Maybe delete the link, if it has been corrupted. */
-    if (pathExists(linkPath)) {
-        auto stLink = lstat(linkPath);
-        if (st.st_size != stLink.st_size || (repair && hash != ({
-                                                           hashPath(
-                                                               makeFSSourceAccessor(linkPath),
-                                                               FileSerialisationMethod::NixArchive,
-                                                               HashAlgorithm::SHA256)
-                                                               .hash;
-                                                       }))) {
+    if (stLink) {
+        if (st.st_size != stLink->st_size || (repair && hash != ({
+                                                  hashPath(
+                                                      makeFSSourceAccessor(linkPath),
+                                                      FileSerialisationMethod::NixArchive,
+                                                      HashAlgorithm::SHA256)
+                                                      .hash;
+                                              }))) {
             // XXX: Consider overwriting linkPath with our valid version.
             warn("removing corrupted link %s", PathFmt(linkPath));
             warn(
                 "There may be more corrupted paths."
                 "\nYou should run `nix-store --verify --check-contents --repair` to fix them all");
             unlinkIfExists(linkPath);
+            stLink.reset();
         }
     }
 
-    if (!pathExists(linkPath)) {
+    if (!stLink) {
         /* Nope, create a hard link in the links directory. */
         try {
             std::filesystem::create_hard_link(path, linkPath);
             inodeHash.insert(st.st_ino);
+            /* Our file is now the canonical copy in the links
+               directory; nothing left to replace. */
+            return;
         } catch (std::filesystem::filesystem_error & e) {
             if (e.code() == std::errc::file_exists) {
                 /* Fall through if another process created ‘linkPath’ before
                    we did. */
+                stLink = maybeLstat(linkPath);
+
+                /* A concurrent garbage collection may have removed the
+                   link again already. Skip optimising this path; a
+                   later pass will dedup it. */
+                if (!stLink)
+                    return;
             }
 
             else if (e.code() == std::errc::no_space_on_device) {
@@ -210,14 +229,6 @@ void LocalStore::optimisePath_(
 
     /* Yes!  We've seen a file with the same contents.  Replace the
        current file with a hard link to that file. */
-    auto stLink = maybeLstat(linkPath);
-
-    /* A concurrent garbage collection may have removed the link in the
-       links directory between the existence check above and now. Skip
-       optimising this path; a later pass will dedup it. */
-    if (!stLink)
-        return;
-
     if (st.st_ino == stLink->st_ino) {
         debug("%1% is already linked to %2%", PathFmt(path), PathFmt(linkPath));
         return;
@@ -227,21 +238,38 @@ void LocalStore::optimisePath_(
 
     /* Make the containing directory writable, but only if it's not
        the store itself (we don't want or need to mess with its
-       permissions). */
-    const auto dirOfPath = path.parent_path();
-    bool mustToggle = dirOfPath != config->realStoreDir.get();
-    if (mustToggle)
-        makeWritable(dirOfPath);
+       permissions). Inside a directory recursion the parent toggles
+       once for all its files and restores after; only a top-level
+       call toggles (and restores) here. */
+    MakeReadOnly makeReadOnly{std::filesystem::path{}};
+    if (parentToggled) {
+        if (!*parentToggled) {
+            makeWritable(path.parent_path());
+            *parentToggled = true;
+        }
+    } else {
+        const auto dirOfPath = path.parent_path();
+        if (dirOfPath != config->realStoreDir.get()) {
+            makeWritable(dirOfPath);
+            /* When we're done, make the directory read-only again and
+               reset its timestamp back to 0. */
+            makeReadOnly.path = dirOfPath;
+        }
+    }
 
-    /* When we're done, make the directory read-only again and reset
-       its timestamp back to 0. */
-    MakeReadOnly makeReadOnly(mustToggle ? dirOfPath : std::filesystem::path{});
-
-    std::filesystem::path tempLink = makeTempPath(config->realStoreDir.get(), ".tmp-link");
+    /* makeTempPath would re-canonicalise the (constant) store dir with
+       symlink resolution and run boost::format, once per linked file;
+       build the name directly instead. */
+    static std::atomic<uint32_t> tmpCounter(std::random_device{}());
+    std::filesystem::path tempLink{
+        config->realStoreDir.get().path().native() + "/.tmp-link-" + std::to_string(getpid()) + "-"
+        + std::to_string(tmpCounter.fetch_add(1, std::memory_order_relaxed))};
 
     try {
         std::filesystem::create_hard_link(linkPath, tempLink);
-        inodeHash.insert(st.st_ino);
+        /* Note: do NOT insert st.st_ino here; that inode is being
+           replaced. Marking it "linked" makes other files still on it
+           skip the farm forever (dedup never converges). */
     } catch (std::filesystem::filesystem_error & e) {
         if (e.code() == std::errc::too_many_links) {
             /* Too many links to the same file (>= 32000 on most file
@@ -285,18 +313,13 @@ void LocalStore::optimisePath_(
     stats.bytesFreed += st.st_size;
 
     if (act)
-        act->result(
-            resFileLinked,
-            st.st_size
-#ifndef _WIN32
-            ,
-            st.st_blocks
-#endif
-        );
+        act->result(resFileLinked, st.st_size, st.st_blocks);
 }
 
 void LocalStore::optimiseStore(OptimiseStats & stats)
 {
+    std::lock_guard<std::mutex> runLock(optimiseStoreLock);
+
     Activity act(*logger, actOptimiseStore);
 
     auto paths = queryAllValidPaths();
@@ -304,19 +327,33 @@ void LocalStore::optimiseStore(OptimiseStats & stats)
 
     act.progress(0, paths.size());
 
-    uint64_t done = 0;
+    /* Store paths are disjoint subtrees, so they can be deduplicated
+       independently; the link farm races (create/unlink) are already
+       handled for concurrent processes, which covers threads too. */
+    std::atomic<uint64_t> done{0};
+    std::mutex statsMutex;
+    ThreadPool pool;
 
     for (auto & i : paths) {
         addTempRoot(i);
         if (!isValidPath(i))
             continue; /* path was GC'ed, probably */
-        {
-            Activity act(*logger, lvlTalkative, actUnknown, fmt("optimising path '%s'", printStorePath(i)));
-            optimisePath_(&act, stats, config->realStoreDir.get() / i.to_string(), inodeHash, NoRepair);
-        }
-        done++;
-        act.progress(done, paths.size());
+        pool.enqueue([&, i] {
+            OptimiseStats pathStats;
+            {
+                Activity act(*logger, lvlTalkative, actUnknown, fmt("optimising path '%s'", printStorePath(i)));
+                optimisePath_(&act, pathStats, config->realStoreDir.get() / i.to_string(), inodeHash, NoRepair);
+            }
+            {
+                std::lock_guard<std::mutex> lock(statsMutex);
+                stats.filesLinked += pathStats.filesLinked;
+                stats.bytesFreed += pathStats.bytesFreed;
+            }
+            act.progress(++done, paths.size());
+        });
     }
+
+    pool.process();
 }
 
 void LocalStore::optimiseStore()

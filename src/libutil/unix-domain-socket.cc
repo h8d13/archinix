@@ -5,14 +5,9 @@
 #include <memory>
 #include <span>
 
-#ifdef _WIN32
-#  include <winsock2.h>
-#  include <afunix.h>
-#else
 #  include <sys/socket.h>
 #  include <sys/un.h>
 #  include "nix/util/processes.hh"
-#endif
 #include <unistd.h>
 
 namespace nix {
@@ -29,9 +24,7 @@ AutoCloseFD createUnixDomainSocket()
         0));
     if (!fdSocket)
         throw SysError("cannot create Unix domain socket");
-#ifndef _WIN32
     unix::closeOnExec(fdSocket.get());
-#endif
     return fdSocket;
 }
 
@@ -66,9 +59,6 @@ bindConnectProcHelper(std::string_view operationName, auto && operation, Socket 
     auto * psaddr = reinterpret_cast<struct sockaddr *>(&addr);
 
     if (path.size() + 1 >= sizeof(addr.sun_path)) {
-#ifdef _WIN32
-        throw Error("cannot %s to socket at '%s': path is too long", operationName, path);
-#else
         Pipe pipe;
         pipe.create();
         Pid pid = startProcess([&] {
@@ -98,7 +88,6 @@ bindConnectProcHelper(std::string_view operationName, auto && operation, Socket 
             errno = *errNo;
             throw SysError("cannot %s to socket at '%s'", operationName, path);
         }
-#endif
     } else {
         memcpy(addr.sun_path, path.c_str(), path.size() + 1);
         if (operation(fd, psaddr, sizeof(addr)) == -1)
@@ -125,7 +114,6 @@ AutoCloseFD connect(const std::filesystem::path & path)
     return fd;
 }
 
-#ifndef _WIN32
 
 void unix::sendMessageWithFds(Descriptor sockfd, std::span<const std::byte> data, std::span<const Descriptor> fds)
 {
@@ -201,16 +189,9 @@ void unix::sendMessageWithFds(Descriptor sockfd, std::span<const std::byte> data
 unix::ReceivedMessage unix::receiveMessageWithFds(Descriptor sockfd, std::span<std::byte> data)
 {
     static constexpr size_t maxFds =
-#  ifdef __linux__
         // `SCM_MAX_FD` (defined in kernel `net/scm.h`, not exposed to
         // userspace) limits `SCM_RIGHTS` to 253 FDs per message.
         253
-#  else
-        // Darwin:
-        // https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/uipc_usrreq.c#L121
-        // FreeBSD: unknown.
-        512
-#  endif
         ;
 
     /* We create a buffer large enough (we think) to hold the maximum
@@ -276,6 +257,5 @@ unix::ReceivedMessage unix::receiveMessageWithFds(Descriptor sockfd, std::span<s
     return {static_cast<size_t>(bytesReceived), std::move(fds)};
 }
 
-#endif
 
 } // namespace nix

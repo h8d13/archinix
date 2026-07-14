@@ -19,9 +19,7 @@
 #include "nix/store/globals.hh"
 #include <variant>
 
-#ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
-#endif
 
 #include <sstream>
 
@@ -1021,7 +1019,6 @@ static void performOp(
 
 void processConnection(ref<Store> store, FdSource && from, FdSink && to, TrustedFlag trusted, RecursiveFlag recursive)
 {
-#ifndef _WIN32 // TODO need graceful async exit support on Windows?
     auto monitor = !recursive ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
     (void) monitor; // suppress warning
     ReceiveInterrupts receiveInterrupts;
@@ -1035,7 +1032,6 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
             remoteStore->shutdownConnections();
         }
     });
-#endif
 
     /* Exchange the greeting. */
     auto localVersion = WorkerProto::latest;

@@ -186,11 +186,7 @@ std::atomic<uint64_t> nextId{0};
 
 static uint64_t getPid()
 {
-#ifndef _WIN32
     return getpid();
-#else
-    return GetCurrentProcessId();
-#endif
 }
 
 Activity::Activity(
@@ -379,9 +375,7 @@ std::unique_ptr<Logger> makeJSONLogger(const std::filesystem::path & path, bool 
                                                       : toDescriptor(open(
                                                             path.string().c_str(),
                                                             O_CREAT | O_APPEND | O_WRONLY
-#ifndef _WIN32
                                                                 | O_CLOEXEC
-#endif
                                                             ,
                                                             0644));
     if (!fd)

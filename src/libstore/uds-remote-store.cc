@@ -9,13 +9,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#ifdef _WIN32
-#  include <winsock2.h>
-#  include <afunix.h>
-#else
 #  include <sys/socket.h>
 #  include <sys/un.h>
-#endif
 
 namespace nix {
 

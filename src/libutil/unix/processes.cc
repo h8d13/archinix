@@ -21,14 +21,9 @@ using namespace std::chrono_literals;
 #include <sys/wait.h>
 #include <unistd.h>
 
-#ifdef __APPLE__
-#  include <sys/syscall.h>
-#endif
 
-#ifdef __linux__
 #  include <sys/prctl.h>
 #  include <sys/mman.h>
-#endif
 
 #include "util-unix-config-private.hh"
 
@@ -99,9 +94,6 @@ int Pid::kill(bool allowInterrupts)
         /* On BSDs, killing a process group will return EPERM if all
            processes in the group are zombies (or something like
            that). So try to detect and ignore that situation. */
-#if defined(__FreeBSD__) || defined(__APPLE__)
-        if (errno != EPERM || ::kill(pid, 0) != 0)
-#endif
             logError(SysError("killing process %d", pid).info());
     }
 
@@ -172,18 +164,8 @@ void killUser(uid_t uid)
             throw SysError("setting uid");
 
         while (true) {
-#ifdef __APPLE__
-            /* OSX's kill syscall takes a third parameter that, among
-               other things, determines if kill(-1, signo) affects the
-               calling process. In the OSX libc, it's set to true,
-               which means "follow POSIX", which we don't want here
-                 */
-            if (syscall(SYS_kill, -1, SIGKILL, false) == 0)
-                break;
-#else
             if (kill(-1, SIGKILL) == 0)
                 break;
-#endif
             if (errno == ESRCH || errno == EPERM)
                 break; /* no more processes */
             if (errno != EINTR)
@@ -213,25 +195,19 @@ static pid_t doFork(bool allowVfork, ChildWrapperFunction & fun) __attribute__((
 
 static pid_t doFork(bool allowVfork, ChildWrapperFunction & fun)
 {
-#ifdef __linux__
     pid_t pid = allowVfork ? vfork() : fork();
-#else
-    pid_t pid = fork();
-#endif
     if (pid != 0)
         return pid;
     fun();
     unreachable();
 }
 
-#ifdef __linux__
 static int childEntry(void * arg)
 {
     auto & fun = *reinterpret_cast<ChildWrapperFunction *>(arg);
     fun();
     return 1;
 }
-#endif
 
 pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
 {
@@ -246,10 +222,8 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
             logger = newLogger;
         }
         try {
-#ifdef __linux__
             if (options.dieWithParent && prctl(PR_SET_PDEATHSIG, SIGKILL) == -1)
                 throw SysError("setting death signal");
-#endif
             processMain();
         } catch (std::exception & e) {
             try {
@@ -267,7 +241,6 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
     pid_t pid = -1;
 
     if (options.cloneFlags) {
-#ifdef __linux__
         // Not supported, since then we don't know when to free the stack.
         assert(!(options.cloneFlags & CLONE_VM));
 
@@ -280,9 +253,6 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
         Finally freeStack([&] { munmap(stack, stackSize); });
 
         pid = clone(childEntry, stack + stackSize, options.cloneFlags | SIGCHLD, &wrapper);
-#else
-        throw Error("clone flags are only supported on Linux");
-#endif
     } else
         pid = doFork(options.allowVfork, wrapper);
 

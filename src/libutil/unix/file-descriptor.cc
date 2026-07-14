@@ -84,7 +84,6 @@ void Pipe::create(bool nonBlocking)
 
 //////////////////////////////////////////////////////////////////////
 
-#if defined(__linux__) || defined(__FreeBSD__)
 static int unix_close_range(unsigned int first, unsigned int last, int flags)
 {
 #  if !HAVE_CLOSE_RANGE
@@ -93,14 +92,12 @@ static int unix_close_range(unsigned int first, unsigned int last, int flags)
     return close_range(first, last, flags);
 #  endif
 }
-#endif
 
 void unix::closeExtraFDs()
 {
     constexpr int MAX_KEPT_FD = 2;
     static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == MAX_KEPT_FD);
 
-#if defined(__linux__) || defined(__FreeBSD__)
     // first try to close_range everything we don't care about. if this
     // returns an error with these parameters we're running on a kernel
     // that does not implement close_range (i.e. pre 5.9) and fall back
@@ -108,9 +105,7 @@ void unix::closeExtraFDs()
     if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0) {
         return;
     }
-#endif
 
-#ifdef __linux__
     try {
         for (auto & s : DirectoryIterator{"/proc/self/fd"}) {
             checkInterrupt();
@@ -123,7 +118,6 @@ void unix::closeExtraFDs()
         return;
     } catch (SysError &) {
     }
-#endif
 
     int maxFD = 0;
 #if HAVE_SYSCONF
@@ -143,11 +137,7 @@ void unix::closeOnExec(int fd)
 void syncDescriptor(Descriptor fd)
 {
     int result =
-#if defined(__APPLE__)
-        ::fcntl(fd, F_FULLFSYNC)
-#else
         ::fsync(fd)
-#endif
         ;
     if (result == -1)
         throw NativeSysError("fsync file descriptor %1%", fd);

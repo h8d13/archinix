@@ -104,11 +104,7 @@ struct WindowsPathTrait
 
 template<typename CharT>
 using OsPathTrait =
-#ifdef _WIN32
-    WindowsPathTrait<CharT>
-#else
     UnixPathTrait
-#endif
     ;
 
 /**

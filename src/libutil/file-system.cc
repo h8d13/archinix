@@ -23,14 +23,7 @@
 #include <boost/iostreams/device/mapped_file.hpp>
 #include <boost/filesystem/path.hpp>
 
-#ifdef __FreeBSD__
-#  include <sys/param.h>
-#  include <sys/mount.h>
-#endif
 
-#ifdef _WIN32
-#  include <io.h>
-#endif
 
 namespace nix {
 
@@ -73,20 +66,10 @@ absPath(const std::filesystem::path & path0, const std::filesystem::path * dir, 
         // In this case we need to call `canonPath` on a newly-created
         // string.
         if (!dir) {
-#ifdef __GNU__
-            /* GNU (aka. GNU/Hurd) doesn't have any limitation on path
-               lengths and doesn't define `PATH_MAX'.  */
-            char * buf = getcwd(NULL, 0);
-            if (buf == NULL)
-#else
             char buf[PATH_MAX];
             if (!getcwd(buf, sizeof(buf)))
-#endif
                 throw SysError("cannot get cwd");
             path = std::filesystem::path{buf} / path;
-#ifdef __GNU__
-            free(buf);
-#endif
         } else
             path = *dir / path;
     }
@@ -169,11 +152,7 @@ bool isDirOrInDir(const std::filesystem::path & path, const std::filesystem::pat
     return path == dir || isInDir(path, dir);
 }
 
-#ifdef _WIN32
-#  define STAT _wstat64
-#else
 #  define STAT stat
-#endif
 
 PosixStat stat(const std::filesystem::path & path)
 {
@@ -382,10 +361,8 @@ void createDir(const std::filesystem::path & path, mode_t mode)
 {
     if (mkdir(
             path.string().c_str()
-#ifndef _WIN32
                 ,
             mode
-#endif
             )
         == -1)
         throw SysError("creating directory %s", PathFmt(path));
@@ -447,24 +424,10 @@ std::filesystem::path createTempDir(const std::filesystem::path & tmpRoot, const
         std::filesystem::path tmpDir = makeTempPath(tmpRoot, prefix);
         if (mkdir(
                 tmpDir.string().c_str()
-#ifndef _WIN32 // TODO abstract mkdir perms for Windows
                     ,
                 mode
-#endif
                 )
             == 0) {
-#ifdef __FreeBSD__
-            /* Explicitly set the group of the directory.  This is to
-               work around around problems caused by BSD's group
-               ownership semantics (directories inherit the group of
-               the parent).  For instance, the group of /tmp on
-               FreeBSD is "wheel", so all directories created in /tmp
-               will be owned by "wheel"; but if the user is not in
-               "wheel", then "tar" will fail to unpack archives that
-               have the setgid bit set on directories. */
-            if (::chown(tmpDir.c_str(), (uid_t) -1, getegid()) != 0)
-                throw SysError("setting group of directory %1%", PathFmt(tmpDir));
-#endif
             return tmpDir;
         }
         if (errno != EEXIST)
@@ -476,19 +439,6 @@ AutoCloseFD createAnonymousTempFile()
 {
     AutoCloseFD fd;
 
-#ifdef _WIN32
-    auto path = makeTempPath(defaultTempDir(), "nix-anonymous");
-    fd = CreateFileW(
-        path.c_str(),
-        GENERIC_READ | GENERIC_WRITE,
-        /*dwShareMode=*/0,
-        /*lpSecurityAttributes=*/nullptr,
-        CREATE_NEW,
-        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-        /*hTemplateFile=*/nullptr);
-    if (!fd)
-        throw windows::WinError("creating temporary file %1%", PathFmt(path));
-#else
 #  ifdef O_TMPFILE
     static std::atomic_flag tmpfileUnsupported{};
     if (!tmpfileUnsupported.test()) /* Try with O_TMPFILE first. */ {
@@ -510,7 +460,6 @@ AutoCloseFD createAnonymousTempFile()
         throw SysError("creating temporary file %s", PathFmt(path));
     fd = std::move(fd2);
     tryUnlink(path); /* We only care about the file descriptor. */
-#endif
 
     return fd;
 }
@@ -526,9 +475,7 @@ createTempFile(const std::filesystem::path & root, const std::filesystem::path &
 
     if (!fd)
         throw SysError("creating temporary file '%s'", tmpl);
-#ifndef _WIN32
     unix::closeOnExec(fd.get());
-#endif
     return {std::move(fd), std::filesystem::path(std::move(tmpl))};
 }
 
@@ -658,11 +605,7 @@ bool isExecutableFileAmbient(const std::filesystem::path & exe)
     return std::filesystem::is_regular_file(exe)
            && access(
                   exe.string().c_str(),
-#ifdef WIN32
-                  0 // TODO do better
-#else
                   X_OK
-#endif
                   )
                   == 0;
 }
@@ -670,21 +613,13 @@ bool isExecutableFileAmbient(const std::filesystem::path & exe)
 void chmod(const std::filesystem::path & path, mode_t mode)
 {
     if (
-#ifdef _WIN32
-        ::_wchmod
-#else
         ::chmod
-#endif
         (path.c_str(), mode)
         == -1)
         throw SysError("setting permissions on %s", PathFmt(path));
 }
 
-#ifdef _WIN32
-#  define UNLINK_PROC ::_wunlink
-#else
 #  define UNLINK_PROC ::unlink
-#endif
 
 void unlinkIfExists(const std::filesystem::path & path)
 {

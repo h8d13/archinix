@@ -8,12 +8,7 @@
 
 #include <functional>
 
-#if defined(__FreeBSD__)
-// SIGUSR1 is used by bdwgc
-#  define NIX_SIG_MULTI_INT SIGTSTP
-#elif !defined(_WIN32)
 #  define NIX_SIG_MULTI_INT SIGUSR1
-#endif
 
 namespace nix {
 

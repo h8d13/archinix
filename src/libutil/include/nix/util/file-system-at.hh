@@ -19,16 +19,7 @@
 
 #include <optional>
 
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#elif defined(__FreeBSD__)
-// FreeBSD openat(..., AT_NOFOLLOW) on a symlink returns
-// `EMLINK`, not the posix-specified `ELOOP`.
-#  define NIX_ERR_OPEN_SYMLINK EMLINK
-#else
 #  define NIX_ERR_OPEN_SYMLINK ELOOP
-#endif
 
 namespace nix {
 
@@ -40,7 +31,6 @@ namespace nix {
  */
 PosixStat fstat(Descriptor fd);
 
-#ifndef _WIN32
 
 /**
  * Get status of a file relative to a directory file descriptor.
@@ -67,7 +57,6 @@ std::optional<PosixStat> maybeFstatat(Descriptor dirFd, const std::filesystem::p
  */
 PosixStat fstatat(Descriptor dirFd, const std::filesystem::path & path);
 
-#endif
 
 /**
  * Read a symlink relative to a directory file descriptor.
@@ -124,17 +113,10 @@ OsString readLinkAt(Descriptor dirFd, const CanonPath & path);
 AutoCloseFD openFileEnsureBeneathNoSymlinks(
     Descriptor dirFd,
     const CanonPath & path,
-#ifdef _WIN32
-    ACCESS_MASK desiredAccess,
-    ULONG createOptions,
-    ULONG createDisposition = FILE_OPEN,
-#else
     int flags,
     mode_t mode = 0,
-#endif
     std::function<void(AutoCloseFD dirFd, CanonPath relPath)> dirFdCallback = nullptr);
 
-#ifdef __linux__
 namespace linux {
 
 /**
@@ -153,9 +135,7 @@ std::optional<AutoCloseFD>
 openat2(Descriptor dirFd, const char * path, uint64_t flags, uint64_t mode, uint64_t resolve);
 
 } // namespace linux
-#endif
 
-#ifndef _WIN32
 namespace unix {
 
 /**
@@ -170,6 +150,5 @@ namespace unix {
 void fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t mode);
 
 } // namespace unix
-#endif
 
 } // namespace nix

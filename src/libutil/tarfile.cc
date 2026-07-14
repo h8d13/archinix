@@ -146,11 +146,7 @@ TarArchive::~TarArchive()
         archive_read_free(this->archive);
 }
 
-#ifndef _WIN32
 #  define NIX_LIBARCHIVE_NATIVE_PATH_FUNC(func) func
-#else
-#  define NIX_LIBARCHIVE_NATIVE_PATH_FUNC(func) func##_w
-#endif
 
 static void extract_archive(TarArchive & archive, const std::filesystem::path & destDir)
 {

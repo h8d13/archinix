@@ -57,17 +57,12 @@ ref<StoreConfig> resolveStoreConfig(StoreReference && storeURI)
                     }
                 } localFSStoreConfig{params};
                 if (
-#ifdef _WIN32
-                    _waccess
-#else
                     access
-#endif
                     (localFSStoreConfig.stateDir.get().c_str(), R_OK | W_OK)
                     == 0)
                     return make_ref<LocalStore::Config>(params);
                 else if (pathExists(getDaemonSocketPath(localFSStoreConfig)))
                     return make_ref<UDSRemoteStore::Config>(params);
-#ifdef __linux__
                 else if (
                     !pathExists(localFSStoreConfig.stateDir.get()) && params.empty() && !isRootUser()
                     && !getEnvOs("NIX_STORE_DIR").has_value() && !getEnvOs("NIX_STATE_DIR").has_value()) {
@@ -91,7 +86,6 @@ ref<StoreConfig> resolveStoreConfig(StoreReference && storeURI)
                         PathFmt(chrootStore));
                     return make_ref<LocalStore::Config>(std::filesystem::path(chrootStore), params);
                 }
-#endif
                 else
                     return make_ref<LocalStore::Config>(params);
             },

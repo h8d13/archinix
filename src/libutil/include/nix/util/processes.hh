@@ -32,61 +32,44 @@ struct Source;
 
 class Pid
 {
-#ifndef _WIN32
     pid_t pid = -1;
     bool separatePG = false;
     int killSignal = SIGKILL;
     std::chrono::milliseconds killTimeout;
     std::thread killThread;
-#else
-    AutoCloseFD pid = INVALID_DESCRIPTOR;
-#endif
 public:
     Pid();
     Pid(const Pid &) = delete;
     Pid(Pid && other) noexcept;
     Pid & operator=(const Pid &) = delete;
     Pid & operator=(Pid && other) noexcept;
-#ifndef _WIN32
     Pid(pid_t pid);
     void operator=(pid_t pid);
     operator pid_t();
-#else
-    Pid(AutoCloseFD pid);
-    void operator=(AutoCloseFD pid);
-#endif
     ~Pid();
     int kill(bool allowInterrupts = true);
     int wait(bool allowInterrupts = true);
 
     // TODO: Implement for Windows
-#ifndef _WIN32
     void setSeparatePG(bool separatePG);
     void setKillSignal(int signal);
     void setKillTimeout(std::chrono::milliseconds duration);
     pid_t release();
-#endif
 
     friend void swap(Pid & lhs, Pid & rhs) noexcept
     {
         using std::swap;
-#ifndef _WIN32
         swap(lhs.pid, rhs.pid);
         swap(lhs.separatePG, rhs.separatePG);
         swap(lhs.killSignal, rhs.killSignal);
-#else
-        swap(lhs.pid, rhs.pid);
-#endif
     }
 };
 
-#ifndef _WIN32
 /**
  * Kill all processes running under the specified uid by sending them
  * a SIGKILL.
  */
 void killUser(uid_t uid);
-#endif
 
 /**
  * Fork a process that runs the given function, and return the child
@@ -104,9 +87,7 @@ struct ProcessOptions
     int cloneFlags = 0;
 };
 
-#ifndef _WIN32
 pid_t startProcess(fun<void()> processMain, const ProcessOptions & options = ProcessOptions());
-#endif
 
 /**
  * Run a program and return its stdout in a string (i.e., like the
@@ -123,10 +104,8 @@ struct RunOptions
     std::filesystem::path program;
     bool lookupPath = true;
     OsStrings args;
-#ifndef _WIN32
     std::optional<uid_t> uid;
     std::optional<uid_t> gid;
-#endif
     std::optional<std::filesystem::path> chdir;
     std::optional<OsStringMap> environment;
     Sink * standardOut = nullptr;

@@ -3,14 +3,7 @@
 #include "nix/util/sync.hh"
 #include "nix/util/error.hh"
 
-#ifdef _WIN32
-#  include <io.h>
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#  define isatty _isatty
-#else
 #  include <sys/ioctl.h>
-#endif
 #include <unistd.h>
 #include <widechar_width.h>
 #include <cstdlib> // for ptsname and ptsname_r
@@ -65,12 +58,7 @@ namespace nix {
 
 bool isTTY(Descriptor fd)
 {
-#ifndef _WIN32
     return isatty(fd);
-#else
-    DWORD mode;
-    return GetConsoleMode(fd, &mode);
-#endif
 }
 
 bool isTTY()
@@ -166,23 +154,12 @@ static auto * const windowSize = new Sync<std::pair<unsigned short, unsigned sho
 
 void updateWindowSize()
 {
-#ifndef _WIN32
     struct winsize ws;
     if (ioctl(2, TIOCGWINSZ, &ws) == 0) {
         auto windowSize_(windowSize->lock());
         windowSize_->first = ws.ws_row;
         windowSize_->second = ws.ws_col;
     }
-#else
-    CONSOLE_SCREEN_BUFFER_INFO info;
-    // From https://stackoverflow.com/a/12642749
-    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info) != 0) {
-        auto windowSize_(windowSize->lock());
-        // From https://github.com/libuv/libuv/blob/v1.48.0/src/win/tty.c#L1130
-        windowSize_->first = info.srWindow.Bottom - info.srWindow.Top + 1;
-        windowSize_->second = info.dwSize.X;
-    }
-#endif
 }
 
 std::pair<unsigned short, unsigned short> getWindowSize()
@@ -190,19 +167,8 @@ std::pair<unsigned short, unsigned short> getWindowSize()
     return *windowSize->lock();
 }
 
-#ifndef _WIN32
 std::string getPtsName(int fd)
 {
-#  ifdef __APPLE__
-    static std::mutex ptsnameMutex;
-    // macOS doesn't have ptsname_r, use mutex-protected ptsname
-    std::lock_guard<std::mutex> lock(ptsnameMutex);
-    const char * name = ptsname(fd);
-    if (!name) {
-        throw SysError("getting pseudoterminal slave name");
-    }
-    return name;
-#  else
     // Use thread-safe ptsname_r on platforms that support it
     // PTY names are typically short:
     // - Linux: /dev/pts/N (where N is usually < 1000)
@@ -213,8 +179,6 @@ std::string getPtsName(int fd)
         throw SysError("getting pseudoterminal slave name");
     }
     return buf;
-#  endif
 }
-#endif
 
 } // namespace nix
