@@ -21,9 +21,12 @@ P=$REPO/build/prefix
 	g++ -std=c++23 -O2 examples/rm-path.cc -o build/rm-path \
 		$(PKG_CONFIG_PATH=$P/lib/pkgconfig pkg-config --cflags --libs nix-store nix-util)
 }
+[ -x "$REPO/build/import-dir" ] || {
+	g++ -std=c++23 -O2 examples/import-dir.cc -o build/import-dir \
+		$(PKG_CONFIG_PATH=$P/lib/pkgconfig pkg-config --cflags --libs nix-store nix-util)
+}
 
 TMP=$(mktemp -d "$REPO/build/iso.XXXXXX")
-mkdir "$TMP/upper" "$TMP/work" "$TMP/mnt"
 trap 'unshare -r rm -rf "$TMP"' EXIT
 
 # Existing nixarch generations are reused so grub/squash tweaks rebuild
@@ -40,37 +43,16 @@ GEN1=$(ls -td "$SDIR"/*-nixarch-1 | head -1)
 GEN2=$(ls -td "$SDIR"/*-nixarch-2 | head -1)
 
 # --- gen 1: base + kernel + nixgen hook -------------------------------
-# Same sandbox as generation.sh, plus injected files copied to /run/inject
-# (copied, not bind-mounted: the pre-import scrub of /run must never be
-# able to reach back into the repo).
+# generation.sh sandbox with the iso scaffolding (initcpio hooks, configs,
+# import-dir payload for nixgen-commit) injected at /run/inject
 [ -n "$GEN1" ] || {
-cat > "$TMP/inner.sh" <<EOF
-set -e
-mount -t overlay overlay \
-	-o "lowerdir=$BASE,upperdir=$TMP/upper,workdir=$TMP/work" "$TMP/mnt"
-mount --rbind /dev "$TMP/mnt/dev"
-mount -t proc proc "$TMP/mnt/proc"
-rm -f "$TMP/mnt/etc/resolv.conf"
-cp /etc/resolv.conf "$TMP/mnt/etc/resolv.conf"
-cp -r "$REPO/examples/iso" "$TMP/mnt/run/inject"
-mkdir "$TMP/mnt/run/inject/payload"
-cp "$REPO/build/import-dir" "$REPO/build/prefix/lib"/libnixstore.so* \
-	"$REPO/build/prefix/lib"/libnixutil.so* "$TMP/mnt/run/inject/payload/"
-
-chroot "$TMP/mnt" /usr/bin/env -i \
-	HOME=/root PATH=/usr/bin:/usr/sbin TERM=\${TERM:-dumb} \
-	sh /run/inject/setup-boot.sh
-
-umount -l "$TMP/mnt/dev"
-umount "$TMP/mnt/proc"
-rm -rf "$TMP/mnt/tmp"/* "$TMP/mnt/tmp"/.[!.]* "$TMP/mnt/run"/* 2>/dev/null || true
-find "$TMP/mnt" \( -type s -o -type p \) -delete
-
-LD_LIBRARY_PATH=$REPO/build/prefix/lib "$REPO/build/import-dir" \
-	"$STORE" nixarch-1 "$TMP/mnt"
-EOF
-unshare -rmpf --kill-child sh "$TMP/inner.sh"
-GEN1=$(ls -td "$SDIR"/*-nixarch-1 | head -1)
+	cp -r "$REPO/examples/iso" "$TMP/inject"
+	mkdir "$TMP/inject/payload"
+	cp "$REPO/build/import-dir" "$P/lib"/libnixstore.so* \
+		"$P/lib"/libnixutil.so* "$TMP/inject/payload/"
+	INJECT=$TMP/inject examples/generation.sh "$STORE" "$BASE" nixarch-1 \
+		"sh /run/inject/setup-boot.sh"
+	GEN1=$(ls -td "$SDIR"/*-nixarch-1 | head -1)
 }
 echo "gen1: $GEN1"
 

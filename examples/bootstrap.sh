@@ -14,6 +14,12 @@ STORE=$1
 mkdir -p "$STORE"
 STORE=$(realpath "$STORE")
 
+P=$REPO/build/prefix
+[ -x "$REPO/build/import-dir" ] || {
+	g++ -std=c++23 -O2 examples/import-dir.cc -o build/import-dir \
+		$(PKG_CONFIG_PATH=$P/lib/pkgconfig pkg-config --cflags --libs nix-store nix-util)
+}
+
 TARBALL=$REPO/build/archlinux-bootstrap-x86_64.tar.zst
 [ -f "$TARBALL" ] || curl -L -o "$TARBALL" \
 	https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst

@@ -47,9 +47,6 @@ install -m755 "$I/nixgen-commit" /usr/local/bin/nixgen-commit
 cat > /root/.bash_profile <<'EOF'
 echo "=== NIXARCH BOOT OK ==="
 grep -o 'nixgen=[^ ]*' /proc/cmdline
-echo "generations on this ISO:"
-ls /nixstore
-fastfetch --logo none || echo "(fastfetch not in this generation)"
 EOF
 
 # kernel install triggers mkinitcpio -P via ALPM hook, which picks up

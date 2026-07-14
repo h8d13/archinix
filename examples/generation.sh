@@ -6,6 +6,8 @@
 #
 # usage: generation.sh <store-root> <base-store-path> <new-name> [cmd]
 #        cmd defaults to an interactive shell.
+#        env INJECT=<dir>: copied to /run/inject inside the sandbox
+#        (visible to cmd, scrubbed with the rest of /run before import).
 cd "$(dirname "$0")/.."
 REPO=$PWD
 P=$REPO/build/prefix
@@ -36,6 +38,9 @@ mount --rbind /dev "$TMP/mnt/dev"
 mount -t proc proc "$TMP/mnt/proc"
 rm -f "$TMP/mnt/etc/resolv.conf"
 cp /etc/resolv.conf "$TMP/mnt/etc/resolv.conf"
+if [ -n "\$INJECT" ]; then
+	cp -r "\$INJECT" "$TMP/mnt/run/inject"
+fi
 
 chroot "$TMP/mnt" /usr/bin/env -i \
 	HOME=/root PATH=/usr/bin:/usr/sbin TERM=\${TERM:-dumb} \
@@ -44,11 +49,15 @@ chroot "$TMP/mnt" /usr/bin/env -i \
 umount -l "$TMP/mnt/dev"
 umount "$TMP/mnt/proc"
 
-# the host resolv.conf copied in above was build scaffolding; the
-# generation inherits whatever its base had (file, symlink, or nothing)
-rm -f "$TMP/mnt/etc/resolv.conf"
-if [ -e "$BASE/etc/resolv.conf" ] || [ -L "$BASE/etc/resolv.conf" ]; then
-	cp -P "$BASE/etc/resolv.conf" "$TMP/mnt/etc/resolv.conf"
+# resolv.conf: the host copy above was build scaffolding. A command that
+# replaced it (e.g. symlink to systemd-resolved) keeps its version;
+# otherwise the generation inherits whatever its base had.
+if [ ! -L "$TMP/mnt/etc/resolv.conf" ] \
+		&& cmp -s /etc/resolv.conf "$TMP/mnt/etc/resolv.conf"; then
+	rm -f "$TMP/mnt/etc/resolv.conf"
+	if [ -e "$BASE/etc/resolv.conf" ] || [ -L "$BASE/etc/resolv.conf" ]; then
+		cp -P "$BASE/etc/resolv.conf" "$TMP/mnt/etc/resolv.conf"
+	fi
 fi
 
 # scrub what a generation must not capture: scratch dirs, and

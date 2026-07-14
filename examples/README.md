@@ -37,13 +37,23 @@ appends its GRUB entry on the disk. Rollback = pick an older GRUB entry.
 Uncommitted writes live in RAM and vanish. Networking is baked in:
 systemd-networkd DHCP on `en*`, DNS via systemd-resolved.
 
+From zero: `./build.sh` at the repo root first (libs into `build/prefix`;
+the C++ tools then compile on demand). Host needs `g++`, `curl`, `grub` +
+`xorriso` + `mtools` (grub-mkrescue), `e2fsprogs`, `qemu` for testing. No
+root, no squashfs-tools (mksquashfs runs from inside the generation).
+
 ```
   examples/bootstrap.sh build/archstore          # fresh base (once)
-  examples/iso/mkiso.sh build/archstore <base>   # ISO
+  examples/iso/mkiso.sh build/archstore <base>   # ISO (<base> = path bootstrap printed)
   examples/iso/mkstoredisk.sh                    # blank persistence disk
   qemu-system-x86_64 -accel kvm -m 2G -boot d -cdrom build/nixarch.iso \
       -drive file=build/nixstore.img,format=raw,if=virtio \
       -nic user,model=virtio-net-pci
   # inside: break things freely; happy? nixgen-commit my-setup; reboot, it's in the menu
 ```
+
+Reruns of mkiso.sh reuse the nixarch generations and only reassemble the
+ISO; `REBUILD=1 examples/iso/mkiso.sh ...` discards and rebuilds them
+(needed after changing setup-boot.sh or the initcpio hook). After any ISO
+rebuild, restart QEMU: a live VM's GRUB menu points at pre-rebuild hashes.
 
