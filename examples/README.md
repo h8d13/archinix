@@ -59,11 +59,15 @@ via `nixgen-perms.service` (metadata-only copy-up into the tmpfs
 upper) and inside every build sandbox right after the overlay mount,
 so pacman sees the modes it expects and stays warning-free. Plain
 644-vs-444 file modes stay canonical on purpose (root bypasses them;
-restoring would copy-up every file). The ISO kernel is pinned ~30 days
-back (Arch Linux Archive) so `iso/update-test.sh` exercises a real
-version-to-version kernel upgrade.
+restoring would copy-up every file). `iso/update-test.sh` proves a real
+kernel version change by installing from a dated Arch Linux Archive
+snapshot inside its update; archive use lives in the test only, stock
+generations track live mirrors.
 Uncommitted writes live in RAM and vanish. Networking is baked in:
-systemd-networkd DHCP on `en*`, DNS via systemd-resolved.
+systemd-networkd DHCP on `en*`, DNS via systemd-resolved. Autologin is
+conditional (nixgen-getty): prompt-free only while root is passwordless
+(stock state, what the headless tests ride on); `passwd root` restores
+normal login prompts, commit to keep that in a generation.
 
 From zero: `./build.sh` at the repo root first (libs into `build/prefix`;
 the C++ tools then compile on demand). Host needs `g++`, `curl`, `grub` +

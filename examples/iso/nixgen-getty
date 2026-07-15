@@ -1,0 +1,17 @@
+#!/bin/sh
+# Conditional autologin shim for agetty: skip the prompt only while
+# root is passwordless (the stock demo state; headless tests PASS on
+# the post-login marker). passwd'ing root restores normal login, and a
+# commit makes the hardened login a property of the generation.
+# No -e on purpose: any failure here must fall through to a normal
+# prompt, never die and leave the tty without a getty.
+# the bootstrap ships root as "*" (locked placeholder, no password
+# ever set); passwd writes a real hash, passwd -l prefixes it with "!".
+# Autologin only while the field holds nothing but placeholder chars:
+# a hash, locked or not, means someone set a password: prompt.
+AUTO=
+case $(awk -F: '$1 == "root" { print $2 }' /etc/shadow) in
+	*[!!*]*) ;;
+	*) AUTO="--autologin root" ;;
+esac
+exec /usr/bin/agetty $AUTO "$@"

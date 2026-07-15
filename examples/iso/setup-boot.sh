@@ -28,17 +28,20 @@ systemctl enable systemd-networkd systemd-resolved
 # headless boot
 ln -sf /dev/null /etc/systemd/system/systemd-firstboot.service
 
+# conditional autologin (nixgen-getty): prompt-free only while root is
+# passwordless; passwd root restores normal login on the next getty
+install -m755 "$I/nixgen-getty" /usr/local/bin/nixgen-getty
 install -d /etc/systemd/system/getty@tty1.service.d \
 	/etc/systemd/system/serial-getty@.service.d
 cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf <<EOF
 [Service]
 ExecStart=
-ExecStart=-/usr/bin/agetty --autologin root --noclear %I \$TERM
+ExecStart=-/usr/local/bin/nixgen-getty --noclear %I \$TERM
 EOF
 cat > /etc/systemd/system/serial-getty@.service.d/autologin.conf <<EOF
 [Service]
 ExecStart=
-ExecStart=-/usr/bin/agetty --autologin root --keep-baud 115200,57600,38400,9600 %I \$TERM
+ExecStart=-/usr/local/bin/nixgen-getty --keep-baud 115200,57600,38400,9600 %I \$TERM
 EOF
 
 # in-box generation tooling: import-dir + its nixstore libs (payload
@@ -78,29 +81,11 @@ echo "=== NIXARCH BOOT OK ==="
 grep -o 'nixgen=[^ ]*' /proc/cmdline
 EOF
 
-# tools + runtime deps of import-dir/libnixstore first, so the ALPM
-# mkinitcpio hook exists before the kernel lands
-pacman -Sy --noconfirm --needed mkinitcpio squashfs-tools \
+# kernel install triggers mkinitcpio -P via ALPM hook, which picks up
+# /etc/mkinitcpio.conf above and bakes the nixgen hook into the image.
+# trailing libs = runtime deps of import-dir/libnixstore
+pacman -Sy --noconfirm --needed linux mkinitcpio squashfs-tools \
 	libblake3 boost-libs libsodium onetbb sqlite icu libxml2 libseccomp brotli
-
-# kernel pinned ~30 days back, so nixgen-update against live repos
-# performs a real version-to-version kernel upgrade (exercised by
-# iso/update-test.sh). The Arch Linux Archive mirrors the live repo
-# layout, so pin = swap the mirrorlist for this one transaction (a
-# custom [section] would 404: pacman fetches <section>.db, ALA only
-# serves core.db). Install triggers mkinitcpio -P via ALPM hook, which
-# picks up /etc/mkinitcpio.conf above and bakes the nixgen hook in
-PIN=$(date -d '-30 days' +%Y/%m/%d)
-mv /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.live
-echo "Server = https://archive.archlinux.org/repos/$PIN/\$repo/os/\$arch" \
-	> /etc/pacman.d/mirrorlist
-# -Syy: the archive db is *older* than the cached live one; plain -Sy
-# gets a 304 and silently resolves against the live db (ALA's rewrite
-# then serves any package file, masking the broken pin)
-pacman -Syy --noconfirm linux
-# back to live mirrors: shipped generations must update from them
-mv /etc/pacman.d/mirrorlist.live /etc/pacman.d/mirrorlist
-pacman -Syy
 
 # resolved-managed DNS. Last on purpose: pacman above still needed the
 # host resolv.conf that the sandbox copies in

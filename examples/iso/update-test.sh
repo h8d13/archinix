@@ -1,9 +1,12 @@
 #!/bin/sh -e
 # End-to-end test of nixgen-update: boot the ISO with a fresh store
-# disk, run a real offline system upgrade in the box (the ISO kernel is
-# pinned ~30 days back, so -Syu bumps the kernel version and the ALPM
-# hook regenerates the initramfs), poweroff; then boot the new
-# generation directly from the store disk (no ISO: proves self-hosting)
+# disk, run an offline update in the box that installs the kernel from
+# a dated Arch Linux Archive snapshot: a real version change (direction
+# is irrelevant to the machinery: new kernel files land in the overlay,
+# the ALPM hook regenerates the initramfs, the new generation boots its
+# own kernel). Archive use lives here only; stock generations track
+# live mirrors. Poweroff; then boot the new generation directly from
+# the store disk (no ISO: proves self-hosting)
 # and check the boot marker, restored permissions, and the new package,
 # then run the rest of the in-box lifecycle: nixgen-remove must refuse
 # the running generation, and a committed generation must remove
@@ -69,8 +72,16 @@ while i < len(script):
 PY
 }
 
+# the in-box update installs the kernel from a dated archive snapshot:
+# mirrorlist swapped for one transaction (-Syy: the archive db is older
+# than the cached live one, plain -Sy 304s and resolves against live;
+# no download timeout: the archive throttles), then restored. \$repo
+# survives the layers to let pacman expand it
+PIN=$(date -d '-30 days' +%Y/%m/%d)
+UPCMD="mv /etc/pacman.d/mirrorlist /tmp/ml && echo \"Server = https://archive.archlinux.org/repos/$PIN/\\\$repo/os/\\\$arch\" > /etc/pacman.d/mirrorlist && pacman -Syy --noconfirm --disable-download-timeout linux tree && mv /tmp/ml /etc/pacman.d/mirrorlist && pacman -Syy --noconfirm"
+
 examples/iso/mkstoredisk.sh
-echo "--- boot 1: ISO + fresh disk, offline kernel upgrade in the box"
+echo "--- boot 1: ISO + fresh disk, offline kernel version change in the box"
 qemu-system-x86_64 $ACCEL -m 2G -boot d -cdrom build/nixarch.iso \
 	-drive file=build/nixstore.img,format=raw,if=virtio \
 	-nic user,model=virtio-net-pci \
@@ -79,7 +90,7 @@ QPID=$!
 # expect a pattern *after* the generation name: matching on "updated: "
 # can fire mid-line, before the name has arrived over the serial socket
 OUT=$(drive "NIXARCH BOOT OK" \
-	"nixgen-update test-up 'pacman -Syu --noconfirm tree linux'" \
+	"nixgen-update test-up '$UPCMD'" \
 	"reboot to switch" \
 	"poweroff") || { kill $QPID 2>/dev/null; exit 1; }
 wait $QPID
@@ -97,7 +108,7 @@ debugfs -R "cat /entries.cfg" build/nixstore.img 2>/dev/null \
 	| grep -q "nixgen=$NEWGEN" || { echo "FAIL: no GRUB entry on disk"; exit 1; }
 echo "GRUB entry present on store disk"
 
-# the pinned ISO kernel must have been replaced by a newer one, and the
+# the ISO kernel must have been replaced by the snapshot one, and the
 # ALPM hook must have rebuilt the initramfs (nixgen hook included)
 rm -f build/iso-vmlinuz build/iso-initrd build/test-vmlinuz build/test-initrd
 xorriso -osirrox on -indev build/nixarch.iso \
@@ -110,10 +121,10 @@ debugfs -R "dump /nix/store/$NEWGEN/boot/initramfs-linux.img build/test-initrd" 
 [ -s build/test-vmlinuz ] && [ -s build/test-initrd ] \
 	|| { echo "FAIL: kernel/initramfs not extracted from img"; exit 1; }
 cmp -s build/iso-vmlinuz build/test-vmlinuz \
-	&& { echo "FAIL: kernel unchanged (pin or upgrade broken)"; exit 1; }
+	&& { echo "FAIL: kernel unchanged (archive install broken)"; exit 1; }
 cmp -s build/iso-initrd build/test-initrd \
 	&& { echo "FAIL: initramfs not regenerated"; exit 1; }
-echo "kernel upgraded, initramfs regenerated"
+echo "kernel version changed, initramfs regenerated"
 
 echo "--- boot 2: new generation from store disk only (no ISO)"
 rm -f "$SOCK"
@@ -137,6 +148,10 @@ drive "NIXARCH BOOT OK" \
 	"GRUB entry pruned" \
 	'[ -e "/nixstoredev/nix/store/$R" ] || echo STORE_PATH_GONE' \
 	"STORE_PATH_GONE" \
+	'ps -o args= -C agetty | grep tty1 | grep -q autologin && echo AUTO_TTY1' \
+	"AUTO_TTY1" \
+	'echo root:secret | chpasswd && systemctl restart getty@tty1 && sleep 1 && ps -o args= -C agetty | grep tty1 | grep -qv autologin && echo PROMPT_TTY1' \
+	"PROMPT_TTY1" \
 	"poweroff" > /dev/null || { kill $QPID 2>/dev/null; exit 1; }
 wait $QPID
 rm -f build/iso-vmlinuz build/iso-initrd build/test-vmlinuz build/test-initrd
@@ -148,5 +163,5 @@ echo "$ENTRIES" | grep -q "test-rm" \
 	&& { echo "FAIL: pruned GRUB entry still on disk"; exit 1; }
 echo "$ENTRIES" | grep -q "nixgen=$NEWGEN" \
 	|| { echo "FAIL: surviving GRUB entry lost"; exit 1; }
-echo "PASS: $NEWGEN booted from disk, kernel upgraded, perms restored," \
-	"tree installed, remove lifecycle clean"
+echo "PASS: $NEWGEN booted from disk, kernel changed, perms restored," \
+	"tree installed, remove + getty lifecycle clean"
