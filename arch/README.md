@@ -54,8 +54,9 @@ the store disk (label NIXSTORE) when it holds it, else from
 `nixstore.squashfs` on the ISO; store visible at `/nixstore`, store-disk
 root at `/nixstoredev`. Networking is baked in (networkd DHCP on `en*`,
 resolved DNS). Autologin only while root is passwordless (stock state,
-what the headless tests ride on); `passwd root` restores login prompts,
-commit to keep that.
+what the headless tests ride on). `passwd root` restores login prompts,
+but the password lives in the tmpfs upper like any write: commit it,
+or the next boot is passwordless autologin again.
 
 ## Real hardware (UEFI only, Secure Boot off)
 

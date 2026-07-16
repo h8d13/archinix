@@ -71,8 +71,10 @@ INTERNALS
 
        nixgen-getty
               Conditional autologin shim for agetty: prompt-free only
-              while root is passwordless; passwd root restores login
-              prompts, commit to keep that.
+              while root is passwordless. passwd root restores login
+              prompts, but the password lives in the tmpfs upper like
+              any write: nixgen-commit it, or a reboot is passwordless
+              autologin again.
 
        nixgen-help
               This page.
