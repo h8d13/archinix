@@ -42,6 +42,10 @@ Inside the box (installed by setup-boot.sh):
   codepath, refuses the running one) + prune their GRUB entries.
 - `nixgen-listid`: generations visible to the box: short hash id,
   source (disk/iso), running marker.
+- `nixgen-diffid <name> <name> [subpath]`: systemwide diff of two
+  generations: every added/removed/changed file, content-compared
+  (near-free on deduped stores). Subpath = full content diff of that
+  subtree. Ownership/mode deltas appear as the etc/nixgen/perms diff.
 
 ## From nothing
 

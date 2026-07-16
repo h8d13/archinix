@@ -59,6 +59,7 @@ install -m755 "$I/nixgen-remove" /usr/local/bin/nixgen-remove
 install -m755 "$I/nixgen-update" /usr/local/bin/nixgen-update
 install -m755 "$I/nixgen-switch" /usr/local/bin/nixgen-switch
 install -m755 "$I/nixgen-listid" /usr/local/bin/nixgen-listid
+install -m755 "$I/nixgen-diffid" /usr/local/bin/nixgen-diffid
 install -m755 "$I/nixgen-savemeta" /usr/local/bin/nixgen-savemeta
 install -m755 "$I/nixgen-restmeta" /usr/local/bin/nixgen-restmeta
 
@@ -95,7 +96,7 @@ EOF
 # kernel install triggers mkinitcpio -P via ALPM hook, which picks up
 # /etc/mkinitcpio.conf above and bakes the nixgen hook into the image.
 # trailing libs = runtime deps of import-dir/libnixstore
-pacman -Sy --noconfirm --needed linux mkinitcpio squashfs-tools \
+pacman -Sy --noconfirm --needed linux mkinitcpio squashfs-tools diffutils \
 	libblake3 boost-libs libsodium onetbb sqlite icu libxml2 libseccomp brotli
 
 # resolved-managed DNS. Last on purpose: pacman above still needed the

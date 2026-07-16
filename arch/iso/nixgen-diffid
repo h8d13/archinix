@@ -1,0 +1,55 @@
+#!/bin/sh -e
+# Systemwide diff of two generations, from inside the box: every file
+# added/removed/changed between the whole trees, content-compared.
+# Near-free on optimised stores (dedup hardlinks let diff short-circuit
+# on shared inodes); ISO-squash generations read bytes, same result.
+# With a subpath, full content diff of that subtree instead of the
+# summary. Ownership/mode deltas ride along as a text diff of
+# etc/nixgen/perms; package delta is the /var/lib/pacman/local lines
+# (or pacman --dbpath <gen>/var/lib/pacman -Q on either tree).
+# usage: nixgen-diffid <name|basename> <name|basename> [subpath]
+[ -n "$2" ] || {
+	echo "usage: $0 <name|basename> <name|basename> [subpath]" >&2
+	exit 1
+}
+
+# same resolution as nixgen-switch: exact basename first, then unique
+# *-<name> match; first store dir with a match wins (disk boot aliases
+# /nixstore and /nixstoredev)
+resolve() {
+	for S in /nixstore /nixstoredev/nix/store; do
+		[ -d "$S" ] || continue
+		if [ -d "$S/$1" ]; then
+			echo "$S/$1"
+			return 0
+		fi
+		n=0 hit=
+		for m in "$S"/*-"$1"; do
+			[ -d "$m" ] || continue
+			n=$((n + 1)) hit=$m
+		done
+		if [ "$n" -gt 1 ]; then
+			echo "ambiguous name '$1' ($n matches in $S), use the full basename" >&2
+			return 1
+		fi
+		if [ "$n" -eq 1 ]; then
+			echo "$hit"
+			return 0
+		fi
+	done
+	echo "generation '$1' not found in /nixstore or /nixstoredev" >&2
+	return 1
+}
+
+A=$(resolve "$1")
+B=$(resolve "$2")
+
+if [ -n "$3" ]; then
+	exec diff -r --no-dereference "$A/$3" "$B/$3"
+fi
+
+echo "a = ${A##*/}"
+echo "b = ${B##*/}"
+# sed shortens paths to the a/b legend; pipeline eats diff's exit 1
+# (differing trees are the expected case, not a failure)
+diff -r --no-dereference -q "$A" "$B" | sed "s|$A|a|g; s|$B|b|g"

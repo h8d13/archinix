@@ -154,7 +154,7 @@ drive "NIXARCH BOOT OK" \
 	"AUTO_TTY1" \
 	'systemctl start getty@tty2 && sleep 1 && ps -o args= -C agetty | grep tty2 | grep -q autologin && echo AUTO_TTY2' \
 	"AUTO_TTY2" \
-	"nixgen-commit test-sw" \
+	"touch /etc/diffmark && nixgen-commit test-sw" \
 	"visible next boot" \
 	"nixgen-switch test-sw" \
 	"-test-sw (soft)" \
@@ -162,6 +162,8 @@ drive "NIXARCH BOOT OK" \
 	"refusing to remove the running generation" \
 	"nixgen-listid" \
 	"test-sw (running)" \
+	"nixgen-diffid test-up test-sw" \
+	"Only in b/etc: diffmark" \
 	'echo root:secret | chpasswd && systemctl restart getty@tty1 && sleep 1 && ps -o args= -C agetty | grep tty1 | grep -qv autologin && echo PROMPT_TTY1' \
 	"PROMPT_TTY1" \
 	"poweroff" > /dev/null || { kill $QPID 2>/dev/null; exit 1; }
