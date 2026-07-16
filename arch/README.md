@@ -93,8 +93,9 @@ disk on a previously-used target.
   commit + reboot between chunks (the upper resets).
 - **Import canonicalises permissions** (dirs 0555, files 0444/0555,
   root-owned, no xattrs: NAR keeps only the executable bit).
-  `nixgen-savemeta` captures what that strips into
-  `etc/nixgen/{perms,caps}`; `nixgen-restmeta` replays it at boot
+  `nixgen-savemeta` captures what that strips (modes, ownership incl.
+  symlinks, capabilities, POSIX ACLs) into
+  `etc/nixgen/{perms,caps,acls}`; `nixgen-restmeta` replays it at boot
   (nixgen-perms.service) and inside every build sandbox. A base
   imported without the manifest breaks the chain: pacman warns on
   every dir and rejects its 0555 cachedir (downloads fall back to

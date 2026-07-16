@@ -26,8 +26,10 @@ trap '$UNSHARE rm -rf "$TMP"' EXIT
 
 cat > "$TMP/inner.sh" <<EOF
 set -e
+# userxattr: dir removals over the lower need it in a userns (see
+# generation.sh)
 mount -t overlay overlay \
-	-o "lowerdir=$BASE,upperdir=$TMP/upper,workdir=$TMP/work" "$TMP/mnt"
+	-o "lowerdir=$BASE,upperdir=$TMP/upper,workdir=$TMP/work,userxattr" "$TMP/mnt"
 # minimal /dev + tmpfs run/tmp, same sandbox surface as generation.sh
 mount -t tmpfs -o mode=0755,nosuid dev "$TMP/mnt/dev"
 for d in full null random tty urandom zero; do

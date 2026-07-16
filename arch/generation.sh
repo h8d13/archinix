@@ -46,8 +46,12 @@ trap '$UNSHARE rm -rf "$TMP"' EXIT
 # unshare_setup makes the same substitutions done manually here.
 cat > "$TMP/inner.sh" <<EOF
 set -e
+# userxattr: whiteout-only deletes work without it, but removing a
+# dir that exists in the lower needs an opaque marker xattr, and
+# trusted.* is off-limits in a userns (pacman upgrades hit this
+# deleting old db entry dirs: EIO, stale duplicate entries)
 mount -t overlay overlay \
-	-o "lowerdir=$BASE,upperdir=$TMP/upper,workdir=$TMP/work" "$TMP/mnt"
+	-o "lowerdir=$BASE,upperdir=$TMP/upper,workdir=$TMP/work,userxattr" "$TMP/mnt"
 # give the merged view the modes the base captured before import
 # (store lower is canonical 0555); see nixgen-savemeta
 if [ -f "$BASE/etc/nixgen/perms" ]; then

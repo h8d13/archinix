@@ -65,9 +65,9 @@ COMMANDS
 
 INTERNALS
        nixgen-savemeta <root>
-              Capture ownership/modes/caps the store import
-              canonicalises away into etc/nixgen/{perms,caps}; runs
-              before every import.
+              Capture what the store import canonicalises away (modes,
+              ownership incl. symlinks, capabilities, POSIX ACLs) into
+              etc/nixgen/{perms,caps,acls}; runs before every import.
 
        nixgen-restmeta [root]
               Replay that manifest; runs at boot (nixgen-perms.service)
@@ -88,7 +88,7 @@ FILES
        /nixstoredev           store-disk root (when attached)
        /nixstoredev/entries.cfg   GRUB menu of committed generations
        /run/nixgen-active     live generation after a soft switch
-       etc/nixgen/perms, caps ownership/mode manifest, per generation
+       etc/nixgen/{perms,caps,acls}  metadata manifests, per generation
 
 NIXGEN(7)                  nixstore generations                  NIXGEN(7)
 EOF

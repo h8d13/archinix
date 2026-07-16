@@ -40,7 +40,11 @@ cat > "$TMP/inner.sh" <<EOF
 set -e
 # single-uid namespace: chown to other uids is impossible and the whole
 # model is root-owned files anyway
-tar --strip-components=1 --no-same-owner -C "$TMP/root" -xf "$TARBALL"
+# --xattrs: the tarball carries capability xattrs (shadow's newuidmap
+# et al) that default extraction silently drops; in the userns they
+# land v3-encoded and getcap/savemeta normalise them to text
+tar --xattrs --xattrs-include='*' --strip-components=1 --no-same-owner \
+	-C "$TMP/root" -xf "$TARBALL"
 
 sed -i 's/^CheckSpace/#CheckSpace/; s/^DownloadUser/#DownloadUser/' \
 	"$TMP/root/etc/pacman.conf"

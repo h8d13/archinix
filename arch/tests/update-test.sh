@@ -144,6 +144,8 @@ QPID=$!
 drive "NIXARCH BOOT OK" \
 	"stat -c %a /var/tmp" \
 	"1777" \
+	'pacman -Q 2>&1 >/dev/null | grep -q "duplicated database" || echo DB_CLEAN' \
+	"DB_CLEAN" \
 	"command -v tree" \
 	"/usr/bin/tree" \
 	"nixgen-remove $NEWGEN" \
@@ -158,12 +160,14 @@ drive "NIXARCH BOOT OK" \
 	"AUTO_TTY1" \
 	'systemctl start getty@tty2 && sleep 1 && ps -o args= -C agetty | grep tty2 | grep -q autologin && echo AUTO_TTY2' \
 	"AUTO_TTY2" \
-	"touch /etc/diffmark && nixgen-commit test-sw" \
+	'touch /etc/diffmark && ln -s /tmp /var/linktest && chown -h 977:977 /var/linktest && touch /etc/acltest && setfacl -m u:977:r /etc/acltest && nixgen-commit test-sw' \
 	"visible next boot" \
 	"nixgen-switch test-sw" \
 	"-test-sw (soft)" \
 	'echo "$(stat -c %a /usr)-$(stat -c %a /var/tmp)"' \
 	"755-1777" \
+	'echo "$(stat -c %u /var/linktest):$(getfacl --numeric /etc/acltest | grep -c "user:977:r--"):$(getcap /usr/bin/newuidmap | grep -c setuid)"' \
+	"977:1:1" \
 	"nixgen-remove test-sw" \
 	"refusing to remove the running generation" \
 	"nixgen-listid" \
