@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# stupid wrapper just pulls in anything you point at it
+# extra args pass straight to curl in bash process substitution
+
+bash <(curl -sSL "$@")

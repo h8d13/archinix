@@ -9,8 +9,10 @@
 # the store disk (no ISO: proves self-hosting)
 # and check the boot marker, restored permissions, and the new package,
 # then run the rest of the in-box lifecycle: nixgen-remove must refuse
-# the running generation, and a committed generation must remove
-# cleanly (store path GC'd, GRUB entry pruned).
+# the running generation, a committed generation must remove cleanly
+# (store path GC'd, GRUB entry pruned), and nixgen-switch must
+# soft-reboot into a committed generation with the marker (not the
+# stale cmdline) driving running-generation detection afterwards.
 # Serial console is a unix socket driven by the embedded python
 # (expect pattern / send line); debugfs reads the ext4 img without root.
 cd "$(dirname "$0")/../.."
@@ -150,6 +152,14 @@ drive "NIXARCH BOOT OK" \
 	"STORE_PATH_GONE" \
 	'ps -o args= -C agetty | grep tty1 | grep -q autologin && echo AUTO_TTY1' \
 	"AUTO_TTY1" \
+	"nixgen-commit test-sw" \
+	"visible next boot" \
+	"nixgen-switch test-sw" \
+	"-test-sw (soft)" \
+	"nixgen-remove test-sw" \
+	"refusing to remove the running generation" \
+	"nixgen-listid" \
+	"test-sw (running)" \
 	'echo root:secret | chpasswd && systemctl restart getty@tty1 && sleep 1 && ps -o args= -C agetty | grep tty1 | grep -qv autologin && echo PROMPT_TTY1' \
 	"PROMPT_TTY1" \
 	"poweroff" > /dev/null || { kill $QPID 2>/dev/null; exit 1; }
@@ -163,5 +173,8 @@ echo "$ENTRIES" | grep -q "test-rm" \
 	&& { echo "FAIL: pruned GRUB entry still on disk"; exit 1; }
 echo "$ENTRIES" | grep -q "nixgen=$NEWGEN" \
 	|| { echo "FAIL: surviving GRUB entry lost"; exit 1; }
+# the switched-into generation was refused removal, its entry must live
+echo "$ENTRIES" | grep -q -- "-test-sw" \
+	|| { echo "FAIL: test-sw GRUB entry lost"; exit 1; }
 echo "PASS: $NEWGEN booted from disk, kernel changed, perms restored," \
-	"tree installed, remove + getty lifecycle clean"
+	"tree installed, remove + soft-switch + getty lifecycle clean"

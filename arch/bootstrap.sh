@@ -2,7 +2,7 @@
 # Fresh base generation from the official Arch bootstrap tarball:
 # download (if missing), extract, make pacman usable inside the userns
 # sandbox (mirror list, CheckSpace confused by overlay df, DownloadUser
-# can't drop privileges in a single-uid namespace), init the keyring,
+# off so the single-uid fallback sandbox works too), init the keyring,
 # import the result as arch-base. Prints the store path to build on with
 # generation.sh / iso/mkiso.sh.
 # usage: bootstrap.sh <store-root>
@@ -24,9 +24,17 @@ TARBALL=$REPO/build/archlinux-bootstrap-x86_64.tar.zst
 [ -f "$TARBALL" ] || curl -L -o "$TARBALL" \
 	https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst
 
+# multi-uid sandbox when /etc/subuid holds a range for us (chowns
+# inside succeed); single-uid fallback, chowns fail soft
+UNSHARE="unshare --map-auto --map-root-user"
+$UNSHARE true || {
+	echo "WARN: no subuid range, single-uid sandbox (chowns fail soft)" >&2
+	UNSHARE="unshare --map-root-user"
+}
+
 TMP=$(mktemp -d "$REPO/build/bootstrap.XXXXXX")
 mkdir "$TMP/root"
-trap 'unshare -r rm -rf "$TMP"' EXIT
+trap '$UNSHARE rm -rf "$TMP"' EXIT
 
 cat > "$TMP/inner.sh" <<EOF
 set -e
@@ -59,4 +67,4 @@ find "$TMP/root" \( -type s -o -type p \) -delete
 LD_LIBRARY_PATH=$REPO/build/prefix/lib "$REPO/build/import-dir" \
 	"$STORE" arch-base "$TMP/root"
 EOF
-unshare -rmpf --kill-child sh "$TMP/inner.sh"
+$UNSHARE -mpf --kill-child sh "$TMP/inner.sh"

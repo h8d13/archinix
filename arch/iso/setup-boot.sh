@@ -53,6 +53,8 @@ cp -P "$I"/payload/libnix*.so* /usr/local/lib/
 install -m755 "$I/nixgen-commit" /usr/local/bin/nixgen-commit
 install -m755 "$I/nixgen-remove" /usr/local/bin/nixgen-remove
 install -m755 "$I/nixgen-update" /usr/local/bin/nixgen-update
+install -m755 "$I/nixgen-switch" /usr/local/bin/nixgen-switch
+install -m755 "$I/nixgen-listid" /usr/local/bin/nixgen-listid
 install -m755 "$I/nixgen-savemeta" /usr/local/bin/nixgen-savemeta
 install -m755 "$I/nixgen-restmeta" /usr/local/bin/nixgen-restmeta
 
@@ -78,7 +80,12 @@ systemctl enable nixgen-perms
 
 cat > /root/.bash_profile <<'EOF'
 echo "=== NIXARCH BOOT OK ==="
-grep -o 'nixgen=[^ ]*' /proc/cmdline
+# soft switches (nixgen-switch) leave the boot-time cmdline stale
+if [ -s /run/nixgen-active ]; then
+	echo "nixgen=$(cat /run/nixgen-active) (soft)"
+else
+	grep -o 'nixgen=[^ ]*' /proc/cmdline
+fi
 EOF
 
 # kernel install triggers mkinitcpio -P via ALPM hook, which picks up

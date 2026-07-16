@@ -11,7 +11,13 @@
 	echo "no writable store: boot with a NIXSTORE disk attached" >&2
 	exit 1
 }
-RUNNING=$(sed -n 's/.*nixgen=\([^ ]*\).*/\1/p' /proc/cmdline)
+# after a nixgen-switch the cmdline names the boot-time generation; the
+# marker (written by switch, absent on a real boot) is the live one
+if [ -s /run/nixgen-active ]; then
+	RUNNING=$(cat /run/nixgen-active)
+else
+	RUNNING=$(sed -n 's/.*nixgen=\([^ ]*\).*/\1/p' /proc/cmdline)
+fi
 
 rc=0
 for GEN in "$@"; do

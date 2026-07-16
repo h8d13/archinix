@@ -25,12 +25,11 @@ STORE=$(realpath "$STORE")
 SDIR=$STORE/nix/store
 
 GEN1=$(ls -td "$SDIR"/*-nixarch-1 | head -1)
-GEN2=$(ls -td "$SDIR"/*-nixarch-2 | head -1)
-[ -n "$GEN1" ] && [ -n "$GEN2" ] || {
-	echo "no nixarch generations in $SDIR: run iso/mkiso.sh first" >&2
+[ -n "$GEN1" ] || {
+	echo "no nixarch generation in $SDIR: run iso/mkiso.sh first" >&2
 	exit 1
 }
-G1=$(basename "$GEN1") G2=$(basename "$GEN2")
+G1=$(basename "$GEN1")
 
 TMP=$(mktemp -d "$REPO/build/disk.XXXXXX")
 trap 'unshare -r rm -rf "$TMP"' EXIT
@@ -60,12 +59,7 @@ mcopy -i "$TMP/esp.img" "$TMP/BOOTX64.EFI" ::/EFI/BOOT/
 mkdir "$TMP/staging"
 cp -al "$STORE/nix" "$TMP/staging/nix"
 cat > "$TMP/staging/entries.cfg" <<EOF
-menuentry "nixarch: $G2" {
-	search --no-floppy --set=nixdev --label NIXSTORE
-	linux (\$nixdev)/nix/store/$G2/boot/vmlinuz-linux nixgen=$G2 nixsource=disk
-	initrd (\$nixdev)/nix/store/$G2/boot/initramfs-linux.img
-}
-menuentry "nixarch: $G1 (rollback)" {
+menuentry "nixarch: $G1" {
 	search --no-floppy --set=nixdev --label NIXSTORE
 	linux (\$nixdev)/nix/store/$G1/boot/vmlinuz-linux nixgen=$G1 nixsource=disk
 	initrd (\$nixdev)/nix/store/$G1/boot/initramfs-linux.img

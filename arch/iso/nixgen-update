@@ -13,7 +13,13 @@ NAME=$1
 shift
 CMD=${*:-pacman -Syu --noconfirm}
 
-GEN=$(sed -n 's/.*nixgen=\([^ ]*\).*/\1/p' /proc/cmdline)
+# after a nixgen-switch the cmdline names the boot-time generation; the
+# marker (written by switch, absent on a real boot) is the live one
+if [ -s /run/nixgen-active ]; then
+	GEN=$(cat /run/nixgen-active)
+else
+	GEN=$(sed -n 's/.*nixgen=\([^ ]*\).*/\1/p' /proc/cmdline)
+fi
 LOWER=/nixstore/$GEN
 [ -d "$LOWER" ] || { echo "running generation '$GEN' not in /nixstore" >&2; exit 1; }
 [ -d /nixstoredev ] || {

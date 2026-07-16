@@ -1,0 +1,42 @@
+#!/bin/sh -e
+# List generations with a short id, from inside the box. Every store
+# path is a generation here (import-dir is the only writer). Source:
+# disk = the writable NIXSTORE store, iso = the boot medium squashfs;
+# on a disk boot /nixstore aliases the disk store, listed once.
+# Short id = first 8 hash chars, for eyeballing; nixgen-remove/-switch
+# take the plain name (when unique) or the full basename.
+# usage: nixgen-listid
+
+# after a nixgen-switch the cmdline names the boot-time generation; the
+# marker (written by switch, absent on a real boot) is the live one
+if [ -s /run/nixgen-active ]; then
+	RUNNING=$(cat /run/nixgen-active)
+else
+	RUNNING=$(sed -n 's/.*nixgen=\([^ ]*\).*/\1/p' /proc/cmdline)
+fi
+
+list() {
+	for p in "$1"/*; do
+		[ -d "$p" ] || continue
+		g=${p##*/}
+		case $g in .links|tmp-*) continue ;; esac
+		mark=
+		if [ "$g" = "$RUNNING" ]; then
+			mark=" (running)"
+		fi
+		printf '%.8s  %-4s  %s%s\n' "$g" "$2" "${g#*-}" "$mark"
+	done | sort -k3
+}
+
+DISK=/nixstoredev/nix/store
+if [ -d "$DISK" ] && [ -d /nixstore ] \
+		&& [ "$(stat -c %d /nixstore)" = "$(stat -c %d "$DISK")" ]; then
+	list "$DISK" disk
+else
+	if [ -d /nixstore ]; then
+		list /nixstore iso
+	fi
+	if [ -d "$DISK" ]; then
+		list "$DISK" disk
+	fi
+fi

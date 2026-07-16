@@ -22,14 +22,28 @@ CMD=${*:-/usr/bin/bash}
 		$(PKG_CONFIG_PATH=$P/lib/pkgconfig pkg-config --cflags --libs nix-store nix-util)
 }
 
+# multi-uid sandbox when /etc/subuid holds a range for us: chowns from
+# pacman hooks (sysusers et al) succeed and land in the perms manifest.
+# Single-uid fallback keeps working, chowns fail soft
+UNSHARE="unshare --map-auto --map-root-user"
+$UNSHARE true || {
+	echo "WARN: no subuid range, single-uid sandbox (chowns fail soft)" >&2
+	UNSHARE="unshare --map-root-user"
+}
+
 TMP=$(mktemp -d "$REPO/build/gen.XXXXXX")
 mkdir "$TMP/upper" "$TMP/work" "$TMP/mnt"
 # overlayfs creates work/work with mode 000; userns root can still rm it
-trap 'unshare -r rm -rf "$TMP"' EXIT
+trap '$UNSHARE rm -rf "$TMP"' EXIT
 
 # Inner script runs as fake root in fresh mount+pid namespaces. Mounts die
 # with the namespace; proc/dev are unmounted before import so the merged
 # view contains only real files.
+# Not arch-chroot: its root mode mounts devtmpfs/sysfs (EPERM in a userns);
+# its -N mode re-execs under unshare --map-auto unconditionally, which
+# cannot nest inside this sandbox (uid_map write EPERM) and standalone
+# offers no hook to mount the overlay before the chroot. Its
+# unshare_setup makes the same substitutions done manually here.
 cat > "$TMP/inner.sh" <<EOF
 set -e
 mount -t overlay overlay \
@@ -77,4 +91,4 @@ find "$TMP/mnt" \( -type s -o -type p \) -delete
 LD_LIBRARY_PATH=$P/lib "$REPO/build/import-dir" "$STORE_ROOT" "$NAME" "$TMP/mnt"
 EOF
 
-unshare -rmpf --kill-child sh "$TMP/inner.sh"
+$UNSHARE -mpf --kill-child sh "$TMP/inner.sh"

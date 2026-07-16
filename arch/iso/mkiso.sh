@@ -3,8 +3,7 @@
 # GRUB menu = generation picker; rollback is choosing an older entry.
 #
 # Steps: mutate <base> into a bootable generation (kernel + nixgen
-# initcpio hook), derive a second generation on top of it (demo that
-# entries share the store), squash the whole store, wrap in GRUB ISO.
+# initcpio hook), squash the whole store, wrap in GRUB ISO.
 #
 # usage: mkiso.sh <store-root> <base-store-path>
 cd "$(dirname "$0")/../.."
@@ -33,14 +32,13 @@ trap 'unshare -r rm -rf "$TMP"' EXIT
 # the ISO without re-running pacman. REBUILD=1 discards them first (any
 # change to setup-boot.sh or the initcpio hook invalidates them).
 if [ -n "$REBUILD" ]; then
-	for g in "$SDIR"/*-nixarch-1 "$SDIR"/*-nixarch-2; do
+	for g in "$SDIR"/*-nixarch-1; do
 		[ -d "$g" ] || continue
 		LD_LIBRARY_PATH=$P/lib "$REPO/build/rm-path" \
 			"$STORE" "$(basename "$g")"
 	done
 fi
 GEN1=$(ls -td "$SDIR"/*-nixarch-1 | head -1)
-GEN2=$(ls -td "$SDIR"/*-nixarch-2 | head -1)
 
 # --- gen 1: base + kernel + nixgen hook -------------------------------
 # generation.sh sandbox with the iso scaffolding (initcpio hooks, configs,
@@ -59,14 +57,6 @@ GEN2=$(ls -td "$SDIR"/*-nixarch-2 | head -1)
 }
 echo "gen1: $GEN1"
 
-# --- gen 2: gen1 + one extra package (the rollback demo) ---------------
-[ -n "$GEN2" ] || {
-arch/generation.sh "$STORE" "$GEN1" nixarch-2 \
-	"pacman -S --noconfirm --needed fastfetch"
-GEN2=$(ls -td "$SDIR"/*-nixarch-2 | head -1)
-}
-echo "gen2: $GEN2"
-
 # --- squash the store ---------------------------------------------------
 # mksquashfs comes from gen1 itself (host may not have it). unshare -r so
 # store files read as root-owned; gen1's own loader+libs run the binary.
@@ -81,20 +71,15 @@ unshare -r "$GEN1/usr/lib/ld-linux-x86-64.so.2" --library-path "$GEN1/usr/lib" \
 	# (writing wtmp rewrote /etc/subuid); squashfs dedups by content, so
 	# splitting them costs nothing
 
-# gen1 and gen2 share the same kernel/initramfs files
 cp "$GEN1/boot/vmlinuz-linux" "$ISO/boot/vmlinuz-linux"
 cp "$GEN1/boot/initramfs-linux.img" "$ISO/boot/initramfs-linux.img"
 
-G1=$(basename "$GEN1") G2=$(basename "$GEN2")
+G1=$(basename "$GEN1")
 cat > "$ISO/boot/grub/grub.cfg" <<EOF
 set default=0
 set timeout=5
 
-menuentry "nixarch: $G2" {
-	linux /boot/vmlinuz-linux nixgen=$G2 nixlabel=$LABEL console=ttyS0,115200 console=tty0
-	initrd /boot/initramfs-linux.img
-}
-menuentry "nixarch: $G1 (rollback)" {
+menuentry "nixarch: $G1" {
 	linux /boot/vmlinuz-linux nixgen=$G1 nixlabel=$LABEL console=ttyS0,115200 console=tty0
 	initrd /boot/initramfs-linux.img
 }

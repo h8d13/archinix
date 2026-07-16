@@ -11,10 +11,18 @@ BASE=$1
 shift
 CMD=${*:-/usr/bin/bash}
 
+# multi-uid sandbox when /etc/subuid holds a range for us (chowns
+# inside succeed); single-uid fallback, chowns fail soft
+UNSHARE="unshare --map-auto --map-root-user"
+$UNSHARE true || {
+	echo "WARN: no subuid range, single-uid sandbox (chowns fail soft)" >&2
+	UNSHARE="unshare --map-root-user"
+}
+
 TMP=$(mktemp -d "$REPO/build/enter.XXXXXX")
 mkdir "$TMP/upper" "$TMP/work" "$TMP/mnt"
 # overlayfs creates work/work with mode 000; userns root can still rm it
-trap 'unshare -r rm -rf "$TMP"' EXIT
+trap '$UNSHARE rm -rf "$TMP"' EXIT
 
 cat > "$TMP/inner.sh" <<EOF
 set -e
@@ -30,4 +38,4 @@ chroot "$TMP/mnt" /usr/bin/env -i \
 	sh -c '$CMD'
 EOF
 
-unshare -rmpf --kill-child sh "$TMP/inner.sh"
+$UNSHARE -mpf --kill-child sh "$TMP/inner.sh"

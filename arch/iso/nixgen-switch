@@ -1,0 +1,97 @@
+#!/bin/sh -e
+# Switch to another generation without touching the running kernel:
+# stage it at /run/nextroot (overlay, fresh tmpfs upper: the same view
+# GRUB booting its entry gives) and systemctl soft-reboot into it.
+# Firmware, GRUB and the initramfs are skipped; userspace restarts in
+# seconds. Ephemeral like any boot: uncommitted writes are dropped and
+# the GRUB default is untouched (a power cycle boots the menu default,
+# not the switched generation).
+# Refuses a target without modules for the running kernel: that
+# mismatch is what this machinery exists to avoid; boot the target's
+# own GRUB entry instead.
+# /proc/cmdline keeps naming the boot-time generation, so the live one
+# is recorded in /run/nixgen-active (/run survives soft-reboot, fresh
+# on a real boot); nixgen-update/-remove consult it first.
+# usage: nixgen-switch <name|store-path-basename>
+NAME=$1
+[ -n "$NAME" ] || { echo "usage: $0 <name|store-path-basename>" >&2; exit 1; }
+
+# resolve in the visible stores: exact basename first, then unique
+# *-<name> match. Both roots can alias the same store (disk boot), so
+# the first store dir with a match wins
+LOWER= STOREDIR=
+for S in /nixstore /nixstoredev/nix/store; do
+	[ -d "$S" ] || continue
+	if [ -d "$S/$NAME" ]; then
+		LOWER=$S/$NAME STOREDIR=$S
+		break
+	fi
+	n=0
+	for m in "$S"/*-"$NAME"; do
+		[ -d "$m" ] || continue
+		n=$((n + 1)) LOWER=$m STOREDIR=$S
+	done
+	if [ "$n" -gt 1 ]; then
+		echo "ambiguous name '$NAME' ($n matches in $S), use the full basename" >&2
+		exit 1
+	fi
+	[ "$n" -eq 0 ] || break
+done
+[ -n "$LOWER" ] || {
+	echo "generation '$NAME' not found in /nixstore or /nixstoredev" >&2
+	exit 1
+}
+GEN=$(basename "$LOWER")
+
+K=$(uname -r)
+[ -d "$LOWER/usr/lib/modules/$K" ] || {
+	echo "$GEN has no modules for running kernel $K:" \
+		"soft-reboot would recreate the module-tree mismatch;" \
+		"reboot into its GRUB entry instead" >&2
+	exit 1
+}
+
+# leftover staging from an aborted run
+if mountpoint -q /run/nextroot; then
+	umount -R /run/nextroot
+fi
+# uppers of roots soft-rebooted away stay mounted under the preserved
+# /run and pin RAM; overlayfs holds a private clone of the active
+# root's upper, so even that one unmounts harmlessly here
+for d in /run/cow /run/nixgen-cow.*; do
+	mountpoint -q "$d" || continue
+	umount "$d" && rmdir "$d" || echo "switch: $d busy, kept" >&2
+done
+
+COW=$(mktemp -d /run/nixgen-cow.XXXXXX)
+mount -t tmpfs -o size=75%,mode=0755 cow "$COW"
+mkdir "$COW/upper" "$COW/work"
+mkdir -p /run/nextroot
+mount -t overlay overlay \
+	-o "lowerdir=$LOWER,upperdir=$COW/upper,workdir=$COW/work" /run/nextroot
+
+# same mounts the initramfs hook stages: the store holding the running
+# generation at /nixstore, store-disk root at /nixstoredev. Submounts
+# of /run/nextroot move into the new root with it
+mkdir -p /run/nextroot/nixstore
+mount --bind "$STOREDIR" /run/nextroot/nixstore
+if [ -d /nixstoredev ] && mountpoint -q /nixstoredev; then
+	mkdir -p /run/nextroot/nixstoredev
+	mount --bind /nixstoredev /run/nextroot/nixstoredev
+fi
+
+OLD=
+if [ -s /run/nixgen-active ]; then
+	OLD=$(cat /run/nixgen-active)
+fi
+echo "$GEN" > /run/nixgen-active
+echo "switching: $GEN"
+systemctl soft-reboot || {
+	# marker must not lie about a switch that didn't happen
+	if [ -n "$OLD" ]; then
+		echo "$OLD" > /run/nixgen-active
+	else
+		rm -f /run/nixgen-active
+	fi
+	exit 1
+}

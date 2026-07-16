@@ -31,8 +31,17 @@ Inside the box (installed by setup-boot.sh):
 - `nixgen-update <name> [cmd]`: build the next generation offline
   (default `pacman -Syu`) with its upper on the store disk; the live
   root and its module tree stay intact.
+- `nixgen-switch <name>`: soft-reboot into another generation, the
+  fast path for same-kernel changes (userspace restarts in seconds).
+  The kernel and already-loaded modules stay resident; fresh module
+  loads come from the target's matching tree, so targets without
+  modules for the running kernel are refused (kernel updates need a
+  real reboot into their entry). Ephemeral like any boot: fresh
+  upper, GRUB default unchanged.
 - `nixgen-remove <basename>...`: delete committed generations (GC
   codepath, refuses the running one) + prune their GRUB entries.
+- `nixgen-listid`: generations visible to the box: short hash id,
+  source (disk/iso), running marker.
 
 ## From nothing
 
@@ -44,7 +53,7 @@ inside the generation).
 ```
 ./build.sh                                     # libs into build/prefix
 arch/bootstrap.sh build/archstore              # once; prints <base>
-arch/iso/mkiso.sh build/archstore <base>       # ISO with 2 generations
+arch/iso/mkiso.sh build/archstore <base>       # bootable ISO
 arch/iso/mkstoredisk.sh                        # blank persistence disk
 qemu-system-x86_64 -accel kvm -m 2G -boot d -cdrom build/nixarch.iso \
     -drive file=build/nixstore.img,format=raw,if=virtio \
