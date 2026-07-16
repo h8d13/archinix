@@ -40,3 +40,5 @@ arch/iso/flashdisk.sh build/archstore /dev/sdX   # flash to hardware
 
 In the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
 `nixgen-help` is the full reference.
+
+Examples of post scripts: https://github.com/h8d13/nixarch.cfg
