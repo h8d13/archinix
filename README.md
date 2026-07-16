@@ -31,4 +31,3 @@ Modules when updated on a live system, there is then a mismatch and the module t
 Using `nixstore` the idea was that you can make this only commited on demand and keep the current tree running.
 
 Currently: `nixgen-{commit,remove,update,listid,diffid,switch}`
-`
