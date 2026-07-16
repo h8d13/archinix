@@ -25,33 +25,11 @@ builds the *next* generation offline; the running root is never touched.
 | `iso/boot-test.sh` | headless QEMU smoke-boot of the ISO, PASS on autologin |
 | `iso/update-test.sh` | e2e: kernel upgrade in the box, boot the result from the store disk alone |
 
-Inside the box (installed by setup-boot.sh):
-
-- `nixgen-commit <name>`: import the running root onto the store disk
-  (initializes a blank one) + GRUB entry. Reboot, it's in the menu.
-- `nixgen-update <name> [cmd]`: build the next generation offline
-  (default `pacman -Syu`) with its upper on the store disk; the live
-  root and its module tree stay intact.
-- `nixgen-switch <name>`: soft-reboot into another generation, the
-  fast path for same-kernel changes (userspace restarts in seconds).
-  The kernel and already-loaded modules stay resident; fresh module
-  loads come from the target's matching tree, so targets without
-  modules for the running kernel are refused (kernel updates need a
-  real reboot into their entry). Ephemeral like any boot: fresh
-  upper, GRUB default unchanged.
-- `nixgen-remove <basename>...`: delete committed generations (GC
-  codepath, refuses the running one) + prune their GRUB entries.
-- `nixgen-listid`: generations visible to the box: short hash id,
-  source (disk/iso), running marker.
-- `nixgen-diffid <name> <name> [subpath]`: systemwide diff of two
-  generations: every added/removed/changed file, content-compared
-  (near-free on deduped stores). Subpath = full content diff of that
-  subtree. Ownership/mode deltas appear as the etc/nixgen/perms diff.
-- `nixgen-setup <device> [name]`: install onto a disk from inside the
-  box: GPT (ESP + NIXSTORE), standalone GRUB, fresh store seeded with
-  a commit of the running root (mkbootdisk's layout, built live).
-  UEFI only; unplug a NIXSTORE-labeled installer stick before first
-  boot (GRUB searches by label).
+Inside the box (installed by setup-boot.sh): `nixgen-commit`,
+`-update`, `-switch`, `-remove`, `-listid`, `-diffid`, `-setup`
+(install to disk), `-help`. The reference is `nixgen-help` (source:
+[iso/nixgen-help](iso/nixgen-help), drift-checked by update-test:
+every installed nixgen-* must appear in it).
 
 ## From nothing
 

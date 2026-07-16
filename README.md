@@ -25,9 +25,18 @@ C API in `nix_api_store.h` ([external API docs](https://hydra.nixos.org/job/nix/
 
 ---
 
-My idea was that `pacman` updates have one flaw.
-Modules when updated on a live system, there is then a mismatch and the module tree becomes effectively "unloaded".
+## arch/: Arch Linux generations ([arch/README.md](arch/README.md))
 
-Using `nixstore` the idea was that you can make this only commited on demand and keep the current tree running.
+Immutable Arch generations on the store: updates build the next
+generation offline, rollback is booting an older GRUB entry.
 
-Currently: `nixgen-{commit,remove,update,listid,diffid,switch,setup}`
+```
+./build.sh                                       # store libs into build/prefix
+arch/bootstrap.sh build/archstore                # base generation (prints <base>)
+arch/iso/mkiso.sh build/archstore <base>         # bootable ISO
+arch/iso/uefi-vm.sh iso                          # try it in QEMU (UEFI)
+arch/iso/flashdisk.sh build/archstore /dev/sdX   # flash to hardware
+```
+
+In the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
+`nixgen-help` is the full reference.

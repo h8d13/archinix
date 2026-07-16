@@ -1,0 +1,94 @@
+#!/bin/sh
+# Man-style overview of the in-box nixgen tools. Single source for
+# in-box documentation; update-test asserts every installed nixgen-*
+# binary is mentioned here, so additions fail loud when undocumented.
+# usage: nixgen-help
+page() {
+cat <<'EOF'
+NIXGEN(7)                  nixstore generations                  NIXGEN(7)
+
+NAME
+       nixgen - Arch Linux generations on the nix store layer
+
+DESCRIPTION
+       The root filesystem is an immutable, content-addressed
+       generation in a nix store, overlay-mounted at boot with a tmpfs
+       upper. GRUB picks the generation; rollback is booting an older
+       entry. Uncommitted writes live in RAM and vanish at reboot:
+       commit what you want to keep.
+
+COMMANDS
+       nixgen-commit <name> [store-root]
+              Import the running root onto the store disk (initializes
+              a blank one) + GRUB entry. Reboot, it's in the menu.
+
+       nixgen-update <name> [cmd]
+              Build the next generation offline (default pacman -Syu)
+              with its upper on the store disk; the live root and its
+              module tree stay intact. Reboot to switch.
+
+       nixgen-switch <name>
+              Soft-reboot into another generation, the fast path for
+              same-kernel changes (userspace restarts in seconds). The
+              kernel and already-loaded modules stay resident; fresh
+              module loads come from the target's matching tree, so
+              targets without modules for the running kernel are
+              refused (kernel updates need a real reboot into their
+              entry). Ephemeral like any boot: fresh upper, GRUB
+              default unchanged.
+
+       nixgen-remove <basename>...
+              Delete committed generations (GC codepath, refuses the
+              running one) + prune their GRUB entries.
+
+       nixgen-listid
+              Generations visible to the box: short hash id, source
+              (disk/iso), running marker.
+
+       nixgen-diffid <name> <name> [subpath]
+              Systemwide diff of two generations: every added/removed/
+              changed file, content-compared (near-free on deduped
+              stores). Subpath = full content diff of that subtree.
+              Ownership/mode deltas appear as the etc/nixgen/perms
+              diff.
+
+       nixgen-setup <device> [name]
+              Install onto a disk from inside the box: GPT (ESP +
+              NIXSTORE), standalone GRUB, fresh store seeded with a
+              commit of the running root (mkbootdisk's layout, built
+              live). UEFI only; unplug a NIXSTORE-labeled installer
+              stick before first boot (GRUB searches by label).
+
+INTERNALS
+       nixgen-savemeta <root>
+              Capture ownership/modes/caps the store import
+              canonicalises away into etc/nixgen/{perms,caps}; runs
+              before every import.
+
+       nixgen-restmeta [root]
+              Replay that manifest; runs at boot (nixgen-perms.service)
+              and inside build sandboxes.
+
+       nixgen-getty
+              Conditional autologin shim for agetty: prompt-free only
+              while root is passwordless; passwd root restores login
+              prompts, commit to keep that.
+
+       nixgen-help
+              This page.
+
+FILES
+       /nixstore              store holding the running generation
+       /nixstoredev           store-disk root (when attached)
+       /nixstoredev/entries.cfg   GRUB menu of committed generations
+       /run/nixgen-active     live generation after a soft switch
+       etc/nixgen/perms, caps ownership/mode manifest, per generation
+
+NIXGEN(7)                  nixstore generations                  NIXGEN(7)
+EOF
+}
+if [ -t 1 ]; then
+	page | ${PAGER:-more}
+else
+	page
+fi

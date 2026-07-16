@@ -168,6 +168,8 @@ drive "NIXARCH BOOT OK" \
 	"test-sw (running)" \
 	"nixgen-diffid test-up test-sw" \
 	"Only in b/etc: diffmark" \
+	'ok=1; for t in /usr/local/bin/nixgen-*; do nixgen-help | grep -q "$(basename "$t")" || { echo "undocumented: $t"; ok=0; }; done; [ $ok = 1 ] && echo HELP_OK' \
+	"HELP_OK" \
 	"nixgen-setup /dev/vdb inst-test" \
 	"type the device path to continue" \
 	"/dev/vdb" \
