@@ -95,11 +95,11 @@ if [ ! -L "$SCRATCH/mnt/etc/resolv.conf" ] \
 	fi
 fi
 
-# scrub what a generation must not capture: scratch dirs, downloaded
-# package cache, and sockets/fifos (NAR cannot represent them)
+# scrub what a generation must not capture: scratch dirs and the
+# downloaded package cache (sockets/fifos are skipped by import-dir's
+# dump filter, no scrub needed)
 rm -rf "$SCRATCH/mnt/tmp"/* "$SCRATCH/mnt/tmp"/.[!.]* "$SCRATCH/mnt/run"/* \
 	"$SCRATCH/mnt/var/cache/pacman/pkg"/* 2>/dev/null || true
-find "$SCRATCH/mnt" \( -type s -o -type p \) -delete
 
 /usr/local/bin/nixgen-savemeta "$SCRATCH/mnt"
 

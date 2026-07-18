@@ -17,6 +17,17 @@ R=$1
 [ -d "$R" ] || { echo "usage: $0 <root>" >&2; exit 1; }
 cd "$R"
 mkdir -p etc/nixgen
+
+# Tab/newline in a filename would corrupt the tab-delimited rows; a
+# crafted newline name could even inject a fabricated row that
+# restmeta (root, at boot) replays as chmod/chown of an arbitrary
+# path. Never legitimate in a system tree: excluded from all three
+# manifests, loudly (their metadata is then NOT restored)
+TAB=$(printf '\t')
+NL=$(printf '\nx'); NL=${NL%x}
+BAD=$(find . -xdev \( -path "*${TAB}*" -o -path "*${NL}*" \) -print | wc -l)
+[ "$BAD" -eq 0 ] || echo \
+	"savemeta: $BAD tab/newline paths excluded from manifests" >&2
 # ! -perm -444: canonical 0444 makes every file world-readable, so
 # files STRICTER than that (shadow, ssh host keys, 600/640/440) must
 # be captured or import discloses them to non-root users.
@@ -30,12 +41,16 @@ mkdir -p etc/nixgen
 # sandbox, 755 boot tmpfs, 555 iso build): capturing "." makes equal
 # trees produce different manifests depending on who built them
 find . -mindepth 1 -xdev \( -path './tmp/*' -o -path './var/tmp/*' \) -prune \
-	-o \( -type d ! \( -perm 555 -user 0 -group 0 \) \
+	-o ! -path "*${TAB}*" ! -path "*${NL}*" \
+	\( -type d ! \( -perm 555 -user 0 -group 0 \) \
 	-o -type f \( -perm /7022 -o ! -perm -444 -o ! -user 0 -o ! -group 0 \
 		-o -path ./etc/skel/\* \) \
 	-o -type l ! \( -user 0 -group 0 \) \) \
 	-printf '%y\t%m\t%U\t%G\t%p\n' | sort -t'	' -k5 > etc/nixgen/perms
-getcap -r . > etc/nixgen/caps
+# sorted explicit list for the same determinism reason as acls below
+# (getcap -r walks in readdir order); regular files only
+find . -mindepth 1 -xdev ! -path "*${TAB}*" ! -path "*${NL}*" \
+	-type f -print0 | sort -z | xargs -0 -r getcap > etc/nixgen/caps
 # -s: only paths carrying extended/default ACLs; numeric ids stay
 # resolution-independent like the perms manifest.
 # Explicit sorted list, not -R: readdir walk order differs between
@@ -46,5 +61,5 @@ getcap -r . > etc/nixgen/caps
 # only files and dirs: ACLs cannot live on symlinks, and getfacl -P
 # on one is an ELOOP error that would abort the whole capture (-e)
 find . -mindepth 1 -xdev -path ./var/log/journal -prune \
-	-o \( -type f -o -type d \) -print0 \
+	-o ! -path "*${TAB}*" ! -path "*${NL}*" \( -type f -o -type d \) -print0 \
 	| sort -z | xargs -0 -r getfacl -sPp --numeric > etc/nixgen/acls

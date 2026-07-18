@@ -315,6 +315,16 @@ public:
     struct ImportFileHashes
     {
         std::map<std::string, Hash> files;
+
+        /**
+         * Files replaced by a hard link into the link farm while the
+         * import streamed (their content already existed in .links),
+         * so their data never occupied disk. Cuts the peak-space cost
+         * of importing a mostly-unchanged tree from "full un-deduped
+         * snapshot" to "new content only".
+         */
+        uint64_t dedupedFiles = 0;
+        uint64_t dedupedBytes = 0;
     };
 
     StorePath addToStoreFromDump(

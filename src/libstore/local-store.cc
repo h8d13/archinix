@@ -1248,6 +1248,12 @@ class AsyncFileHasher
     };
 
     LocalStore::ImportFileHashes & out;
+
+    /* when set, end() swaps a just-restored file for a hard link into
+       the farm if its content is already there (streaming dedup) */
+    const std::filesystem::path * dedupRoot;
+    const std::filesystem::path * linksDir;
+
     bool threaded;
     std::thread worker;
     std::mutex mtx;
@@ -1291,8 +1297,46 @@ class AsyncFileHasher
     {
         writePadding(size, *hash);
         *hash << ")";
-        out.files.insert_or_assign(std::move(key), hash->finish().hash);
+        auto h = hash->finish().hash;
+        tryDedup(h);
+        out.files.insert_or_assign(std::move(key), h);
         hash.reset();
+    }
+
+    /* The file just restored is complete and NAR restores are
+       sequential, so nothing touches it again: if the link farm holds
+       its content (same NAR hash, so the execute bit matches too),
+       swap the fresh copy for a hard link via link+rename and give the
+       data pages back. The later canonicalise/optimise passes see a
+       farm inode that is already canonical (0444/0555, mtime 1) and
+       apply the same values. Opportunistic: any failure leaves the
+       copy for optimisePath() to farm; never throws into the import.
+       Empty files are skipped, same rule (and reason) as optimise. */
+    void tryDedup(const Hash & h)
+    {
+        if (!dedupRoot || !linksDir || size == 0)
+            return;
+        try {
+            std::filesystem::path link{
+                linksDir->native() + '/' + h.to_string(HashFormat::Nix32, false)};
+            struct stat stLink;
+            if (::lstat(link.c_str(), &stLink) == -1
+                || uint64_t(stLink.st_size) != size)
+                return;
+            std::filesystem::path file{
+                dedupRoot->native() + (key == "/" ? std::string() : key)};
+            std::filesystem::path tmp{file.native() + ".dedup~"};
+            if (::link(link.c_str(), tmp.c_str()) == -1)
+                return;
+            if (::rename(tmp.c_str(), file.c_str()) == -1) {
+                ::unlink(tmp.c_str());
+                return;
+            }
+            out.dedupedFiles++;
+            out.dedupedBytes += size;
+        } catch (...) {
+            /* opportunistic */
+        }
     }
 
     void push(Ev ev)
@@ -1345,8 +1389,13 @@ class AsyncFileHasher
     }
 
 public:
-    AsyncFileHasher(LocalStore::ImportFileHashes & out)
+    AsyncFileHasher(
+        LocalStore::ImportFileHashes & out,
+        const std::filesystem::path * dedupRoot,
+        const std::filesystem::path * linksDir)
         : out(out)
+        , dedupRoot(dedupRoot)
+        , linksDir(linksDir)
         , threaded(hashingThreadPaysOff())
     {
         if (threaded)
@@ -1507,7 +1556,8 @@ static void restorePathCapturingHashes(
     Source & source,
     FileSerialisationMethod method,
     bool startFsync,
-    LocalStore::ImportFileHashes * fileHashes)
+    LocalStore::ImportFileHashes * fileHashes,
+    const std::filesystem::path * linksDir)
 {
     if (!fileHashes || method != FileSerialisationMethod::NixArchive) {
         restorePath(path, source, method, startFsync);
@@ -1515,7 +1565,7 @@ static void restorePathCapturingHashes(
     }
     RestoreSink inner{startFsync};
     inner.dstPath = path;
-    AsyncFileHasher hasher{*fileHashes};
+    AsyncFileHasher hasher{*fileHashes, linksDir ? &path : nullptr, linksDir};
     FileHashingSink sink{inner, CanonPath::root, hasher};
     parseDump(sink, source);
     hasher.finish();
@@ -1611,7 +1661,8 @@ StorePath LocalStore::addToStoreFromDump(
         delTempDir = std::make_unique<AutoDelete>(tempDir);
         tempPath = tempDir / "x";
 
-        restorePathCapturingHashes(tempPath, bothSource, dumpMethod, localSettings.fsyncStorePaths, fileHashes);
+        restorePathCapturingHashes(
+            tempPath, bothSource, dumpMethod, localSettings.fsyncStorePaths, fileHashes, &linksDir);
 
         dumpBuffer.reset();
         dump = {};
@@ -1657,7 +1708,12 @@ StorePath LocalStore::addToStoreFromDump(
                 case FileIngestionMethod::Flat:
                 case FileIngestionMethod::NixArchive:
                     restorePathCapturingHashes(
-                        realPath, dumpSource, (FileSerialisationMethod) fim, localSettings.fsyncStorePaths, fileHashes);
+                        realPath,
+                        dumpSource,
+                        (FileSerialisationMethod) fim,
+                        localSettings.fsyncStorePaths,
+                        fileHashes,
+                        &linksDir);
                     break;
                 case FileIngestionMethod::Git:
                     // doesn't correspond to serialization method, so

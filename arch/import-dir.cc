@@ -6,15 +6,23 @@
 // stdout is exactly the imported store path (store mtimes are all
 // canonicalised to 1, so callers must capture it instead of picking
 // the "newest" by mtime); diagnostics go to stderr.
+// Sockets and fifos are skipped during the dump (NAR cannot represent
+// them); callers no longer need to delete them from live trees first.
+// The imported path is registered as a GC root under
+// <root>/nix/var/nix/gcroots/<basename>, so the store db itself knows
+// generations are alive; rm-path drops the root before deleting.
 // usage: import-dir <store-root> <name> <dir>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <optional>
 
+#include <sys/stat.h>
+
 #include <nix/store/globals.hh>
 #include <nix/store/local-store.hh>
 #include <nix/store/store-open.hh>
+#include <nix/util/archive.hh>
 #include <nix/util/config-global.hh>
 #include <nix/util/serialise.hh>
 #include <nix/util/source-accessor.hh>
@@ -52,7 +60,18 @@ try {
 				ContentAddressMethod::Raw::NixArchive,
 				HashAlgorithm::SHA256, {}, NoRepair, &fileHashes);
 		});
-		SourcePath{makeFSSourceAccessor(dir), CanonPath::root}.dumpPath(*sink);
+		/* NAR has no representation for sockets/fifos; filtering them
+		   out of the dump replaces the callers' destructive
+		   find -delete against the live root. The filter sees paths
+		   relative to the accessor root ("/x/y"). */
+		PathFilter noSpecials = [&](const std::string & p) {
+			struct stat st;
+			if (::lstat((dir.native() + p).c_str(), &st) == -1)
+				return true; /* let the dump report it */
+			return !(S_ISSOCK(st.st_mode) || S_ISFIFO(st.st_mode));
+		};
+		SourcePath{makeFSSourceAccessor(dir), CanonPath::root}
+			.dumpPath(*sink, noSpecials);
 		sink->finish();
 	}
 	auto path = *imported;
@@ -64,6 +83,16 @@ try {
 	fprintf(stderr, "nar hash: %s\nnar size: %.1f MiB\n",
 		info->narHash.to_string(HashFormat::SRI, true).c_str(),
 		info->narSize / (1024.0 * 1024.0));
+	if (fileHashes.dedupedFiles)
+		fprintf(stderr, "streamed dedup: %lu files, %.1f MiB never hit disk\n",
+			fileHashes.dedupedFiles,
+			fileHashes.dedupedBytes / (1024.0 * 1024.0));
+
+	/* the generation is now db-visible as alive, not just a name in
+	   entries.cfg; deletion goes through rm-path, which unroots first */
+	local->addPermRoot(path,
+		local->config->stateDir.get().path() / "gcroots"
+			/ std::string(path.to_string()));
 
 	OptimiseStats stats;
 	auto t2 = std::chrono::steady_clock::now();

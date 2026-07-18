@@ -108,10 +108,9 @@ if [ ! -L "$TMP/mnt/etc/resolv.conf" ] \
 	fi
 fi
 
-# scrub what a generation must not capture: sockets/fifos (NAR cannot
-# represent them; gpg-agent drops them in /etc/pacman.d/gnupg).
-# /tmp and /run were namespace tmpfs, nothing of them is in the upper
-find "$TMP/mnt" \( -type s -o -type p \) -delete
+# sockets/fifos (gpg-agent drops them in /etc/pacman.d/gnupg) are
+# skipped by import-dir's dump filter, no scrub needed. /tmp and /run
+# were namespace tmpfs, nothing of them is in the upper
 
 "$REPO/arch/nixgen/nixgen-savemeta" "$TMP/mnt"
 LD_LIBRARY_PATH=$P/lib "$REPO/build/import-dir" "$STORE_ROOT" "$NAME" "$TMP/mnt" \
