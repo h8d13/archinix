@@ -4,11 +4,6 @@ Nix store layer (libnixutil, libnixstore + C API) extracted from [NixOS/nix](htt
 
 Build depends on: `meson`, `ninja`, C++23 compiler:
 
-Depends:
-
-`boost`, `openssl`, `libsodium`, `libarchive`, `brotli`,
-`zstd`, `blake3`, `nlohmann-json`, `sqlite`, `curl`, `libseccomp`
-
 Arch package names (`boost` is headers only; the compiled
 `context`/`coroutine`/`iostreams`/`url` libs live in `boost-libs`):
 
