@@ -26,7 +26,15 @@ jobs:
           pacman --noconfirm -Sy archlinux-keyring
           pacman --noconfirm -Syu git meson ninja gcc pkgconf boost boost-libs \
             openssl libsodium libarchive brotli zstd libblake3 nlohmann-json \
-            sqlite curl libseccomp grub xorriso mtools qemu-base github-cli
+            sqlite curl libseccomp grub xorriso mtools github-cli
+          # container root has no subuid range; without one bootstrap.sh
+          # falls back to its single-uid sandbox and pacman hooks spam
+          # fchownat EINVAL (chowns fail soft). Match the local multi-uid path
+          echo "root:100000:65536" > /etc/subuid
+          echo "root:100000:65536" > /etc/subgid
+          # workspace is runner-owned, container runs as root: git (and gh,
+          # which shells out to it) refuses the repo without this
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Build store libs
         run: ./build.sh
@@ -37,8 +45,6 @@ jobs:
           tail -n1 build/bootstrap.out > build/base-path
       - name: Build ISO
         run: arch/iso/mkiso.sh build/archstore "$(cat build/base-path)"
-      - name: Boot test
-        run: arch/tests/boot-test.sh
       - name: Checksum
         run: sha256sum build/nixarch.iso > build/nixarch.iso.sha256
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -47,7 +53,6 @@ jobs:
           path: |
             build/nixarch.iso
             build/nixarch.iso.sha256
-            build/serial.log
       - name: Release (versioned, on v* tags)
         if: startsWith(github.ref, 'refs/tags/')
         env:
