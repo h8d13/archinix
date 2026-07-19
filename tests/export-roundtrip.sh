@@ -73,5 +73,28 @@ if $RUN build/import-path "$ROOT/d" < "$ROOT/bundle-trunc" \
 		> "$ROOT/log-d" 2>&1; then s=1; else s=0; fi
 ok $s "truncated bundle rejected"
 
+# ship-lane boot glue: an imported generation is store-registered but
+# GRUB-invisible until nixgen-adopt appends its menuentry. Pin the
+# refusals (no kernel, duplicate) and the stanza itself; the shape must
+# stay prunable by nixgen-remove's awk (menuentry line through '}')
+ADOPT="sh arch/nixgen/nixgen-adopt"
+if $ADOPT "$(basename "$P2")" "$ROOT/b" > "$ROOT/log-adopt" 2>&1; then
+	s=1; else s=0; fi
+ok $s "adopt refuses generation without kernel"
+[ ! -f "$ROOT/b/entries.cfg" ]; ok $? "no entry written on refusal"
+
+mkdir -p "$ROOT/bootsrc/boot"
+echo k > "$ROOT/bootsrc/boot/vmlinuz-linux"
+echo i > "$ROOT/bootsrc/boot/initramfs-linux.img"
+PB=$($RUN build/import-dir "$ROOT/b" bootgen "$ROOT/bootsrc" \
+	2> "$ROOT/log-bootgen")
+$ADOPT "$(basename "$PB")" "$ROOT/b" > "$ROOT/log-adopt2" 2>&1
+ok $? "adopt enters a bootable generation"
+grep -q "nixgen=$(basename "$PB") " "$ROOT/b/entries.cfg"
+ok $? "entries.cfg carries the menuentry"
+if $ADOPT "$(basename "$PB")" "$ROOT/b" > "$ROOT/log-adopt3" 2>&1; then
+	s=1; else s=0; fi
+ok $s "duplicate adopt refused"
+
 echo "1..$N"
 exit $FAIL

@@ -1,0 +1,36 @@
+#!/bin/sh -e
+# Make an imported generation bootable. import-path lands a shipped
+# generation in the store with no GRUB entry, and nixgen-commit cannot
+# adopt it (commit snapshots the running root into a new path).
+# Validate the path can boot at all, then append the same entries.cfg
+# stanza commit writes.
+# usage: nixgen-adopt <store-path-basename> [store-root]
+#        store-root default /nixstoredev
+GEN=$1
+TARGET=${2:-/nixstoredev}
+[ -n "$GEN" ] || { echo "usage: $0 <store-path-basename> [store-root]" >&2; exit 1; }
+DIR=$TARGET/nix/store/$GEN
+[ -d "$DIR" ] || { echo "no $DIR: import-path the bundle first" >&2; exit 1; }
+[ -f "$DIR/boot/vmlinuz-linux" ] && [ -f "$DIR/boot/initramfs-linux.img" ] || {
+	echo "$GEN carries no kernel+initramfs: refusing a boot entry" >&2
+	exit 1
+}
+! grep -q "nixgen=$GEN " "$TARGET/entries.cfg" 2>/dev/null || {
+	echo "entry for $GEN already in entries.cfg" >&2
+	exit 1
+}
+
+# adopted entry boots with the same kernel params as the running
+# system, minus the generation selector and GRUB's own bookkeeping
+# (mirrors nixgen-commit)
+CMDLINE=$(tr ' ' '\n' < /proc/cmdline \
+	| grep -v '^nixgen=\|^nixsource=\|^BOOT_IMAGE=\|^initrd=\|^$' | tr '\n' ' ')
+
+cat >> "$TARGET/entries.cfg" <<EOF
+menuentry "nixarch: $GEN (adopted)" {
+	search --no-floppy --set=nixdev --label NIXSTORE
+	linux (\$nixdev)/nix/store/$GEN/boot/vmlinuz-linux nixgen=$GEN nixsource=disk $CMDLINE
+	initrd (\$nixdev)/nix/store/$GEN/boot/initramfs-linux.img
+}
+EOF
+echo "adopted: $GEN (GRUB entry added, visible next boot)"
