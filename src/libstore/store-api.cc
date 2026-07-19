@@ -1,5 +1,4 @@
 #include "nix/util/logging.hh"
-#include "nix/util/signature/local-keys.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/store-api.hh"
@@ -845,20 +844,6 @@ decodeValidPathInfo(const Store & store, std::istream & str, std::optional<HashR
 
 
 
-
-
-void Store::signPathInfo(ValidPathInfo & info)
-{
-    // FIXME: keep secret keys in memory.
-
-    auto secretKeyFiles = settings.secretKeyFiles;
-
-    for (auto & secretKeyFile : secretKeyFiles.get()) {
-        SecretKey secretKey(readFile(secretKeyFile));
-        LocalSigner signer(std::move(secretKey));
-        info.sign(*this, signer);
-    }
-}
 
 
 const std::filesystem::path & StoreConfig::getStateDir() const

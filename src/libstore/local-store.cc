@@ -11,7 +11,6 @@
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/fs-sink.hh"
-#include "nix/store/keys.hh"
 #include "nix/util/users.hh"
 #include "nix/store/store-registration.hh"
 
@@ -86,11 +85,6 @@ std::filesystem::path LocalBuildStoreConfig::getBuildDir() const
 ref<Store> LocalStore::Config::openStore() const
 {
     return make_ref<LocalStore>(ref{shared_from_this()});
-}
-
-bool LocalStoreConfig::getDefaultRequireSigs()
-{
-    return settings.requireSigs;
 }
 
 struct LocalStore::State::Stmts
@@ -886,25 +880,8 @@ void LocalStore::invalidatePath(State & state, const StorePath & path)
     invalidatePathInfoCacheFor(path);
 }
 
-const PublicKeys & LocalStore::getPublicKeys()
-{
-    auto state(_state->lock());
-    if (!state->publicKeys)
-        state->publicKeys = std::make_unique<PublicKeys>(getDefaultPublicKeys());
-    return *state->publicKeys;
-}
-
-bool LocalStore::pathInfoIsUntrusted(const ValidPathInfo & info)
-{
-    return config->requireSigs && !info.checkSignatures(*this, getPublicKeys());
-}
-
-
 void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs)
 {
-    if (checkSigs && pathInfoIsUntrusted(info))
-        throw Error("cannot add path '%s' because it lacks a signature by a trusted key", printStorePath(info.path));
-
     {
         addTempRoot(info.path);
 
@@ -1875,23 +1852,6 @@ std::optional<TrustedFlag> LocalStore::isTrustedClient()
 void LocalStore::vacuumDB()
 {
     _state->lock()->db.exec("vacuum");
-}
-
-void LocalStore::addSignatures(const StorePath & storePath, const std::set<Signature> & sigs)
-{
-    retrySQLite<void>([&]() {
-        auto state(_state->lock());
-
-        SQLiteTxn txn(state->db);
-
-        auto info = std::const_pointer_cast<ValidPathInfo>(queryPathInfoInternal(*state, storePath));
-
-        info->sigs.insert(sigs.begin(), sigs.end());
-
-        updatePathInfo(*state, *info);
-
-        txn.commit();
-    });
 }
 
 std::optional<std::string> LocalStore::getVersion()

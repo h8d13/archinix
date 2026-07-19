@@ -482,21 +482,6 @@ public:
 
 
 
-    /**
-     * Check whether the given valid path info is sufficiently attested, by
-     * either being signed by a trusted public key or content-addressed, in
-     * order to be included in the given store.
-     *
-     * These same checks would be performed in addToStore, but this allows an
-     * earlier failure in the case where dependencies need to be added too, but
-     * the addToStore wouldn't fail until those dependencies are added. Also,
-     * we don't really want to add the dependencies listed in a nar info we
-     * don't trust anyyways.
-     */
-    virtual bool pathInfoIsUntrusted(const ValidPathInfo &)
-    {
-        return true;
-    }
 
 protected:
 
@@ -735,21 +720,6 @@ public:
         return ref<SourceAccessor>{accessor};
     }
 
-
-    /**
-     * Add signatures to the specified store path. The signatures are
-     * not verified.
-     */
-    virtual void addSignatures(const StorePath & storePath, const std::set<Signature> & sigs)
-    {
-        unsupported("addSignatures");
-    }
-
-    /**
-     * Add signatures to a ValidPathInfo or Realisation using the secret keys
-     * specified by the ‘secret-key-files’ option.
-     */
-    void signPathInfo(ValidPathInfo & info);
 
 
     /* Utility functions. */

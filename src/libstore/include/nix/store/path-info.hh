@@ -1,7 +1,7 @@
 #pragma once
 ///@file
 
-#include "nix/util/signature/signer.hh"
+#include "nix/util/signature.hh"
 #include "nix/store/path.hh"
 #include "nix/util/hash.hh"
 #include "nix/store/content-address.hh"
@@ -163,19 +163,6 @@ struct ValidPathInfo : virtual UnkeyedValidPathInfo
     auto operator<=>(const ValidPathInfo &) const = default;
 
     /**
-     * Return a fingerprint of the store path to be used in binary
-     * cache signatures. It contains the store path, the base-32
-     * SHA-256 hash of the NAR serialisation of the path, the size of
-     * the NAR, and the sorted references. The size field is strictly
-     * speaking superfluous, but might prevent endless/excessive data
-     * attacks.
-     */
-    std::string fingerprint(const StoreDirConfig & store) const;
-
-    void sign(const Store & store, const Signer & signer);
-    void sign(const Store & store, const std::vector<std::unique_ptr<Signer>> & signers);
-
-    /**
      * @return The `ContentAddressWithReferences` that determines the
      * store path for a content-addressed store object, `std::nullopt`
      * for an input-addressed store object.
@@ -186,20 +173,6 @@ struct ValidPathInfo : virtual UnkeyedValidPathInfo
      * @return true iff the path is verifiably content-addressed.
      */
     bool isContentAddressed(const StoreDirConfig & store) const;
-
-    static const size_t maxSigs = std::numeric_limits<size_t>::max();
-
-    /**
-     * Return the number of signatures on this .narinfo that were
-     * produced by one of the specified keys, or maxSigs if the path
-     * is content-addressed.
-     */
-    size_t checkSignatures(const StoreDirConfig & store, const PublicKeys & publicKeys) const;
-
-    /**
-     * Verify a single signature.
-     */
-    bool checkSignature(const StoreDirConfig & store, const PublicKeys & publicKeys, const Signature & sig) const;
 
     /**
      * References as store path basenames, including a self reference if it has one.

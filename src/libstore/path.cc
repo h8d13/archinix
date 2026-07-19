@@ -76,11 +76,6 @@ void StorePath::requireDerivation() const
 
 StorePath StorePath::dummy("ffffffffffffffffffffffffffffffff-x");
 
-StorePath StorePath::random(std::string_view name)
-{
-    return StorePath(Hash::random(HashAlgorithm::SHA1), name);
-}
-
 } // namespace nix
 
 namespace nlohmann {

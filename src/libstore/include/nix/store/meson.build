@@ -18,7 +18,6 @@ headers = [ config_pub_h ] + files(
   'global-paths.hh',
   'globals.hh',
   'indirect-root-store.hh',
-  'keys.hh',
   'length-prefixed-protocol-helper.hh',
   'local-fs-store.hh',
   'local-gc.hh',

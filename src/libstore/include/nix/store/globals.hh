@@ -74,54 +74,6 @@ public:
      */
     bool readOnlyMode = false;
 
-    Setting<Strings> trustedPublicKeys{
-        this,
-        {"cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="},
-        "trusted-public-keys",
-        R"(
-          A whitespace-separated list of public keys.
-
-          At least one of the following condition must be met
-          for Nix to accept copying a store object from another
-          Nix store (such as a [substituter](#conf-substituters)):
-
-          - the store object has been signed using a key in the trusted keys list
-          - the [`require-sigs`](#conf-require-sigs) option has been set to `false`
-          - the store URL is configured with `trusted=true`
-          - the store object is [content-addressed](@docroot@/glossary.md#gloss-content-addressed-store-object)
-        )",
-        {"binary-cache-public-keys"}};
-
-    Setting<Strings> secretKeyFiles{
-        this,
-        {},
-        "secret-key-files",
-        R"(
-          A whitespace-separated list of files containing secret (private)
-          keys. These are used to sign locally-built paths. They can be
-          generated using `nix-store --generate-binary-cache-key`. The
-          corresponding public key can be distributed to other users, who
-          can add it to `trusted-public-keys` in their `nix.conf`.
-        )"};
-
-    Setting<bool> requireSigs{
-        this,
-        true,
-        "require-sigs",
-        R"(
-          If set to `true` (the default), any non-content-addressed path added
-          or copied to the Nix store (e.g. when substituting from a binary
-          cache) must have a signature by a trusted key. A trusted key is one
-          listed in `trusted-public-keys`, or a public key counterpart to a
-          private key stored in a file listed in `secret-key-files`.
-
-          Set to `false` to disable signature checking and trust all
-          non-content-addressed paths unconditionally.
-
-          (Content-addressed paths are inherently trustworthy and thus
-          unaffected by this configuration option.)
-        )"};
-
     Setting<uint64_t> warnLargePathThreshold{
         this,
         0,

@@ -75,9 +75,6 @@ openssl = dependency(
 )
 deps_private += openssl
 
-sodium = dependency('libsodium', 'sodium')
-deps_private += sodium
-
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
@@ -117,8 +114,7 @@ sources = [ config_priv_h ] + files(
   'posix-source-accessor.cc',
   'processes.cc',
   'serialise.cc',
-  'signature/local-keys.cc',
-  'signature/signer.cc',
+  'signature.cc',
   'source-accessor.cc',
   'source-path.cc',
   'strings.cc',

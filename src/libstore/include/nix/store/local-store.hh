@@ -93,19 +93,7 @@ struct LocalStoreConfig : std::enable_shared_from_this<LocalStoreConfig>,
 private:
     void anchor() override;
 
-    /**
-     * An indirection so that we don't need to refer to global settings
-     * in headers.
-     */
-    bool getDefaultRequireSigs();
-
 public:
-    Setting<bool> requireSigs{
-        this,
-        getDefaultRequireSigs(),
-        "require-sigs",
-        "Whether store paths copied into this store should have a trusted signature."};
-
     Setting<bool> readOnly{
         this,
         false,
@@ -229,7 +217,6 @@ private:
          */
         uint64_t availAfterGC = std::numeric_limits<uint64_t>::max();
 
-        std::unique_ptr<PublicKeys> publicKeys;
     };
 
     /**
@@ -248,8 +235,6 @@ public:
     const std::filesystem::path fnTempRoots;
 
 private:
-
-    const PublicKeys & getPublicKeys();
 
 public:
 
@@ -284,8 +269,6 @@ public:
     StorePathSet queryValidDerivers(const StorePath & path) override;
 
     std::optional<StorePath> queryPathFromHashPart(const std::string & hashPart) override;
-
-    bool pathInfoIsUntrusted(const ValidPathInfo &) override;
 
     void addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
@@ -460,8 +443,6 @@ public:
     std::optional<TrustedFlag> isTrustedClient() override;
 
     void vacuumDB();
-
-    void addSignatures(const StorePath & storePath, const std::set<Signature> & sigs) override;
 
     /**
      * If free disk space in /nix/store if below minFree, delete

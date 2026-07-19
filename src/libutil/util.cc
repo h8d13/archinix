@@ -6,7 +6,6 @@
 #include <array>
 #include <cctype>
 
-#include <sodium.h>
 #include <boost/lexical_cast.hpp>
 #include <stdint.h>
 
@@ -41,8 +40,6 @@ void initLibUtil()
     // This is not actually the main point of this check, but let's make sure anyway:
     assert(caught);
 
-    if (sodium_init() == -1)
-        throw Error("could not initialise libsodium");
 }
 
 //////////////////////////////////////////////////////////////////////

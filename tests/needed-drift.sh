@@ -24,15 +24,16 @@ needed() {
 }
 
 STORE_WANT="ld-linux-x86-64 libboost_url libc libgcc_s libnixutil libsqlite3 libstdc++ "
-UTIL_WANT="ld-linux-x86-64 libblake3 libboost_context libboost_iostreams libboost_url libc libcrypto libgcc_s libm libsodium libstdc++ "
+UTIL_WANT="ld-linux-x86-64 libblake3 libboost_context libboost_iostreams libboost_url libc libcrypto libgcc_s libm libstdc++ "
 
+# r=0-or-1 dance keeps `sh -e` from aborting before ok() can report
 got=$(needed "$P"/libnixstore.so.[0-9]*)
-[ "$got" = "$STORE_WANT" ]
-ok $? "libnixstore NEEDED set unchanged" "got: $got want: $STORE_WANT"
+r=0; [ "$got" = "$STORE_WANT" ] || r=1
+ok $r "libnixstore NEEDED set unchanged" "got: $got want: $STORE_WANT"
 
 got=$(needed "$P"/libnixutil.so.[0-9]*)
-[ "$got" = "$UTIL_WANT" ]
-ok $? "libnixutil NEEDED set unchanged" "got: $got want: $UTIL_WANT"
+r=0; [ "$got" = "$UTIL_WANT" ] || r=1
+ok $r "libnixutil NEEDED set unchanged" "got: $got want: $UTIL_WANT"
 
 echo "1..$n"
 exit $fail

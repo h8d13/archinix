@@ -201,7 +201,6 @@ sources = files(
   'gc.cc',
   'globals.cc',
   'indirect-root-store.cc',
-  'keys.cc',
   'local-fs-store.cc',
   'local-gc.cc',
   'local-store.cc',

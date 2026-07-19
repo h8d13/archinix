@@ -15,7 +15,6 @@ class StorePath;
 struct ContentAddress;
 struct DrvOutput;
 struct Realisation;
-struct Signature;
 enum struct BuildResultSuccessStatus : uint8_t;
 enum struct BuildResultFailureStatus : uint8_t;
 
@@ -78,7 +77,6 @@ DECLARE_COMMON_SERIALISER(DrvOutput);
 template<>
 DECLARE_COMMON_SERIALISER(Realisation);
 template<>
-DECLARE_COMMON_SERIALISER(Signature);
 
 #define COMMA_ ,
 template<typename T>

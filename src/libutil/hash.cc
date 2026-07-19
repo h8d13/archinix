@@ -16,7 +16,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#include <sodium.h>
 
 namespace nix {
 
@@ -269,13 +268,6 @@ Hash Hash::parseExplicitFormatUnprefixed(
     std::string_view s, HashAlgorithm algo, HashFormat format, const ExperimentalFeatureSettings & xpSettings)
 {
     return parseLowLevel(s, algo, baseExplicit(format), xpSettings);
-}
-
-Hash Hash::random(HashAlgorithm algo)
-{
-    Hash hash(algo);
-    randombytes_buf(hash.hash, hash.hashSize);
-    return hash;
 }
 
 Hash newHashAllowEmpty(std::string_view hashStr, std::optional<HashAlgorithm> ha)
