@@ -5,7 +5,6 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
 for lib in libutil libstore libutil-c libstore-c; do
 	meson setup "build/$lib" "src/$lib" --prefix "$PREFIX" \
-		-Dbuildtype=release \
-		$([ "$lib" = libstore ] && echo -Ds3-aws-auth=disabled)
+		-Dbuildtype=release
 	ninja -C "build/$lib" install
 done

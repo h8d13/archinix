@@ -22,6 +22,7 @@ run() {	# run <name> <command...>: fresh root, restore perms, cleanup
 	chmod -R u+w "$ROOT" && rm -rf "$ROOT"
 }
 
+run needed-drift sh -e tests/needed-drift.sh
 run parallel-optimise build/parallel-optimise
 run import-hashes build/import-hashes
 run nar-parse build/nar-parse

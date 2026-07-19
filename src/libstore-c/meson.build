@@ -35,7 +35,6 @@ include_dirs = [ include_directories('.') ]
 
 headers = files(
   'nix_api_store.h',
-  'nix_api_store/derivation.h',
   'nix_api_store/store_path.h',
 )
 

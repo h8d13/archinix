@@ -1,7 +1,6 @@
 #include "nix/util/source-path.hh"
 #include "nix/util/util.hh"
 #include "nix/store/store-dir-config.hh"
-#include "nix/store/derivations.hh"
 #include "nix/store/globals.hh"
 
 namespace nix {
@@ -80,10 +79,6 @@ StorePath StoreDirConfig::makeStorePath(std::string_view type, const Hash & hash
     return makeStorePath(type, hash.to_string(HashFormat::Base16, true), name);
 }
 
-StorePath StoreDirConfig::makeOutputPath(std::string_view id, const Hash & hash, std::string_view name) const
-{
-    return makeStorePath("output:" + std::string{id}, hash, outputPathName(name, id));
-}
 
 /* Stuff the references (if any) into the type.  This is a bit
    hacky, but we can't put them in, say, <s2> (per the grammar above)

@@ -3,9 +3,6 @@
 #include "nix/util/git.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/pathlocks.hh"
-#include "nix/store/worker-protocol.hh"
-#include "nix/store/derivations.hh"
-#include "nix/store/realisation.hh"
 #include "nix/store/references.hh"
 #include "nix/util/callback.hh"
 #include "nix/util/topo-sort.hh"
@@ -630,58 +627,8 @@ void LocalStore::makeStoreWritable()
     remountReadOnlyWritable(config->realStoreDir.get());
 }
 
-void LocalStore::registerDrvOutput(const Realisation & info, CheckSigsFlag checkSigs)
-{
-    experimentalFeatureSettings.require(Xp::CaDerivations);
-    if (checkSigs == NoCheckSigs || !realisationIsUntrusted(info))
-        registerDrvOutput(info);
-    else
-        throw Error(
-            "cannot register realisation '%s' because it lacks a signature by a trusted key", info.outPath.to_string());
-}
 
-void LocalStore::registerDrvOutput(const Realisation & info)
-{
-    experimentalFeatureSettings.require(Xp::CaDerivations);
-    retrySQLite<void>([&]() {
-        auto state(_state->lock());
-        if (auto oldR = queryRealisation_(*state, info.id)) {
-            if (info.isCompatibleWith(*oldR)) {
-                auto combinedSignatures = oldR->signatures;
-                combinedSignatures.insert(info.signatures.begin(), info.signatures.end());
-                state->stmts->UpdateRealisedOutput.use()
-                    .apply(concatStringsSep(" ", Signature::toStrings(combinedSignatures)))
-                    .apply(info.id.drvPath.to_string())
-                    .apply(info.id.outputName)
-                    .exec();
-            } else {
-                throw Error(
-                    "Trying to register a realisation of '%s', but we already "
-                    "have another one locally.\n"
-                    "Local:  %s\n"
-                    "Remote: %s",
-                    info.id.to_string(),
-                    printStorePath(oldR->outPath),
-                    printStorePath(info.outPath));
-            }
-        } else {
-            state->stmts->RegisterRealisedOutput.use()
-                .apply(info.id.drvPath.to_string())
-                .apply(info.id.outputName)
-                .apply(printStorePath(info.outPath))
-                .apply(concatStringsSep(" ", Signature::toStrings(info.signatures)))
-                .exec();
-        }
-    });
-}
 
-void LocalStore::cacheDrvOutputMapping(
-    State & state, const uint64_t deriver, const std::string & outputName, const StorePath & output)
-{
-    retrySQLite<void>([&]() {
-        state.stmts->AddDerivationOutput.use().apply(deriver).apply(outputName).apply(printStorePath(output)).exec();
-    });
-}
 
 uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
 {
@@ -701,28 +648,6 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
         .apply(renderContentAddress(info.ca), (bool) info.ca)
         .exec();
     uint64_t id = state.db.getLastInsertedRowId();
-
-    /* If this is a derivation, then store the derivation outputs in
-       the database.  This is useful for the garbage collector: it can
-       efficiently query whether a path is an output of some
-       derivation. */
-    if (info.path.isDerivation()) {
-        auto parsedDrv = readInvalidDerivation(info.path);
-
-        /* Verify that the output paths in the derivation are correct
-           (i.e., follow the scheme for computing output paths from
-           derivations).  Note that if this throws an error, then the
-           DB transaction is rolled back, so the path validity
-           registration above is undone. */
-        parsedDrv.checkInvariants(*this, info.path);
-
-        for (auto & i : parsedDrv.outputsAndOptPaths(*this)) {
-            /* Floating CA derivations have indeterminate output paths until
-               they are built, so don't register anything in that case */
-            if (i.second.second)
-                cacheDrvOutputMapping(state, id, i.first, *i.second.second);
-        }
-    }
 
     pathInfoCache->lock()->upsert(info.path, PathInfoCacheValue{.value = std::make_shared<const ValidPathInfo>(info)});
 
@@ -869,43 +794,6 @@ StorePathSet LocalStore::queryValidDerivers(const StorePath & path)
     });
 }
 
-std::map<std::string, std::optional<StorePath>>
-LocalStore::queryStaticPartialDerivationOutputMap(const StorePath & path)
-{
-    return retrySQLite<std::map<std::string, std::optional<StorePath>>>([&]() {
-        auto state(_state->lock());
-        std::map<std::string, std::optional<StorePath>> outputs;
-        uint64_t drvId;
-        drvId = queryValidPathId(*state, path);
-        auto use(state->stmts->QueryDerivationOutputs.use().apply(drvId));
-        while (use.next())
-            outputs.insert_or_assign(use.getStr(0), parseStorePath(use.getStr(1)));
-
-        return outputs;
-    });
-}
-
-std::optional<StorePath>
-LocalStore::queryStaticPartialDerivationOutput(const StorePath & path, const std::string & outputName)
-{
-    auto outputs = queryStaticPartialDerivationOutputMap(path);
-    auto it = outputs.find(outputName);
-    if (it == outputs.end()) {
-        /* Only throw if CA derivations is disabled, because then the
-           SQL table is complete.
-
-           With CA derivations enabled, derivations without static
-           outputs exist, this absence of a row in this table does not
-           mean the derivation doesn't have an output necessarily, just
-           that that it doesn't have an output with a known output path.
-          */
-        if (!experimentalFeatureSettings.isEnabled(Xp::CaDerivations))
-            throw Error("derivation '%s' does not have an output named '%s'", printStorePath(path), outputName);
-        return std::nullopt;
-    }
-    return it->second;
-}
-
 std::optional<StorePath> LocalStore::queryPathFromHashPart(const std::string & hashPart)
 {
     if (hashPart.size() != StorePath::HashLen)
@@ -975,8 +863,7 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
         std::visit(
             overloaded{
                 [&](const Cycle<StorePath> & cycle) {
-                    throw BuildError(
-                        BuildResult::Failure::OutputRejected,
+                    throw Error(
                         "cycle detected in the references of '%s' from '%s'",
                         printStorePath(cycle.path),
                         printStorePath(cycle.parent));
@@ -1015,10 +902,6 @@ bool LocalStore::pathInfoIsUntrusted(const ValidPathInfo & info)
     return config->requireSigs && !info.checkSignatures(*this, getPublicKeys());
 }
 
-bool LocalStore::realisationIsUntrusted(const Realisation & realisation)
-{
-    return config->requireSigs && !realisation.checkSignatures(realisation.id, getPublicKeys());
-}
 
 void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs)
 {
@@ -1862,10 +1745,7 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
                         printStorePath(i),
                         info->narHash.to_string(HashFormat::Nix32, true),
                         current.hash.to_string(HashFormat::Nix32, true));
-                    if (repair)
-                        repairPath(i);
-                    else
-                        errors = true;
+                    errors = true;
                 } else {
 
                     bool update = false;
@@ -1975,15 +1855,7 @@ void LocalStore::verifyPath(
             invalidatePath(*_state->lock(), path);
         } else {
             printError("path '%s' disappeared, but it still has valid referrers!", pathS);
-            if (repair)
-                try {
-                    repairPath(path);
-                } catch (Error & e) {
-                    logWarning(e.info());
-                    errors = true;
-                }
-            else
-                errors = true;
+            errors = true;
         }
 
         return;
@@ -1992,10 +1864,6 @@ void LocalStore::verifyPath(
     validPaths.insert(std::move(path));
 }
 
-unsigned int LocalStore::getProtocol()
-{
-    return WorkerProto::latest.number.toWire();
-}
 
 std::optional<TrustedFlag> LocalStore::isTrustedClient()
 {
@@ -2022,73 +1890,6 @@ void LocalStore::addSignatures(const StorePath & storePath, const std::set<Signa
 
         txn.commit();
     });
-}
-
-std::optional<std::pair<int64_t, UnkeyedRealisation>>
-LocalStore::queryRealisationCore_(LocalStore::State & state, const DrvOutput & id)
-{
-    auto useQueryRealisedOutput(
-        state.stmts->QueryRealisedOutput.use().apply(id.drvPath.to_string()).apply(id.outputName));
-    if (!useQueryRealisedOutput.next())
-        return std::nullopt;
-    auto realisationDbId = useQueryRealisedOutput.getInt(0);
-    auto outputPath = parseStorePath(useQueryRealisedOutput.getStr(1));
-    auto signatures = tokenizeString<StringSet>(useQueryRealisedOutput.getStr(2));
-
-    return {
-        {realisationDbId,
-         UnkeyedRealisation{
-             .outPath = outputPath,
-             .signatures = Signature::parseMany(signatures),
-         }}};
-}
-
-std::optional<const UnkeyedRealisation> LocalStore::queryRealisation_(LocalStore::State & state, const DrvOutput & id)
-{
-    auto maybeCore = queryRealisationCore_(state, id);
-    if (!maybeCore)
-        return std::nullopt;
-    auto [realisationDbId, res] = *maybeCore;
-
-    return {res};
-}
-
-void LocalStore::queryRealisationUncached(
-    const DrvOutput & id, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept
-{
-    try {
-        auto maybeRealisation = retrySQLite<std::optional<const UnkeyedRealisation>>(
-            [&]() { return queryRealisation_(*_state->lock(), id); });
-        if (maybeRealisation)
-            callback(std::make_shared<const UnkeyedRealisation>(maybeRealisation.value()));
-        else
-            callback(nullptr);
-
-    } catch (...) {
-        callback.rethrow();
-    }
-}
-
-void LocalStore::addBuildLog(const StorePath & drvPath, std::string_view log)
-{
-    assert(drvPath.isDerivation());
-
-    auto baseName = drvPath.to_string();
-
-    auto logPath =
-        config->logDir.get() / drvsLogDir / baseName.substr(0, 2) / (std::string(baseName.substr(2)) + ".bz2");
-
-    if (pathExists(logPath))
-        return;
-
-    createDirs(logPath.parent_path());
-
-    auto tmpFile = logPath;
-    tmpFile += ".tmp." + std::to_string(getpid());
-
-    writeFile(tmpFile, compress(CompressionAlgo::bzip2, log));
-
-    std::filesystem::rename(tmpFile, logPath);
 }
 
 std::optional<std::string> LocalStore::getVersion()

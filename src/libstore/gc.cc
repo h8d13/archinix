@@ -685,12 +685,6 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                         [&](const GCOptions::WholeStore &) {
                             /* If keep-derivations is set and this is a derivation, then we only want to delete this
                              * derivation if we can also delete all its outputs, so visit the derivation outputs. */
-                            if (gcSettings.keepDerivations && path->isDerivation())
-                                for (auto & [name, maybeOutPath] : queryPartialDerivationOutputMap(*path))
-                                    if (maybeOutPath && isValidPath(*maybeOutPath)
-                                        && queryPathInfo(*maybeOutPath)->deriver == path)
-                                        enqueue(*maybeOutPath);
-
                             /* If keep-outputs is set, we only want to delete this path if we
                              * can also delete its derivers, so visit the derivers. */
                             if (gcSettings.keepOutputs) {

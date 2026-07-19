@@ -109,47 +109,14 @@ boost = dependency(
 # put in `deps_other`.
 deps_other += boost
 
-# This is quite new, but curl has a bunch of known issues with write pausing and decompression.
-# Please use libcurl >= 8.17. See https://github.com/curl/curl/issues/19334, https://github.com/curl/curl/issues/16280, https://github.com/curl/curl/issues/16955 if in doubt.
-# Patch out this check at your own risk.
-curl = dependency('libcurl', 'curl', version : '>= 8.17.0')
-
-deps_private += curl
-
-seccomp_required = get_option('seccomp-sandboxing')
-seccomp = dependency(
-  'libseccomp',
-  'seccomp',
-  required : seccomp_required,
-  version : '>=2.5.5',
-)
-if not seccomp.found()
-  warning(
-    'Sandbox security is reduced because libseccomp has not been found! Please provide libseccomp if it supports your CPU architecture.',
-  )
-endif
-configdata_priv.set('HAVE_SECCOMP', seccomp.found().to_int())
-deps_private += seccomp
-
+# curl (filetransfer) and seccomp (build sandbox) served only the
+# remote stores and .drv realisation machinery, both cut from this
+# extraction: local store + import/export/GC/optimise only
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
 sqlite = dependency('sqlite3', 'sqlite', version : '>=3.6.19')
 deps_private += sqlite
-
-s3_aws_auth = get_option('s3-aws-auth')
-aws_crt_cpp = dependency(
-  'aws-crt-cpp',
-  required : s3_aws_auth,
-  method : 'cmake',
-  modules : [ 'AWS::aws-crt-cpp' ],
-)
-
-if s3_aws_auth.enabled()
-  deps_other += aws_crt_cpp
-endif
-
-configdata_pub.set('NIX_WITH_AWS_AUTH', s3_aws_auth.enabled().to_int())
 
 subdir('nix-meson-build-support/generate-header')
 
@@ -160,32 +127,6 @@ foreach header : [
 ]
   generated_headers += gen_header.process(header)
 endforeach
-
-busybox = find_program(get_option('sandbox-shell'), required : false)
-
-configdata_priv.set(
-  'HAVE_EMBEDDED_SANDBOX_SHELL',
-  get_option('embedded-sandbox-shell').to_int(),
-)
-
-if get_option('embedded-sandbox-shell')
-  configdata_priv.set_quoted('SANDBOX_SHELL', '__embedded_sandbox_shell__')
-elif busybox.found()
-  configdata_priv.set_quoted('SANDBOX_SHELL', busybox.full_path())
-endif
-
-if get_option('embedded-sandbox-shell')
-  hexdump = find_program('hexdump', native : true)
-  embedded_sandbox_shell_gen = custom_target(
-    'embedded-sandbox-shell.gen.hh',
-    command : [ hexdump, '-v', '-e', '1/1 "0x%x," "\n"' ],
-    input : busybox.full_path(),
-    output : 'embedded-sandbox-shell.gen.hh',
-    capture : true,
-    feed : true,
-  )
-  generated_headers += embedded_sandbox_shell_gen
-endif
 
 fs = import('fs')
 
@@ -248,91 +189,36 @@ config_priv_h = configure_file(
 
 subdir('nix-meson-build-support/common')
 
+# Local-store-only extraction: the four store tools reach
+# openStore(local), addToStoreFromDump, queryPathInfo, export/import,
+# GC and hardlink optimise. Remote stores (s3/http/ssh/daemon), the
+# .drv realisation machinery (build/, derivations) and their deps
+# (curl, seccomp) are cut; anything they alone referenced went too.
 sources = files(
-  'binary-cache-store.cc',
-  'build-result.cc',
-  'build/build-log.cc',
-  'build/derivation-builder.cc',
-  'build/derivation-building-goal.cc',
-  'build/derivation-check.cc',
-  'build/derivation-env-desugar.cc',
-  'build/derivation-goal.cc',
-  'build/derivation-resolution-goal.cc',
-  'build/derivation-trampoline-goal.cc',
-  'build/drv-output-substitution-goal.cc',
-  'build/entry-points.cc',
-  'build/goal.cc',
-  'build/substitution-goal.cc',
-  'build/worker.cc',
-  'builtins/buildenv.cc',
-  'builtins/fetchurl.cc',
-  'builtins/unpack-channel.cc',
   'common-protocol.cc',
-  'common-ssh-store-config.cc',
   'content-address.cc',
-  'daemon.cc',
-  'derivation-options.cc',
-  'derivations.cc',
-  'derived-path-map.cc',
-  'derived-path.cc',
-  'downstream-placeholder.cc',
-  'dummy-store.cc',
   'export-import.cc',
-  'filetransfer.cc',
   'gc.cc',
   'globals.cc',
-  'http-binary-cache-store.cc',
   'indirect-root-store.cc',
   'keys.cc',
-  'legacy-ssh-store.cc',
-  'local-binary-cache-store.cc',
   'local-fs-store.cc',
   'local-gc.cc',
-  'local-overlay-store.cc',
   'local-store.cc',
-  'log-store.cc',
-  'machines.cc',
-  'make-content-addressed.cc',
   'misc.cc',
-  'names.cc',
-  'nar-info-disk-cache.cc',
-  'nar-info.cc',
   'optimise-store.cc',
-  'outputs-query.cc',
-  'outputs-spec.cc',
-  'parsed-derivations.cc',
   'path-info.cc',
   'path-references.cc',
-  'path-with-outputs.cc',
   'path.cc',
   'pathlocks.cc',
   'posix-fs-canonicalise.cc',
-  'profiles.cc',
-  'realisation.cc',
   'references.cc',
-  'remote-fs-accessor.cc',
-  'remote-store.cc',
-  'restricted-store.cc',
-  's3-binary-cache-store.cc',
-  's3-url.cc',
-  'serve-protocol-connection.cc',
-  'serve-protocol.cc',
   'sqlite.cc',
-  'ssh-store.cc',
-  'ssh.cc',
   'store-api.cc',
   'store-dir-config.cc',
   'store-reference.cc',
   'store-registration.cc',
-  'uds-remote-store.cc',
-  'worker-protocol-connection.cc',
-  'worker-protocol.cc',
 )
-
-# AWS credentials code requires AWS CRT, so only compile when enabled
-if s3_aws_auth.enabled()
-  sources += files('aws-creds.cc')
-endif
 
 subdir('include/nix/store')
 

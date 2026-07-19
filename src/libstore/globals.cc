@@ -1,5 +1,5 @@
 #include "nix/store/globals.hh"
-#include "nix/store/profiles.hh"
+#include "nix/store/global-paths.hh"
 #include "nix/util/config-impl.hh"
 #include "nix/util/config-global.hh"
 #include "nix/util/current-process.hh"
@@ -9,14 +9,12 @@
 #include "nix/util/abstract-setting-to-json.hh"
 #include "nix/util/compute-levels.hh"
 #include "nix/util/executable-path.hh"
-#include "nix/store/filetransfer.hh"
 
 #include <algorithm>
 #include <map>
 #include <mutex>
 #include <thread>
 
-#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
 #  include <sys/utsname.h>
@@ -36,9 +34,9 @@ namespace nix {
 
 void Settings::anchor() {}
 
-void NarInfoDiskCacheSettings::anchor() {}
 
-void LogFileSettings::anchor() {}
+
+
 
 void AutoAllocateUidSettings::anchor() {}
 
@@ -59,13 +57,6 @@ Settings::Settings()
     allowSymlinkedStore = getEnv("NIX_IGNORE_SYMLINK_STORE") == "1";
 
     /* Backwards compatibility. */
-    auto s = getEnv("NIX_REMOTE_SYSTEMS");
-    if (s) {
-        Strings ss;
-        for (auto & p : tokenizeString<Strings>(*s, ":"))
-            ss.push_back("@" + p);
-        builders = concatStringsSep("\n", ss);
-    }
 
 #ifdef SANDBOX_SHELL
     sandboxPaths = {{"/bin/sh", {.source = SANDBOX_SHELL}}};
@@ -188,22 +179,6 @@ bool Settings::isWSL1()
     return hasSuffix(utsbuf.release, "-Microsoft");
 }
 
-const ExternalBuilder * LocalSettings::findExternalDerivationBuilderIfSupported(const Derivation & drv)
-{
-    if (auto it = std::ranges::find_if(
-            externalBuilders.get(), [&](const auto & handler) { return handler.systems.contains(drv.platform); });
-        it != externalBuilders.get().end())
-        return &*it;
-    return nullptr;
-}
-
-ProfileDirsOptions Settings::getProfileDirsOptions() const
-{
-    return {
-        .nixStateDir = nixStateDir,
-        .useXDGBaseDirectories = useXDGBaseDirectories,
-    };
-}
 
 std::string nixVersion = PACKAGE_VERSION;
 
@@ -325,33 +300,6 @@ std::string BaseSetting<PathsInChroot>::to_string() const
     return concatStringsSep(" ", accum);
 }
 
-unsigned int MaxBuildJobsSetting::parse(const std::string & str) const
-{
-    if (str == "auto")
-        return std::max(1U, std::thread::hardware_concurrency());
-    else {
-        if (auto n = string2Int<decltype(value)>(str))
-            return *n;
-        else
-            throw UsageError("configuration setting '%s' should be 'auto' or an integer", name);
-    }
-}
-
-template<>
-LocalSettings::ExternalBuilders BaseSetting<LocalSettings::ExternalBuilders>::parse(const std::string & str) const
-{
-    try {
-        return nlohmann::json::parse(str).template get<LocalSettings::ExternalBuilders>();
-    } catch (std::exception & e) {
-        throw UsageError("parsing setting '%s': %s", name, e.what());
-    }
-}
-
-template<>
-std::string BaseSetting<LocalSettings::ExternalBuilders>::to_string() const
-{
-    return nlohmann::json(value).dump();
-}
 
 template<>
 void BaseSetting<PathsInChroot>::appendOrSet(PathsInChroot newValue, bool append)
@@ -500,19 +448,6 @@ void initLibStore(bool loadConfig)
         loadConfFile(globalConfig);
 
     preloadNSS();
-
-    /* Because of an objc quirk[1], calling curl_global_init for the first time
-       after fork() will always result in a crash.
-       Up until now the solution has been to set OBJC_DISABLE_INITIALIZE_FORK_SAFETY
-       for every nix process to ignore that error.
-       Instead of working around that error we address it at the core -
-       by calling curl_global_init here, which should mean curl will already
-       have been initialized by the time we try to do so in a forked process.
-
-       [1]
-       https://github.com/apple-oss-distributions/objc4/blob/01edf1705fbc3ff78a423cd21e03dfc21eb4d780/runtime/objc-initialize.mm#L614-L636
-    */
-    curl_global_init(CURL_GLOBAL_ALL);
 
     initLibStoreDone = true;
 }

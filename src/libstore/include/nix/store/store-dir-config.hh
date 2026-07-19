@@ -77,7 +77,6 @@ struct StoreDirConfig
     StorePath makeStorePath(std::string_view type, std::string_view hash, std::string_view name) const;
     StorePath makeStorePath(std::string_view type, const Hash & hash, std::string_view name) const;
 
-    StorePath makeOutputPath(std::string_view id, const Hash & hash, std::string_view name) const;
 
     StorePath makeFixedOutputPath(std::string_view name, const FixedOutputInfo & info) const;
 

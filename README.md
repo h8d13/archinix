@@ -2,7 +2,12 @@
 
 ## [Nixstore](src/)
 
-Nix store layer (libnixutil, libnixstore + C API) extracted from [NixOS/nix](https://github.com/NixOS/nix) 2.36.0 (`40f375fa`), buildable on any Linux without Nix: `./build.sh`.
+Local-store-only extraction of the Nix store layer (libnixutil,
+libnixstore + C API) from [NixOS/nix](https://github.com/NixOS/nix)
+2.36.0 (`40f375fa`), buildable on any Linux without Nix: `./build.sh`.
+Remote stores (s3/http/ssh/daemon) and the .drv realisation machinery
+are cut: stores hold imported trees only, which drops curl and
+libseccomp entirely (tests/needed-drift.sh pins the dep set).
 
 Build depends on: `meson`, `ninja`, C++23 compiler:
 
@@ -11,7 +16,7 @@ Arch package names (`boost` is headers only; the compiled
 
 ```
 pacman -S --needed meson ninja gcc pkgconf boost boost-libs openssl libsodium \
-	libarchive brotli zstd libblake3 nlohmann-json sqlite curl libseccomp
+	libarchive brotli zstd libblake3 nlohmann-json sqlite
 ```
 
 API reference:

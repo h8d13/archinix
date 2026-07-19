@@ -2,7 +2,6 @@
 ///@file
 
 #include "nix/store/path.hh"
-#include "nix/store/derived-path.hh"
 #include "nix/util/hash.hh"
 #include "nix/store/content-address.hh"
 #include "nix/util/serialise.hh"
@@ -31,17 +30,7 @@ MakeError(SubstituterDisabled, Error);
 
 MakeError(InvalidStoreReference, Error);
 
-struct UnkeyedRealisation;
-struct Realisation;
-struct RealisedPath;
-struct DrvOutput;
-
-struct BasicDerivation;
-struct Derivation;
-
 struct SourceAccessor;
-struct NarInfoDiskCache;
-struct NarInfoDiskCacheSettings;
 class Store;
 
 typedef std::map<std::string, StorePath> OutputPathMap;
@@ -54,23 +43,7 @@ enum BuildMode : uint8_t { bmNormal, bmRepair, bmCheck };
 
 enum TrustedFlag : bool { NotTrusted = false, Trusted = true };
 
-struct BuildResult;
-struct KeyedBuildResult;
-
 typedef std::map<StorePath, std::optional<ContentAddress>> StorePathCAMap;
-
-/**
- * Information about what paths will be built or substituted, returned
- * by Store::queryMissing().
- */
-struct MissingPaths
-{
-    StorePathSet willBuild;
-    StorePathSet willSubstitute;
-    StorePathSet unknown;
-    uint64_t downloadSize{0};
-    uint64_t narSize{0};
-};
 
 /**
  * Need to make this a separate class so I can get the right
@@ -424,7 +397,7 @@ protected:
          * Whether the value is valid as a cache entry. The path may not
          * exist.
          */
-        bool isKnownNow(const NarInfoDiskCacheSettings & settings);
+        bool isKnownNow();
 
         /**
          * Past tense, because a path can only be assumed to exists when
@@ -442,7 +415,6 @@ protected:
     // bits of `Store`.
     ref<SharedSync<LRUCache<StorePath, PathInfoCacheValue>>> pathInfoCache;
 
-    std::shared_ptr<NarInfoDiskCache> diskCache;
 
     Store(const Store::Config & config);
 
@@ -482,7 +454,6 @@ public:
      * implements nix-copy-closure's --use-substitutes
      * flag.
      */
-    void substitutePaths(const StorePathSet & paths);
 
     /**
      * Query which of the given paths is valid. Optionally, try to
@@ -526,15 +497,7 @@ public:
      */
     std::optional<std::shared_ptr<const ValidPathInfo>> queryPathInfoFromClientCache(const StorePath & path);
 
-    /**
-     * Query the information about a realisation.
-     */
-    std::shared_ptr<const UnkeyedRealisation> queryRealisation(const DrvOutput &);
 
-    /**
-     * Asynchronous version of queryRealisation().
-     */
-    void queryRealisation(const DrvOutput &, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept;
 
     /**
      * Check whether the given valid path info is sufficiently attested, by
@@ -552,17 +515,10 @@ public:
         return true;
     }
 
-    virtual bool realisationIsUntrusted(const Realisation &)
-    {
-        return true;
-    }
-
 protected:
 
     virtual void
     queryPathInfoUncached(const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept = 0;
-    virtual void queryRealisationUncached(
-        const DrvOutput &, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept = 0;
 
 public:
 
@@ -588,41 +544,10 @@ public:
         return {};
     };
 
-    /**
-     * Query the outputs of the derivation denoted by `path`.
-     */
-    virtual StorePathSet queryDerivationOutputs(const StorePath & path);
 
-    /**
-     * Query the mapping outputName => outputPath for the given
-     * derivation. All outputs are mentioned so ones missing the mapping
-     * are mapped to `std::nullopt`.
-     */
-    virtual std::map<std::string, std::optional<StorePath>>
-    queryPartialDerivationOutputMap(const StorePath & path, Store * evalStore = nullptr);
 
-    /**
-     * Like `queryPartialDerivationOutputMap` but only considers
-     * statically known output paths (i.e. those that can be gotten from
-     * the derivation itself.
-     *
-     * Just a helper function for implementing
-     * `queryPartialDerivationOutputMap`.
-     */
-    virtual std::map<std::string, std::optional<StorePath>>
-    queryStaticPartialDerivationOutputMap(const StorePath & path);
 
-    /**
-     * Like the above, but for a single output.
-     */
-    virtual std::optional<StorePath>
-    queryStaticPartialDerivationOutput(const StorePath & path, const std::string & outputName);
 
-    /**
-     * Query the mapping outputName=>outputPath for the given derivation.
-     * Assume every output has a mapping and throw an exception otherwise.
-     */
-    OutputPathMap queryDerivationOutputMap(const StorePath & path, Store * evalStore = nullptr);
 
     /**
      * Query the full store path given the hash part of a valid store
@@ -630,19 +555,7 @@ public:
      */
     virtual std::optional<StorePath> queryPathFromHashPart(const std::string & hashPart) = 0;
 
-    /**
-     * Query which of the given paths have substitutes.
-     */
-    virtual StorePathSet querySubstitutablePaths(const StorePathSet & paths);
 
-    /**
-     * Query substitute info (i.e. references, derivers and download
-     * sizes) of a map of paths to their optional ca values. The info of
-     * the first succeeding substituter for each path will be returned.
-     * If a path does not have substitute info, it's omitted from the
-     * resulting ‘infos’ map.
-     */
-    virtual void querySubstitutablePathInfos(const StorePathCAMap & paths, SubstitutablePathInfos & infos);
 
     /**
      * Import a path into the store. Note that the entire NAR may not be read from `narSource`, e.g. if the path is
@@ -722,97 +635,16 @@ public:
         const StorePathSet & references = StorePathSet(),
         RepairFlag repair = NoRepair) = 0;
 
-    /**
-     * Add a mapping indicating that `deriver!outputName` maps to the output path
-     * `output`.
-     *
-     * This is redundant for known-input-addressed and fixed-output derivations
-     * as this information is already present in the drv file, but necessary for
-     * floating-ca derivations and their dependencies as there's no way to
-     * retrieve this information otherwise.
-     */
-    virtual void registerDrvOutput(const Realisation & output) = 0;
 
-    virtual void registerDrvOutput(const Realisation & output, CheckSigsFlag checkSigs)
-    {
-        return registerDrvOutput(output);
-    }
 
     /**
      * Write a NAR dump of a store path.
      */
     virtual void narFromPath(const StorePath & path, Sink & sink);
 
-    /**
-     * For each path, if it's a derivation, build it.  Building a
-     * derivation means ensuring that the output paths are valid.  If
-     * they are already valid, this is a no-op.  Otherwise, validity
-     * can be reached in two ways.  First, if the output paths is
-     * substitutable, then build the path that way.  Second, the
-     * output paths can be created by running the builder, after
-     * recursively building any sub-derivations. For inputs that are
-     * not derivations, substitute them.
-     */
-    virtual void buildPaths(
-        const std::vector<DerivedPath> & paths,
-        BuildMode buildMode = bmNormal,
-        std::shared_ptr<Store> evalStore = nullptr);
 
-    /**
-     * Like buildPaths(), but return a vector of \ref BuildResult
-     * BuildResults corresponding to each element in paths. Note that in
-     * case of a build/substitution error, this function won't throw an
-     * exception, but return a BuildResult containing an error message.
-     */
-    virtual std::vector<KeyedBuildResult> buildPathsWithResults(
-        const std::vector<DerivedPath> & paths,
-        BuildMode buildMode = bmNormal,
-        std::shared_ptr<Store> evalStore = nullptr);
 
-    /**
-     * Build a single non-materialized derivation (i.e. not from an
-     * on-disk .drv file).
-     *
-     * @param drvPath This is used to deduplicate worker goals so it is
-     * imperative that is correct. That said, it doesn't literally need
-     * to be store path that would be calculated from writing this
-     * derivation to the store: it is OK if it instead is that of a
-     * Derivation which would resolve to this (by taking the outputs of
-     * it's input derivations and adding them as input sources) such
-     * that the build time referenceable-paths are the same.
-     *
-     * In the input-addressed case, we usually *do* use an "original"
-     * unresolved derivations's path, as that is what will be used in the
-     * buildPaths case. Also, the input-addressed output paths are verified
-     * only by that contents of that specific unresolved derivation, so it is
-     * nice to keep that information around so if the original derivation is
-     * ever obtained later, it can be verified whether the trusted user in fact
-     * used the proper output path.
-     *
-     * In the content-addressed case, we want to always use the resolved
-     * drv path calculated from the provided derivation. This serves two
-     * purposes:
-     *
-     *   - It keeps the operation trustless, by ruling out a maliciously
-     *     invalid drv path corresponding to a non-resolution-equivalent
-     *     derivation.
-     *
-     *   - For the floating case in particular, it ensures that the derivation
-     *     to output mapping respects the resolution equivalence relation, so
-     *     one cannot choose different resolution-equivalent derivations to
-     *     subvert dependency coherence (i.e. the property that one doesn't end
-     *     up with multiple different versions of dependencies without
-     *     explicitly choosing to allow it).
-     */
-    virtual BuildResult
-    buildDerivation(const StorePath & drvPath, const BasicDerivation & drv, BuildMode buildMode = bmNormal);
 
-    /**
-     * Ensure that a path is valid.  If it is not currently valid, it
-     * may be made valid by running a substitute (if defined for the
-     * path).
-     */
-    virtual void ensurePath(const StorePath & path);
 
     /**
      * Add a store path as a temporary root of the garbage collector.
@@ -920,11 +752,6 @@ public:
         return ref<SourceAccessor>{accessor};
     }
 
-    /**
-     * Repair the contents of the given path by redownloading it using
-     * a substituter (if available).
-     */
-    virtual void repairPath(const StorePath & path);
 
     /**
      * Add signatures to the specified store path. The signatures are
@@ -941,30 +768,9 @@ public:
      */
     void signPathInfo(ValidPathInfo & info);
 
-    void signRealisation(Realisation &);
 
     /* Utility functions. */
 
-    /**
-     * Read a derivation, after ensuring its existence through
-     * ensurePath().
-     */
-    Derivation derivationFromPath(const StorePath & drvPath);
-
-    /**
-     * Write a derivation to the Nix store, and return its path.
-     */
-    virtual StorePath writeDerivation(const Derivation & drv, RepairFlag repair = NoRepair);
-
-    /**
-     * Read a derivation (which must already be valid).
-     */
-    virtual Derivation readDerivation(const StorePath & drvPath);
-
-    /**
-     * Read a derivation from a potentially invalid path.
-     */
-    virtual Derivation readInvalidDerivation(const StorePath & drvPath);
 
     /**
      * @param [out] out Place in here the set of all store paths in the
@@ -990,12 +796,6 @@ public:
         bool includeOutputs = false,
         bool includeDerivers = false);
 
-    /**
-     * Given a set of paths that are to be built, return the set of
-     * derivations that will be built, and the set of output paths that
-     * will be substituted.
-     */
-    virtual MissingPaths queryMissing(const std::vector<DerivedPath> & targets);
 
     /**
      * Sort a set of paths topologically under the references
@@ -1029,12 +829,6 @@ public:
      */
     StorePathSet exportReferences(const StorePathSet & storePaths, const StorePathSet & inputPaths);
 
-    /**
-     * Given a store path, return the realisation actually used in the realisation of this path:
-     * - If the path is a content-addressing derivation, try to resolve it
-     * - Otherwise, find one of its derivers
-     */
-    std::optional<StorePath> getBuildDerivationPath(const StorePath &);
 
     /**
      * Hack to allow long-running processes like hydra-queue-runner to
@@ -1118,14 +912,6 @@ void copyStorePath(
 std::map<StorePath, StorePath> copyPaths(
     Store & srcStore,
     Store & dstStore,
-    const std::set<RealisedPath> &,
-    RepairFlag repair = NoRepair,
-    CheckSigsFlag checkSigs = CheckSigs,
-    SubstituteFlag substitute = NoSubstitute);
-
-std::map<StorePath, StorePath> copyPaths(
-    Store & srcStore,
-    Store & dstStore,
     const StorePathSet & paths,
     RepairFlag repair = NoRepair,
     CheckSigsFlag checkSigs = CheckSigs,
@@ -1134,15 +920,6 @@ std::map<StorePath, StorePath> copyPaths(
 /**
  * Copy the closure of `paths` from `srcStore` to `dstStore`.
  */
-void copyClosure(
-    Store & srcStore,
-    Store & dstStore,
-    const std::set<RealisedPath> & paths,
-    RepairFlag repair = NoRepair,
-    CheckSigsFlag checkSigs = CheckSigs,
-    SubstituteFlag substitute = NoSubstitute,
-    bool includeOutputs = false);
-
 void copyClosure(
     Store & srcStore,
     Store & dstStore,
@@ -1163,13 +940,8 @@ void removeTempRoots();
  * Resolve the derived path completely, failing if any derivation output
  * is unknown.
  */
-StorePath resolveDerivedPath(Store &, const SingleDerivedPath &, Store * evalStore = nullptr);
-OutputPathMap resolveDerivedPath(Store &, const DerivedPath::Built &, Store * evalStore = nullptr);
-
 std::optional<ValidPathInfo>
 decodeValidPathInfo(const Store & store, std::istream & str, std::optional<HashResult> hashGiven = std::nullopt);
-
-const ContentAddress * getDerivationCA(const BasicDerivation & drv);
 
 template<>
 struct json_avoids_null<TrustedFlag> : std::true_type

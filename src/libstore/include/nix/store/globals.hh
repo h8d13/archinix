@@ -6,103 +6,14 @@
 #include "nix/util/types.hh"
 #include "nix/util/configuration.hh"
 #include "nix/util/environment-variables.hh"
-#include "nix/store/build/derivation-builder.hh"
 #include "nix/store/local-settings.hh"
 #include "nix/store/store-reference.hh"
-#include "nix/store/worker-settings.hh"
 
 #include "nix/store/config.hh"
 
 namespace nix {
 
-struct ProfileDirsOptions;
-
-struct LogFileSettings : public virtual Config
-{
-private:
-    void anchor() override;
-
-public:
-    Setting<bool> keepLog{
-        this,
-        true,
-        "keep-build-log",
-        R"(
-          If set to `true` (the default), Nix writes the build log of a
-          derivation (i.e. the standard output and error of its builder) to
-          the directory `/nix/var/log/nix/drvs`. The build log can be
-          retrieved using the command `nix-store -l path`.
-        )",
-        {"build-keep-log"}};
-
-    Setting<bool> compressLog{
-        this,
-        true,
-        "compress-build-log",
-        R"(
-          If set to `true` (the default), build logs written to
-          `/nix/var/log/nix/drvs` are compressed on the fly using bzip2.
-          Otherwise, they are not compressed.
-        )",
-        {"build-compress-log"}};
-};
-
-struct NarInfoDiskCacheSettings : public virtual Config
-{
-private:
-    void anchor() override;
-
-public:
-    Setting<unsigned int> ttlNegative{
-        this,
-        3600,
-        "narinfo-cache-negative-ttl",
-        R"(
-          The TTL in seconds for negative lookups.
-          If a store path is queried from a [substituter](#conf-substituters) but was not found, a negative lookup is cached in the local disk cache database for the specified duration.
-
-          Set to `0` to force updating the lookup cache.
-
-          To wipe the lookup cache completely:
-
-          ```shell-session
-          $ rm $HOME/.cache/nix/binary-cache-v*.sqlite*
-          # rm /root/.cache/nix/binary-cache-v*.sqlite*
-          ```
-        )"};
-
-    Setting<unsigned int> ttlPositive{
-        this,
-        30 * 24 * 3600,
-        "narinfo-cache-positive-ttl",
-        R"(
-          The TTL in seconds for positive lookups. If a store path is queried
-          from a substituter, the result of the query is cached in the
-          local disk cache database including some of the NAR metadata. The
-          default TTL is a month, setting a shorter TTL for positive lookups
-          can be useful for binary caches that have frequent garbage
-          collection, in which case having a more frequent cache invalidation
-          would prevent trying to pull the path again and failing with a hash
-          mismatch if the build isn't reproducible.
-        )"};
-
-    Setting<unsigned int> ttlMeta{
-        this,
-        7 * 24 * 3600,
-        "narinfo-cache-meta-ttl",
-        R"(
-          The TTL in seconds for caching binary cache metadata (i.e.
-          `/nix-cache-info`). This determines how long information about a
-          binary cache (such as its store directory, priority, and whether it
-          wants mass queries) is considered valid before being refreshed.
-        )"};
-};
-
-class Settings : public virtual Config,
-                 private LocalSettings,
-                 private LogFileSettings,
-                 private WorkerSettings,
-                 private NarInfoDiskCacheSettings
+class Settings : public virtual Config, private LocalSettings
 {
 private:
     void anchor() override;
@@ -130,44 +41,8 @@ public:
         return *this;
     }
 
-    /**
-     * Get the log file settings.
-     */
-    LogFileSettings & getLogFileSettings()
-    {
-        return *this;
-    }
 
-    const LogFileSettings & getLogFileSettings() const
-    {
-        return *this;
-    }
 
-    /**
-     * Get the worker settings.
-     */
-    WorkerSettings & getWorkerSettings()
-    {
-        return *this;
-    }
-
-    const WorkerSettings & getWorkerSettings() const
-    {
-        return *this;
-    }
-
-    /**
-     * Get the NAR info disk cache settings.
-     */
-    NarInfoDiskCacheSettings & getNarInfoDiskCacheSettings()
-    {
-        return *this;
-    }
-
-    const NarInfoDiskCacheSettings & getNarInfoDiskCacheSettings() const
-    {
-        return *this;
-    }
 
     static unsigned int getDefaultCores();
 
@@ -424,7 +299,6 @@ public:
     /**
      * Get the options needed for profile directory functions.
      */
-    ProfileDirsOptions getProfileDirsOptions() const;
 };
 
 // FIXME: don't use a global variable.

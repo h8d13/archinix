@@ -1,7 +1,6 @@
 #include "nix/store/store-api.hh"
 #include "nix/store/local-fs-store.hh"
 #include "nix/util/compression.hh"
-#include "nix/store/derivations.hh"
 
 namespace nix {
 
@@ -176,31 +175,5 @@ std::shared_ptr<SourceAccessor> LocalFSStore::getFSAccessor(const StorePath & pa
     return makeFSSourceAccessor(std::move(absPath));
 }
 
-const std::filesystem::path LocalFSStore::drvsLogDir = "drvs";
-
-std::optional<std::string> LocalFSStore::getBuildLogExact(const StorePath & path)
-{
-    auto baseName = path.to_string();
-
-    for (int j = 0; j < 2; j++) {
-
-        auto logPath = config.logDir.get()
-                       / (j == 0 ? drvsLogDir / baseName.substr(0, 2) / baseName.substr(2) : drvsLogDir / baseName);
-        auto logBz2Path = logPath;
-        logBz2Path += ".bz2";
-
-        if (pathExists(logPath))
-            return readFile(logPath);
-
-        else if (pathExists(logBz2Path)) {
-            try {
-                return decompress(CompressionAlgo::bzip2, readFile(logBz2Path));
-            } catch (Error &) {
-            }
-        }
-    }
-
-    return std::nullopt;
-}
 
 } // namespace nix
