@@ -686,14 +686,6 @@ bool LocalStore::isValidPathUncached(const StorePath & path)
     return retrySQLite<bool>([&]() { return isValidPath_(*_state->lock(), path); });
 }
 
-StorePathSet LocalStore::queryValidPaths(const StorePathSet & paths, SubstituteFlag maybeSubstitute)
-{
-    StorePathSet res;
-    for (auto & i : paths)
-        if (isValidPath(i))
-            res.insert(i);
-    return res;
-}
 
 StorePathSet LocalStore::queryAllValidPaths()
 {

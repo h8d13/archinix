@@ -35,7 +35,6 @@ typedef std::map<std::string, StorePath> OutputPathMap;
 
 enum CheckSigsFlag : bool { NoCheckSigs = false, CheckSigs = true };
 
-enum SubstituteFlag : bool { NoSubstitute = false, Substitute = true };
 
 enum BuildMode : uint8_t { bmNormal, bmRepair, bmCheck };
 
@@ -416,11 +415,6 @@ public:
      * flag.
      */
 
-    /**
-     * Query which of the given paths is valid. Optionally, try to
-     * substitute missing paths.
-     */
-    virtual StorePathSet queryValidPaths(const StorePathSet & paths, SubstituteFlag maybeSubstitute = NoSubstitute);
 
     /**
      * Query the set of all valid paths. Note that for some store
@@ -513,17 +507,6 @@ public:
         RepairFlag repair = NoRepair,
         CheckSigsFlag checkSigs = CheckSigs) = 0;
 
-    /**
-     * A list of paths infos along with a source providing the content
-     * of the associated store path
-     */
-    using PathsSource = std::vector<std::pair<ValidPathInfo, std::unique_ptr<Source>>>;
-
-    /**
-     * Import multiple paths into the store.
-     */
-    virtual void addMultipleToStore(
-        PathsSource && pathsToCopy, Activity & act, RepairFlag repair = NoRepair, CheckSigsFlag checkSigs = CheckSigs);
 
     /**
      * Copy the contents of a path to the store and register the
@@ -822,43 +805,6 @@ protected:
     }
 };
 
-/**
- * Copy a path from one store to another.
- */
-void copyStorePath(
-    Store & srcStore,
-    Store & dstStore,
-    const StorePath & storePath,
-    RepairFlag repair = NoRepair,
-    CheckSigsFlag checkSigs = CheckSigs);
-
-/**
- * Copy store paths from one store to another. The paths may be copied
- * in parallel. They are copied in a topologically sorted order (i.e. if
- * A is a reference of B, then A is copied before B), but the set of
- * store paths is not automatically closed; use copyClosure() for that.
- *
- * @return a map of what each path was copied to the dstStore as.
- */
-std::map<StorePath, StorePath> copyPaths(
-    Store & srcStore,
-    Store & dstStore,
-    const StorePathSet & paths,
-    RepairFlag repair = NoRepair,
-    CheckSigsFlag checkSigs = CheckSigs,
-    SubstituteFlag substitute = NoSubstitute);
-
-/**
- * Copy the closure of `paths` from `srcStore` to `dstStore`.
- */
-void copyClosure(
-    Store & srcStore,
-    Store & dstStore,
-    const StorePathSet & paths,
-    RepairFlag repair = NoRepair,
-    CheckSigsFlag checkSigs = CheckSigs,
-    SubstituteFlag substitute = NoSubstitute,
-    bool includeOutputs = false);
 
 /**
  * Remove the temporary roots file for this process.  Any temporary
@@ -867,12 +813,6 @@ void copyClosure(
  */
 void removeTempRoots();
 
-/**
- * Resolve the derived path completely, failing if any derivation output
- * is unknown.
- */
-std::optional<ValidPathInfo>
-decodeValidPathInfo(const Store & store, std::istream & str, std::optional<HashResult> hashGiven = std::nullopt);
 
 template<>
 struct json_avoids_null<TrustedFlag> : std::true_type

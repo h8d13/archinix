@@ -9,38 +9,11 @@
 #include <math.h>
 
 
-#  include "nix/util/cgroup.hh"
 #  include "nix/util/linux-namespaces.hh"
 
 
 namespace nix {
 
-unsigned int getMaxCPU()
-{
-    try {
-        auto cgroupFS = linux::getCgroupFS();
-        if (!cgroupFS)
-            return 0;
-
-        auto cpuFile = *cgroupFS / linux::getCurrentCgroup().rel() / "cpu.max";
-
-        auto cpuMax = readFile(cpuFile);
-        auto cpuMaxParts = tokenizeString<std::vector<std::string>>(cpuMax, " \n");
-
-        if (cpuMaxParts.size() != 2) {
-            return 0;
-        }
-
-        auto quota = cpuMaxParts[0];
-        auto period = cpuMaxParts[1];
-        if (quota != "max")
-            return std::ceil(std::stoi(quota) / std::stof(period));
-    } catch (Error &) {
-        ignoreExceptionInDestructor(lvlDebug);
-    }
-
-    return 0;
-}
 
 //////////////////////////////////////////////////////////////////////
 

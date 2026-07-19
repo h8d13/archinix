@@ -16,11 +16,6 @@ namespace nix {
  */
 std::chrono::microseconds getCpuUserTime();
 
-/**
- * If cgroups are active, attempt to calculate the number of CPUs available.
- * If cgroups are unavailable or if cpu.max is set to "max", return 0.
- */
-unsigned int getMaxCPU();
 
 // It does not seem possible to dynamically change stack size on Windows.
 /**
