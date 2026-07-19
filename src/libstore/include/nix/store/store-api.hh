@@ -217,8 +217,6 @@ public:
 
     virtual ~StoreConfig() {}
 
-    static StringSet getDefaultSystemFeatures();
-
     /**
      * Documentation for this type of store.
      */
@@ -279,19 +277,6 @@ public:
         R"(
           Whether this store can be queried efficiently for path validity when used as a [substituter](@docroot@/command-ref/conf-file.md#conf-substituters).
         )"};
-
-    Setting<StringSet> systemFeatures{
-        this,
-        getDefaultSystemFeatures(),
-        "system-features",
-        R"(
-          Optional [system features](@docroot@/command-ref/conf-file.md#conf-system-features) available on the system this store uses to build derivations.
-
-          Example: `"kvm"`
-        )",
-        {},
-        // Don't document the machine-specific default value
-        false};
 
     /**
      * Whether we're allowed to write to this store, also takes into account
@@ -386,8 +371,6 @@ protected:
         /**
          * Time of cache entry creation or update
          */
-        std::chrono::time_point<std::chrono::steady_clock> time_point = std::chrono::steady_clock::now();
-
         /**
          * Null if missing
          */

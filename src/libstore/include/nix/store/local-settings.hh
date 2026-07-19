@@ -15,42 +15,6 @@
 
 namespace nix {
 
-typedef enum { smEnabled, smRelaxed, smDisabled } SandboxMode;
-
-/**
- * A source path bind-mounted into the build sandbox (kept for the
- * sandbox-paths setting surface; the in-tree builder is gone).
- */
-struct ChrootPath
-{
-    std::filesystem::path source;
-    bool optional = false;
-};
-
-void to_json(nlohmann::json & j, const ChrootPath & cp);
-void from_json(const nlohmann::json & j, ChrootPath & cp);
-
-typedef std::map<std::filesystem::path, ChrootPath> PathsInChroot; // maps target path to source path
-
-template<>
-SandboxMode BaseSetting<SandboxMode>::parse(const std::string & str) const;
-template<>
-std::string BaseSetting<SandboxMode>::to_string() const;
-
-template<>
-PathsInChroot BaseSetting<PathsInChroot>::parse(const std::string & str) const;
-template<>
-std::string BaseSetting<PathsInChroot>::to_string() const;
-
-template<>
-struct BaseSetting<PathsInChroot>::trait
-{
-    static constexpr bool appendable = true;
-};
-
-template<>
-void BaseSetting<PathsInChroot>::appendOrSet(PathsInChroot newValue, bool append);
-
 struct GCSettings : public virtual Config
 {
 private:
@@ -142,29 +106,6 @@ public:
     };
 };
 
-const uint32_t maxIdsPerBuild =
-    1 << 16
-    ;
-
-struct AutoAllocateUidSettings : public virtual Config
-{
-private:
-    void anchor() override;
-
-public:
-    Setting<uint32_t> startId{
-        this,
-        0x34000000,
-        "start-id",
-        "The first UID and GID to use for dynamic ID allocation."};
-
-    Setting<uint32_t> uidCount{
-        this,
-        maxIdsPerBuild * 128,
-        "id-count",
-        "The number of UIDs/GIDs to use for dynamic ID allocation."};
-};
-
 /**
  * Either about local store or local building
  *
@@ -177,7 +118,7 @@ public:
  * this will prepare the code base to making these *actual*, rather than
  * pretend, per-store settings.
  */
-struct LocalSettings : public virtual Config, public GCSettings, public AutoAllocateUidSettings
+struct LocalSettings : public virtual Config, public GCSettings
 {
 private:
     void anchor() override;
@@ -195,38 +136,6 @@ public:
     {
         return *this;
     }
-
-    /**
-     * Get AutoAllocateUidSettings if auto-allocate-uids is enabled.
-     * @return Pointer to settings if enabled, nullptr otherwise.
-     */
-    const AutoAllocateUidSettings * getAutoAllocateUidSettings() const
-    {
-        return autoAllocateUids ? this : nullptr;
-    }
-
-    Setting<unsigned int> buildCores{
-        this,
-        0,
-        "cores",
-        R"(
-          Sets the value of the `NIX_BUILD_CORES` environment variable in the [invocation of the `builder` executable](@docroot@/store/building.md#env-vars) of a derivation.
-          The `builder` executable can use this variable to control its own maximum amount of parallelism.
-
-          <!--
-          FIXME(@fricklerhandwerk): I don't think this should even be mentioned here.
-          A very generic example using `derivation` and `xargs` may be more appropriate to explain the mechanism.
-          Using `mkDerivation` as an example requires being aware of that there are multiple independent layers that are completely opaque here.
-          -->
-          For instance, in Nixpkgs, if the attribute `enableParallelBuilding` for the `mkDerivation` build helper is set to `true`, it passes the `-j${NIX_BUILD_CORES}` flag to GNU Make.
-
-          If set to `0`, nix will detect the number of CPU cores and pass this number via `NIX_BUILD_CORES`.
-
-          > **Note**
-          >
-          > The number of parallel local Nix build jobs is independently controlled with the [`max-jobs`](#conf-max-jobs) setting.
-        )",
-        {"build-cores"}};
 
     Setting<bool> fsyncMetadata{
         this,
@@ -323,141 +232,6 @@ public:
         {},
         false};
 
-    Setting<bool> autoAllocateUids{
-        this,
-        false,
-        "auto-allocate-uids",
-        R"(
-          Whether to select UIDs for builds automatically, instead of using the
-          users in `build-users-group`.
-
-          UIDs are allocated starting at 872415232 (0x34000000) on Linux and 56930 on macOS.
-        )",
-        {},
-        true,
-        Xp::AutoAllocateUids};
-
-    Setting<bool> useCgroups{
-        this,
-        false,
-        "use-cgroups",
-        R"(
-          Whether to execute builds inside cgroups.
-          This is only supported on Linux.
-
-          Cgroups are required and enabled automatically for derivations
-          that require the `uid-range` system feature.
-        )"};
-
-    Setting<bool> impersonateLinux26{
-        this,
-        false,
-        "impersonate-linux-26",
-        "Whether to impersonate a Linux 2.6 machine on newer kernels.",
-        {"build-impersonate-linux-26"}};
-
-    Setting<SandboxMode> sandboxMode{
-        this,
-        smEnabled
-        ,
-        "sandbox",
-        R"(
-          If set to `true`, builds are performed in a *sandboxed
-          environment*, i.e., they're isolated from the normal file system
-          hierarchy and only see their dependencies in the Nix store,
-          the temporary build directory, private versions of `/proc`,
-          `/dev`, `/dev/shm` and `/dev/pts` (on Linux), and the paths
-          configured with the `sandbox-paths` option. This is useful to
-          prevent undeclared dependencies on files in directories such as
-          `/usr/bin`. In addition, on Linux, builds run in private PID,
-          mount, network, IPC and UTS namespaces to isolate them from other
-          processes in the system (except that fixed-output derivations do
-          not run in private network namespace to ensure they can access the
-          network).
-
-          Currently, sandboxing only work on Linux and macOS. The use of a
-          sandbox requires that Nix is run as root (so you should use the
-          "build users" feature to perform the actual builds under different
-          users than root).
-
-          If this option is set to `relaxed`, then fixed-output derivations
-          and derivations that have the `__noChroot` attribute set to `true`
-          do not run in sandboxes.
-
-          The default is `true` on Linux and `false` on all other platforms.
-        )",
-        {"build-use-chroot", "build-use-sandbox"}};
-
-    Setting<PathsInChroot> sandboxPaths{
-        this,
-        {},
-        "sandbox-paths",
-        R"(
-          A list of paths bind-mounted into Nix sandbox environments. You can
-          use the syntax `target=source` to mount a path in a different
-          location in the sandbox; for instance, `/bin=/nix-bin` mounts
-          the path `/nix-bin` as `/bin` inside the sandbox. If *source* is
-          followed by `?`, then it is not an error if *source* does not exist;
-          for example, `/dev/nvidiactl?` specifies that `/dev/nvidiactl`
-          only be mounted in the sandbox if it exists in the host filesystem.
-
-          If the source is in the Nix store, then its closure is added to
-          the sandbox as well.
-
-          Depending on how Nix was built, the default value for this option
-          may be empty or provide `/bin/sh` as a bind-mount of `bash`.
-        )",
-        {"build-chroot-dirs", "build-sandbox-paths"}};
-
-    Setting<bool> sandboxFallback{
-        this, true, "sandbox-fallback", "Whether to disable sandboxing when the kernel doesn't allow it."};
-
-    Setting<bool> requireDropSupplementaryGroups{
-        this,
-        isRootUser(),
-        "require-drop-supplementary-groups",
-        R"(
-          Following the principle of least privilege,
-          Nix attempts to drop supplementary groups when building with sandboxing.
-
-          However this can fail under some circumstances.
-          For example, if the user lacks the `CAP_SETGID` capability.
-          Search `setgroups(2)` for `EPERM` to find more detailed information on this.
-
-          If you encounter such a failure, setting this option to `false` enables you to ignore it and continue.
-          But before doing so, you should consider the security implications carefully.
-          Not dropping supplementary groups means the build sandbox is less restricted than intended.
-
-          This option defaults to `true` when the user is root
-          (since `root` usually has permissions to call setgroups)
-          and `false` otherwise.
-        )"};
-
-    Setting<std::string> sandboxShmSize{
-        this,
-        "50%",
-        "sandbox-dev-shm-size",
-        R"(
-            *Linux only*
-
-            This option determines the maximum size of the `tmpfs` filesystem
-            mounted on `/dev/shm` in Linux sandboxes. For the format, see the
-            description of the `size` option of `tmpfs` in mount(8). The default
-            is `50%`.
-        )"};
-
-    Setting<AbsolutePath> sandboxBuildDir{
-        this,
-        "/build",
-        "sandbox-build-dir",
-        R"(
-            *Linux only*
-
-            The build directory inside the sandbox.
-
-            This directory is backed by [`build-dir`](#conf-build-dir) on the host.
-        )"};
-
     Setting<std::optional<AbsolutePath>> buildDir{
         this,
         std::nullopt,
@@ -468,108 +242,10 @@ public:
             See also the per-store [`build-dir`](@docroot@/store/types/local-store.md#store-local-store-build-dir) setting.
         )"};
 
-    Setting<std::set<std::filesystem::path>> allowedImpureHostPrefixes{
-        this,
-        {},
-        "allowed-impure-host-deps",
-        "Which prefixes to allow derivations to ask for access to (primarily for Darwin)."};
-
-
-    Setting<bool> runDiffHook{
-        this,
-        false,
-        "run-diff-hook",
-        R"(
-          If true, enable the execution of the `diff-hook` program.
-
-          When using the Nix daemon, `run-diff-hook` must be set in the
-          `nix.conf` configuration file, and cannot be passed at the command
-          line.
-        )"};
 
 private:
 
-    Setting<std::optional<AbsolutePath>> diffHook{
-        this,
-        std::nullopt,
-        "diff-hook",
-        R"(
-          Absolute path to an executable capable of diffing build
-          results. The hook is executed if `run-diff-hook` is true, and the
-          output of a build is known to not be the same. This program is not
-          executed to determine if two results are the same.
-
-          The diff hook is executed by the same user and group who ran the
-          build. However, the diff hook does not have write access to the
-          store path just built.
-
-          The diff hook program receives three parameters:
-
-          1.  A path to the previous build's results
-
-          2.  A path to the current build's results
-
-          3.  The path to the build's derivation
-
-          4.  The path to the build's scratch directory. This directory
-              exists only if the build was run with `--keep-failed`.
-
-          The stderr and stdout output from the diff hook isn't displayed
-          to the user. Instead, it prints to the nix-daemon's log.
-
-          When using the Nix daemon, `diff-hook` must be set in the `nix.conf`
-          configuration file, and cannot be passed at the command line.
-        )"};
-
 public:
-
-    Setting<std::string> preBuildHook{
-        this,
-        "",
-        "pre-build-hook",
-        R"(
-          If set, the path to a program that can set extra derivation-specific
-          settings for this system. This is used for settings that can't be
-          captured by the derivation model itself and are too variable between
-          different versions of the same system to be hard-coded into nix.
-
-          The hook is passed the derivation path and, if sandboxes are
-          enabled, the sandbox directory. It can then modify the sandbox and
-          send a series of commands to modify various settings to stdout. The
-          currently recognized commands are:
-
-            - `extra-sandbox-paths`\
-              Pass a list of files and directories to be included in the
-              sandbox for this build. One entry per line, terminated by an
-              empty line. Entries have the same format as `sandbox-paths`.
-        )"};
-
-    Setting<bool> filterSyscalls{
-        this,
-        true,
-        "filter-syscalls",
-        R"(
-          Whether to prevent certain dangerous system calls, such as
-          creation of setuid/setgid files or adding ACLs or extended
-          attributes. Only disable this if you're aware of the
-          security implications.
-        )"};
-
-    Setting<bool> allowNewPrivileges{
-        this,
-        false,
-        "allow-new-privileges",
-        R"(
-          (Linux-specific.) By default, builders on Linux cannot acquire new
-          privileges by calling setuid/setgid programs or programs that have
-          file capabilities. For example, programs such as `sudo` or `ping`
-          should fail. (Note that in sandbox builds, no such programs are
-          available unless you bind-mount them into the sandbox via the
-          `sandbox-paths` option.) You can allow the use of such programs by
-          enabling this option. This is impure and usually undesirable, but
-          may be useful in certain scenarios (e.g. to spin up containers or
-          set up userspace network interfaces in tests).
-        )"};
 
 #if NIX_SUPPORT_ACL
     Setting<StringSet> ignoredAcls{
@@ -583,27 +259,6 @@ public:
           removed even by root. Therefore it's best to just ignore them.
         )"};
 #endif
-
-    Setting<StringMap> impureEnv{
-        this,
-        {},
-        "impure-env",
-        R"(
-          A list of items, each in the format of:
-
-          - `name=value`: Set environment variable `name` to `value`.
-
-          If the user is trusted (see `trusted-users` option), when building
-          a fixed-output derivation, environment variables set in this option
-          is passed to the builder if they are listed in [`impureEnvVars`](@docroot@/language/advanced-attributes.md#adv-attr-impureEnvVars).
-
-          This option is useful for, e.g., setting `https_proxy` for
-          fixed-output derivations and in a multi-user Nix installation, or
-          setting private access tokens when fetching a private repository.
-        )",
-        {},   // aliases
-        true, // document default
-        Xp::ConfigurableImpureEnv};
 
 };
 

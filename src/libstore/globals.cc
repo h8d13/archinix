@@ -7,7 +7,6 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/args.hh"
 #include "nix/util/abstract-setting-to-json.hh"
-#include "nix/util/compute-levels.hh"
 #include "nix/util/executable-path.hh"
 
 #include <algorithm>
@@ -17,7 +16,6 @@
 
 #include <nlohmann/json.hpp>
 
-#  include <sys/utsname.h>
 
 #ifdef __GLIBC__
 #  include <gnu/lib-names.h>
@@ -38,8 +36,6 @@ void Settings::anchor() {}
 
 
 
-void AutoAllocateUidSettings::anchor() {}
-
 Settings settings;
 
 static GlobalConfig::Register rSettings(&settings);
@@ -56,11 +52,6 @@ Settings::Settings()
     buildUsersGroup = isRootUser() ? "nixbld" : "";
     allowSymlinkedStore = getEnv("NIX_IGNORE_SYMLINK_STORE") == "1";
 
-    /* Backwards compatibility. */
-
-#ifdef SANDBOX_SHELL
-    sandboxPaths = {{"/bin/sh", {.source = SANDBOX_SHELL}}};
-#endif
 }
 
 void loadConfFile(AbstractConfig & config)
@@ -128,186 +119,9 @@ const std::vector<std::filesystem::path> & nixUserConfFiles()
     return files;
 }
 
-unsigned int Settings::getDefaultCores()
-{
-    const unsigned int concurrency = std::max(1U, std::thread::hardware_concurrency());
-    const unsigned int maxCPU = getMaxCPU();
-
-    if (maxCPU > 0)
-        return maxCPU;
-    else
-        return concurrency;
-}
-
-
-StringSet Settings::getDefaultSystemFeatures()
-{
-    /* For backwards compatibility, accept some "features" that are
-       used in Nixpkgs to route builds to certain machines but don't
-       actually require anything special on the machines. */
-    StringSet features{"nixos-test", "benchmark", "big-parallel"};
-
-    features.insert("uid-range");
-
-    if (access("/dev/kvm", R_OK | W_OK) == 0)
-        features.insert("kvm");
-
-
-    return features;
-}
-
-StringSet Settings::getDefaultExtraPlatforms()
-{
-    StringSet extraPlatforms;
-
-    if (std::string{NIX_LOCAL_SYSTEM} == "x86_64-linux" && !isWSL1())
-        extraPlatforms.insert("i686-linux");
-
-    StringSet levels = computeLevels();
-    for (auto iter = levels.begin(); iter != levels.end(); ++iter)
-        extraPlatforms.insert(*iter + "-linux");
-
-    return extraPlatforms;
-}
-
-bool Settings::isWSL1()
-{
-    struct utsname utsbuf;
-    uname(&utsbuf);
-    // WSL1 uses -Microsoft suffix
-    // WSL2 uses -microsoft-standard suffix
-    return hasSuffix(utsbuf.release, "-Microsoft");
-}
-
 
 std::string nixVersion = PACKAGE_VERSION;
 
-NLOHMANN_JSON_SERIALIZE_ENUM(
-    SandboxMode,
-    {
-        {SandboxMode::smEnabled, true},
-        {SandboxMode::smRelaxed, "relaxed"},
-        {SandboxMode::smDisabled, false},
-    });
-
-template<>
-SandboxMode BaseSetting<SandboxMode>::parse(const std::string & str) const
-{
-    if (str == "true")
-        return smEnabled;
-    else if (str == "relaxed")
-        return smRelaxed;
-    else if (str == "false")
-        return smDisabled;
-    else
-        throw UsageError("option '%s' has invalid value '%s'", name, str);
-}
-
-template<>
-struct BaseSetting<SandboxMode>::trait
-{
-    static constexpr bool appendable = false;
-};
-
-template<>
-std::string BaseSetting<SandboxMode>::to_string() const
-{
-    if (value == smEnabled)
-        return "true";
-    else if (value == smRelaxed)
-        return "relaxed";
-    else if (value == smDisabled)
-        return "false";
-    else
-        unreachable();
-}
-
-template<>
-void BaseSetting<SandboxMode>::convertToArg(Args & args, const std::string & category)
-{
-    args.addFlag({
-        .longName = name,
-        .aliases = aliases,
-        .description = "Enable sandboxing.",
-        .category = category,
-        .handler = {[this]() { override(smEnabled); }},
-    });
-    args.addFlag({
-        .longName = "no-" + name,
-        .aliases = aliases,
-        .description = "Disable sandboxing.",
-        .category = category,
-        .handler = {[this]() { override(smDisabled); }},
-    });
-    args.addFlag({
-        .longName = "relaxed-" + name,
-        .aliases = aliases,
-        .description = "Enable sandboxing, but allow builds to disable it.",
-        .category = category,
-        .handler = {[this]() { override(smRelaxed); }},
-    });
-}
-
-void to_json(nlohmann::json & j, const ChrootPath & cp)
-{
-    j = nlohmann::json{{"source", cp.source.string()}, {"optional", cp.optional}};
-}
-
-void from_json(const nlohmann::json & j, ChrootPath & cp)
-{
-    cp.source = j.at("source").get<std::string>();
-    cp.optional = j.at("optional").get<bool>();
-}
-
-template<>
-PathsInChroot BaseSetting<PathsInChroot>::parse(const std::string & str) const
-{
-    PathsInChroot pathsInChroot;
-    for (auto i : tokenizeString<StringSet>(str)) {
-        if (i.empty())
-            continue;
-        bool optional = false;
-        if (i[i.size() - 1] == '?') {
-            optional = true;
-            i.pop_back();
-        }
-        size_t p = i.find('=');
-        std::string inside, outside;
-        if (p == std::string::npos) {
-            inside = i;
-            outside = i;
-        } else {
-            inside = i.substr(0, p);
-            outside = i.substr(p + 1);
-        }
-        pathsInChroot[inside] = {.source = outside, .optional = optional};
-    }
-    return pathsInChroot;
-}
-
-template<>
-std::string BaseSetting<PathsInChroot>::to_string() const
-{
-    std::vector<std::string> accum;
-    for (auto & [name, cp] : value) {
-        auto nameStr = name.string();
-        auto sourceStr = cp.source.string();
-        std::string s = name == cp.source ? nameStr : nameStr + "=" + sourceStr;
-        if (cp.optional)
-            s += "?";
-        accum.push_back(std::move(s));
-    }
-    return concatStringsSep(" ", accum);
-}
-
-
-template<>
-void BaseSetting<PathsInChroot>::appendOrSet(PathsInChroot newValue, bool append)
-{
-    if (!append)
-        value.clear();
-    value.insert(std::make_move_iterator(newValue.begin()), std::make_move_iterator(newValue.end()));
-}
 
 template<>
 struct BaseSetting<std::vector<StoreReference>>::trait

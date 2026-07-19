@@ -361,18 +361,6 @@ void Store::narFromPath(const StorePath & path, Sink & sink)
     dumpPath(sourcePath, sink, FileSerialisationMethod::NixArchive);
 }
 
-StringSet Store::Config::getDefaultSystemFeatures()
-{
-    auto res = settings.systemFeatures.get();
-
-    if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations))
-        res.insert("ca-derivations");
-
-    if (experimentalFeatureSettings.isEnabled(Xp::RecursiveNix))
-        res.insert("recursive-nix");
-
-    return res;
-}
 
 Store::Store(const Store::Config & config)
     : StoreDirConfig{config}

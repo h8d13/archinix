@@ -6,8 +6,7 @@ Local-store-only extraction of the Nix store layer (libnixutil,
 libnixstore + C API) from [NixOS/nix](https://github.com/NixOS/nix)
 2.36.0 (`40f375fa`), buildable on any Linux without Nix: `./build.sh`.
 Remote stores (s3/http/ssh/daemon) and the .drv realisation machinery
-are cut: stores hold imported trees only, which drops curl and
-libseccomp entirely (tests/needed-drift.sh pins the dep set).
+are cut: stores hold imported trees only
 
 Build depends on: `meson`, `ninja`, C++23 compiler:
 

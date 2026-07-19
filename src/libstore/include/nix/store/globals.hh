@@ -18,12 +18,6 @@ class Settings : public virtual Config, private LocalSettings
 private:
     void anchor() override;
 public:
-    StringSet getDefaultSystemFeatures();
-
-    StringSet getDefaultExtraPlatforms();
-
-    bool isWSL1();
-
 public:
 
     Settings();
@@ -43,8 +37,6 @@ public:
 
 
 
-
-    static unsigned int getDefaultCores();
 
     /**
      * The directory where state is stored.
@@ -68,9 +60,8 @@ public:
           The default value is [`auto`](@docroot@/store/types/index.md#auto).
         )"};
 
-    Setting<bool> useSQLiteWAL{this, !isWSL1(), "use-sqlite-wal", "Whether SQLite should use WAL mode."};
-
-    Setting<bool> keepFailed{this, false, "keep-failed", "Whether to keep temporary directories of failed builds."};
+    /* always WAL: the isWSL1() carve-out went with the build machinery */
+    Setting<bool> useSQLiteWAL{this, true, "use-sqlite-wal", "Whether SQLite should use WAL mode."};
 
     /**
      * Whether to show build log output in real time.
@@ -82,35 +73,6 @@ public:
      * the database.
      */
     bool readOnlyMode = false;
-
-    Setting<std::string> thisSystem{
-        this,
-        NIX_LOCAL_SYSTEM,
-        "system",
-        R"(
-          The system type of the current Nix installation.
-          Nix only builds a given [store derivation](@docroot@/glossary.md#gloss-store-derivation) locally when its `system` attribute equals any of the values specified here or in [`extra-platforms`](#conf-extra-platforms).
-
-          The default value is set when Nix itself is compiled for the system it will run on.
-          The following system types are widely used, as Nix is actively supported on these platforms:
-
-          - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
-          - `aarch64-linux`
-          - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
-
-          In general, you do not have to modify this setting.
-          While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
-
-          This value is available in the Nix language as
-          [`builtins.currentSystem`](@docroot@/language/builtins.md#builtins-currentSystem)
-          if the
-          [`eval-system`](#conf-eval-system)
-          configuration option is set as the empty string.
-        )"};
 
     Setting<Strings> trustedPublicKeys{
         this,
@@ -158,131 +120,6 @@ public:
 
           (Content-addressed paths are inherently trustworthy and thus
           unaffected by this configuration option.)
-        )"};
-
-    Setting<StringSet> extraPlatforms{
-        this,
-        getDefaultExtraPlatforms(),
-        "extra-platforms",
-        R"(
-          System types of executables that can be run on this machine.
-
-          Nix only builds a given [store derivation](@docroot@/glossary.md#gloss-store-derivation) locally when its `system` attribute equals any of the values specified here or in the [`system` option](#conf-system).
-
-          Setting this can be useful to build derivations locally on compatible machines:
-          - `i686-linux` executables can be run on `x86_64-linux` machines (set by default)
-          - `x86_64-darwin` executables can be run on macOS `aarch64-darwin` with Rosetta 2 (set by default where applicable)
-          - `armv6` and `armv5tel` executables can be run on `armv7`
-          - some `aarch64` machines can also natively run 32-bit ARM code
-          - `qemu-user` may be used to support non-native platforms (though this
-          may be slow and buggy)
-
-          Build systems usually detect the target platform to be the current physical system and therefore produce machine code incompatible with what may be intended in the derivation.
-          You should design your derivation's `builder` accordingly and cross-check the results when using this option against natively-built versions of your derivation.
-        )",
-        {},
-        // Don't document the machine-specific default value
-        false};
-
-    Setting<StringSet> systemFeatures{
-        this,
-        getDefaultSystemFeatures(),
-        "system-features",
-        R"(
-          A set of system “features” supported by this machine.
-
-          This complements the [`system`](#conf-system) and [`extra-platforms`](#conf-extra-platforms) configuration options and the corresponding [`system`](@docroot@/language/derivations.md#attr-system) attribute on derivations.
-
-          A derivation can require system features in the [`requiredSystemFeatures` attribute](@docroot@/language/advanced-attributes.md#adv-attr-requiredSystemFeatures), and the machine to build the derivation must have them.
-
-          System features are user-defined, but Nix sets the following defaults:
-
-          - `apple-virt`
-
-            Included on Darwin if virtualization is available.
-
-          - `kvm`
-
-            Included on Linux if `/dev/kvm` is accessible.
-
-          - `nixos-test`, `benchmark`, `big-parallel`
-
-            These historical pseudo-features are always enabled for backwards compatibility, as they are used in Nixpkgs to route Hydra builds to specific machines.
-
-          - `ca-derivations`
-
-            Included by default if the [`ca-derivations` experimental feature](@docroot@/development/experimental-features.md#xp-feature-ca-derivations) is enabled.
-
-            This system feature is implicitly required by derivations with the [`__contentAddressed` attribute](@docroot@/language/advanced-attributes.md#adv-attr-__contentAddressed).
-
-          - `recursive-nix`
-
-            Included by default if the [`recursive-nix` experimental feature](@docroot@/development/experimental-features.md#xp-feature-recursive-nix) is enabled.
-
-          - `uid-range`
-
-            On Linux, Nix can run builds in a user namespace where they run as root (UID 0) and have 65,536 UIDs available.
-            This is primarily useful for running containers such as `systemd-nspawn` inside a Nix build. For an example, see [`tests/systemd-nspawn/nix`][nspawn].
-
-            [nspawn]: https://github.com/NixOS/nix/blob/67bcb99700a0da1395fa063d7c6586740b304598/tests/systemd-nspawn.nix
-
-            Included by default on Linux if the [`auto-allocate-uids`](#conf-auto-allocate-uids) setting is enabled.
-        )",
-        {},
-        // Don't document the machine-specific default value
-        false};
-
-    // move to daemonsettings in another pass
-    //
-    // we'll add a another parameter to processConnection to thread it through
-    Setting<std::set<StoreReference>> trustedSubstituters{
-        this,
-        {},
-        "trusted-substituters",
-        R"(
-          A list of [Nix store URLs](@docroot@/store/types/index.md#store-url-format), separated by whitespace.
-          These are not used by default, but users of the Nix daemon can enable them by specifying [`substituters`](#conf-substituters).
-
-          Unprivileged users (those set in only [`allowed-users`](#conf-allowed-users) but not [`trusted-users`](#conf-trusted-users)) can pass as `substituters` only those URLs listed in `trusted-substituters`.
-        )",
-        {"trusted-binary-caches"}};
-
-    // move it out in the 2nd pass
-    Setting<bool> printMissing{
-        this, true, "print-missing", "Whether to print what paths need to be built or downloaded."};
-
-    Setting<bool> useXDGBaseDirectories{
-        this,
-        false,
-        "use-xdg-base-directories",
-        R"(
-          If set to `true`, Nix conforms to the [XDG Base Directory Specification] for files in `$HOME`.
-          The environment variables used to implement this are documented in the [Environment Variables section](@docroot@/command-ref/env-common.md).
-
-          [XDG Base Directory Specification]: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-
-          > **Warning**
-          > This changes the location of some well-known symlinks that Nix creates, which might break tools that rely on the old, non-XDG-conformant locations.
-
-          In particular, the following locations change:
-
-          | Old               | New                            |
-          |-------------------|--------------------------------|
-          | `~/.nix-profile`  | `$XDG_STATE_HOME/nix/profile`  |
-          | `~/.nix-defexpr`  | `$XDG_STATE_HOME/nix/defexpr`  |
-          | `~/.nix-channels` | `$XDG_STATE_HOME/nix/channels` |
-
-          If you already have Nix installed and are using [profiles](@docroot@/package-management/profiles.md) or [channels](@docroot@/command-ref/nix-channel.md), you should migrate manually when you enable this option.
-          If `$XDG_STATE_HOME` is not set, use `$HOME/.local/state/nix` instead of `$XDG_STATE_HOME/nix`.
-          This can be achieved with the following shell commands:
-
-          ```sh
-          nix_state_home=${XDG_STATE_HOME-$HOME/.local/state}/nix
-          mkdir -p $nix_state_home
-          mv $HOME/.nix-profile $nix_state_home/profile
-          mv $HOME/.nix-defexpr $nix_state_home/defexpr
-          mv $HOME/.nix-channels $nix_state_home/channels
-          ```
         )"};
 
     Setting<uint64_t> warnLargePathThreshold{

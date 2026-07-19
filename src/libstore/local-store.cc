@@ -1689,6 +1689,11 @@ void LocalStore::invalidatePathChecked(const StorePath & path)
 
 bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
 {
+    /* repairPath went with the substituter machinery: verify can
+       detect, not heal. Refuse instead of silently ignoring the flag */
+    if (repair)
+        throw Unsupported("repair is not supported by this store extraction");
+
     printInfo("reading the Nix store...");
 
     /* Acquire the global GC lock to get a consistent snapshot of
