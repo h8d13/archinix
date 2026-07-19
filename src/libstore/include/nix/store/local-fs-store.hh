@@ -3,7 +3,6 @@
 
 #include "nix/store/store-api.hh"
 #include "nix/store/gc-store.hh"
-#include "nix/store/log-store.hh"
 
 namespace nix {
 
@@ -86,8 +85,7 @@ public:
 
 struct alignas(8) /* Work around ASAN failures on i686-linux. */
     LocalFSStore : virtual Store,
-                   virtual GcStore,
-                   virtual LogStore
+                   virtual GcStore
 {
 private:
     void anchor() override;
@@ -131,8 +129,6 @@ public:
     {
         return getRealStoreDir() / storePath.to_string();
     }
-
-    std::optional<std::string> getBuildLogExact(const StorePath & path) override;
 };
 
 } // namespace nix

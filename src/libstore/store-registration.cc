@@ -1,7 +1,6 @@
 #include "nix/store/store-registration.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/local-store.hh"
-#include "nix/store/uds-remote-store.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/environment-variables.hh"
 
@@ -56,13 +55,8 @@ ref<StoreConfig> resolveStoreConfig(StoreReference && storeURI)
                         unreachable();
                     }
                 } localFSStoreConfig{params};
-                if (
-                    access
-                    (localFSStoreConfig.stateDir.get().c_str(), R_OK | W_OK)
-                    == 0)
+                if (access(localFSStoreConfig.stateDir.get().c_str(), R_OK | W_OK) == 0)
                     return make_ref<LocalStore::Config>(params);
-                else if (pathExists(getDaemonSocketPath(localFSStoreConfig)))
-                    return make_ref<UDSRemoteStore::Config>(params);
                 else if (
                     !pathExists(localFSStoreConfig.stateDir.get()) && params.empty() && !isRootUser()
                     && !getEnvOs("NIX_STORE_DIR").has_value() && !getEnvOs("NIX_STATE_DIR").has_value()) {
@@ -105,33 +99,6 @@ ref<StoreConfig> resolveStoreConfig(StoreReference && storeURI)
     return storeConfig;
 }
 
-std::list<ref<Store>> getDefaultSubstituters()
-{
-    static auto stores([]() {
-        std::list<ref<Store>> stores;
-
-        std::set<StoreReference> done;
-
-        auto addStore = [&](const StoreReference & ref) {
-            if (!done.insert(ref).second)
-                return;
-            try {
-                stores.push_back(openStore(StoreReference{ref}));
-            } catch (Error & e) {
-                logWarning(e.info());
-            }
-        };
-
-        for (const auto & ref : settings.getWorkerSettings().substituters.get())
-            addStore(ref);
-
-        stores.sort([](ref<Store> & a, ref<Store> & b) { return a->config.priority < b->config.priority; });
-
-        return stores;
-    }());
-
-    return stores;
-}
 
 Implementations::Map & Implementations::registered()
 {

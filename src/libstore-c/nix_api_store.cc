@@ -10,7 +10,6 @@
 #include "nix/store/store-api.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/store-reference.hh"
-#include "nix/store/build-result.hh"
 #include "nix/store/local-fs-store.hh"
 #include "nix/util/base-nix-32.hh"
 
@@ -163,42 +162,6 @@ nix_err nix_store_get_fs_closure(
     NIXC_CATCH_ERRS
 }
 
-nix_err nix_store_realise(
-    nix_c_context * context,
-    Store * store,
-    StorePath * path,
-    void * userdata,
-    void (*callback)(void * userdata, const char *, const StorePath *))
-{
-    if (context)
-        context->last_err_code = NIX_OK;
-    try {
-
-        const std::vector<nix::DerivedPath> paths{nix::DerivedPath::Built{
-            .drvPath = nix::makeConstantStorePathRef(path->path), .outputs = nix::OutputsSpec::All{}}};
-
-        const auto nixStore = store->ptr;
-        auto results = nixStore->buildPathsWithResults(paths, nix::bmNormal, nixStore);
-
-        assert(results.size() == 1);
-
-        // Check if any builds failed
-        for (auto & result : results)
-            result.tryThrowBuildError();
-
-        if (callback) {
-            for (const auto & result : results) {
-                if (auto * success = result.tryGetSuccess()) {
-                    for (const auto & [outputName, realisation] : success->builtOutputs) {
-                        StorePath p{realisation.outPath};
-                        callback(userdata, outputName.c_str(), &p);
-                    }
-                }
-            }
-        }
-    }
-    NIXC_CATCH_ERRS
-}
 
 void nix_store_path_name(const StorePath * store_path, nix_get_string_callback callback, void * user_data)
 {
@@ -211,10 +174,6 @@ void nix_store_path_free(StorePath * sp)
     delete sp;
 }
 
-void nix_derivation_free(nix_derivation * drv)
-{
-    delete drv;
-}
 
 StorePath * nix_store_path_clone(const StorePath * p)
 {
@@ -270,77 +229,22 @@ StorePath * nix_store_create_from_parts(
     NIXC_CATCH_ERRS_NULL
 }
 
-nix_derivation * nix_derivation_clone(const nix_derivation * d)
-{
-    try {
-        return new nix_derivation{d->drv};
-    } catch (...) {
-        return nullptr;
-    }
-}
 
-nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store, const char * json)
-{
-    if (context)
-        context->last_err_code = NIX_OK;
-    try {
-        return new nix_derivation{nix::Derivation::parseJsonAndValidate(*store->ptr, nlohmann::json::parse(json))};
-    }
-    NIXC_CATCH_ERRS_NULL
-}
 
-nix_err nix_derivation_to_json(
-    nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata)
-{
-    if (context)
-        context->last_err_code = NIX_OK;
-    try {
-        auto result = static_cast<nlohmann::json>(drv->drv).dump();
-        if (callback) {
-            callback(result.data(), result.size(), userdata);
-        }
-    }
-    NIXC_CATCH_ERRS
-}
 
-StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_derivation * derivation)
-{
-    if (context)
-        context->last_err_code = NIX_OK;
-    try {
-        /* Quite dubious that users would want this to silently suceed
-           without actually writing the derivation if this setting is
-           set, but it was that way already, so we are doing this for
-           back-compat for now. */
-        auto ret = nix::settings.readOnlyMode ? nix::computeStorePath(*store->ptr, derivation->drv)
-                                              : store->ptr->writeDerivation(derivation->drv, nix::NoRepair);
-
-        return new StorePath{ret};
-    }
-    NIXC_CATCH_ERRS_NULL
-}
 
 nix_err nix_store_copy_closure(nix_c_context * context, Store * srcStore, Store * dstStore, StorePath * path)
 {
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        nix::RealisedPath::Set paths;
+        nix::StorePathSet paths;
         paths.insert(path->path);
         nix::copyClosure(*srcStore->ptr, *dstStore->ptr, paths);
     }
     NIXC_CATCH_ERRS
 }
 
-nix_derivation * nix_store_drv_from_store_path(nix_c_context * context, Store * store, const StorePath * path)
-{
-    if (context)
-        context->last_err_code = NIX_OK;
-    try {
-        return new nix_derivation{store->ptr->derivationFromPath(path->path)};
-    }
-    NIXC_CATCH_ERRS_NULL
-}
 
 StorePath * nix_store_query_path_from_hash_part(nix_c_context * context, Store * store, const char * hash)
 {

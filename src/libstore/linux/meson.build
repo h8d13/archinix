@@ -1,8 +1,3 @@
-include_dirs += [ include_directories('build') ]
-
-sources += files(
-  'build/linux-derivation-builder.cc',
-  'personality.cc',
-)
-
+# linux build/ (sandboxed derivation builder, personality) went with
+# the realisation machinery; headers stay for the kept sources
 subdir('include/nix/store')

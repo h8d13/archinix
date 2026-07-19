@@ -41,6 +41,5 @@ ref<Store> openStore();
  * @return the default substituter stores, defined by the
  * ‘substituters’ option and various legacy options.
  */
-std::list<ref<Store>> getDefaultSubstituters();
 
 } // namespace nix

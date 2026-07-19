@@ -283,16 +283,9 @@ public:
 
     StorePathSet queryValidDerivers(const StorePath & path) override;
 
-    std::map<std::string, std::optional<StorePath>>
-    queryStaticPartialDerivationOutputMap(const StorePath & path) override;
-
-    std::optional<StorePath>
-    queryStaticPartialDerivationOutput(const StorePath & path, const std::string & outputName) override;
-
     std::optional<StorePath> queryPathFromHashPart(const std::string & hashPart) override;
 
     bool pathInfoIsUntrusted(const ValidPathInfo &) override;
-    bool realisationIsUntrusted(const Realisation &) override;
 
     void addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
@@ -464,8 +457,6 @@ public:
 
     virtual void registerValidPaths(const ValidPathInfos & infos);
 
-    unsigned int getProtocol() override;
-
     std::optional<TrustedFlag> isTrustedClient() override;
 
     void vacuumDB();
@@ -478,19 +469,6 @@ public:
      */
     void autoGC(bool sync = true);
 
-    /**
-     * Register the store path 'output' as the output named 'outputName' of
-     * derivation 'deriver'.
-     */
-    void registerDrvOutput(const Realisation & info) override;
-    void registerDrvOutput(const Realisation & info, CheckSigsFlag checkSigs) override;
-    void cacheDrvOutputMapping(
-        State & state, const uint64_t deriver, const std::string & outputName, const StorePath & output);
-
-    std::optional<const UnkeyedRealisation> queryRealisation_(State & state, const DrvOutput & id);
-    std::optional<std::pair<int64_t, UnkeyedRealisation>> queryRealisationCore_(State & state, const DrvOutput & id);
-    void queryRealisationUncached(
-        const DrvOutput &, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept override;
 
     std::optional<std::string> getVersion() override;
 
@@ -569,10 +547,7 @@ private:
     bool isValidPath_(State & state, const StorePath & path);
     void queryReferrers(State & state, const StorePath & path, StorePathSet & referrers);
 
-    void addBuildLog(const StorePath & drvPath, std::string_view log) override;
 
-    friend struct PathSubstitutionGoal;
-    friend struct DerivationGoal;
     /* Only used for createTempDirInStore. */
     friend class DerivationBuilderImpl;
 };

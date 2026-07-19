@@ -1,5 +1,4 @@
 #include "nix/store/posix-fs-canonicalise.hh"
-#include "nix/store/build-result.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
 #include "nix/store/store-api.hh"
@@ -78,7 +77,7 @@ static void canonicalisePathMetaData_(
        (i.e. "touch $out/foo; ln $out/foo $out/bar"). */
     if (options.uidRange && (st.st_uid < options.uidRange->first || st.st_uid > options.uidRange->second)) {
         if (S_ISDIR(st.st_mode) || !inodesSeen.count(Inode(st.st_dev, st.st_ino)))
-            throw BuildError(BuildResult::Failure::OutputRejected, "invalid ownership on file %1%", PathFmt(path));
+            throw Error("invalid ownership on file %1%", PathFmt(path));
         mode_t mode = st.st_mode & ~S_IFMT;
         assert(
             S_ISLNK(st.st_mode)

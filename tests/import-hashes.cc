@@ -135,7 +135,8 @@ int main(int argc, char ** argv)
 		fmt("%d zero-size entries", zeroLinks));
 
 	/* cross-path dedup through the capture: a second import sharing
-	   contentA must link against the farm entry made above */
+	   contentA dedups against the farm entry made above while the
+	   import streams (tryDedup), so optimise finds nothing left */
 	auto acc2 = make_ref<MemorySourceAccessor>();
 	acc2->addFile(CanonPath("again"), std::string(contentA));
 	acc2->addFile(CanonPath("fresh"), std::string(300, 'c'));
@@ -144,8 +145,10 @@ int main(int argc, char ** argv)
 	auto path2 = importTree(local, acc2, "hashtest2", fileHashes2);
 	OptimiseStats stats2;
 	local->optimisePath(path2, stats2, &fileHashes2);
-	ok(stats2.filesLinked == 1, "second import links shared content via capture",
-		fmt("linked %d", stats2.filesLinked));
+	ok(fileHashes2.dedupedFiles == 1 && stats2.filesLinked == 0,
+		"second import deduped against the farm while streaming",
+		fmt("deduped %d, linked %d", fileHashes2.dedupedFiles,
+			stats2.filesLinked));
 
 	struct stat stTop, stAgain;
 	ok(::lstat((realPath + "/top").c_str(), &stTop) == 0

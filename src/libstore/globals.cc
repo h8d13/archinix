@@ -1,5 +1,5 @@
 #include "nix/store/globals.hh"
-#include "nix/store/profiles.hh"
+#include "nix/store/global-paths.hh"
 #include "nix/util/config-impl.hh"
 #include "nix/util/config-global.hh"
 #include "nix/util/current-process.hh"
@@ -7,19 +7,15 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/args.hh"
 #include "nix/util/abstract-setting-to-json.hh"
-#include "nix/util/compute-levels.hh"
 #include "nix/util/executable-path.hh"
-#include "nix/store/filetransfer.hh"
 
 #include <algorithm>
 #include <map>
 #include <mutex>
 #include <thread>
 
-#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
-#  include <sys/utsname.h>
 
 #ifdef __GLIBC__
 #  include <gnu/lib-names.h>
@@ -36,11 +32,9 @@ namespace nix {
 
 void Settings::anchor() {}
 
-void NarInfoDiskCacheSettings::anchor() {}
 
-void LogFileSettings::anchor() {}
 
-void AutoAllocateUidSettings::anchor() {}
+
 
 Settings settings;
 
@@ -58,18 +52,6 @@ Settings::Settings()
     buildUsersGroup = isRootUser() ? "nixbld" : "";
     allowSymlinkedStore = getEnv("NIX_IGNORE_SYMLINK_STORE") == "1";
 
-    /* Backwards compatibility. */
-    auto s = getEnv("NIX_REMOTE_SYSTEMS");
-    if (s) {
-        Strings ss;
-        for (auto & p : tokenizeString<Strings>(*s, ":"))
-            ss.push_back("@" + p);
-        builders = concatStringsSep("\n", ss);
-    }
-
-#ifdef SANDBOX_SHELL
-    sandboxPaths = {{"/bin/sh", {.source = SANDBOX_SHELL}}};
-#endif
 }
 
 void loadConfFile(AbstractConfig & config)
@@ -137,229 +119,9 @@ const std::vector<std::filesystem::path> & nixUserConfFiles()
     return files;
 }
 
-unsigned int Settings::getDefaultCores()
-{
-    const unsigned int concurrency = std::max(1U, std::thread::hardware_concurrency());
-    const unsigned int maxCPU = getMaxCPU();
-
-    if (maxCPU > 0)
-        return maxCPU;
-    else
-        return concurrency;
-}
-
-
-StringSet Settings::getDefaultSystemFeatures()
-{
-    /* For backwards compatibility, accept some "features" that are
-       used in Nixpkgs to route builds to certain machines but don't
-       actually require anything special on the machines. */
-    StringSet features{"nixos-test", "benchmark", "big-parallel"};
-
-    features.insert("uid-range");
-
-    if (access("/dev/kvm", R_OK | W_OK) == 0)
-        features.insert("kvm");
-
-
-    return features;
-}
-
-StringSet Settings::getDefaultExtraPlatforms()
-{
-    StringSet extraPlatforms;
-
-    if (std::string{NIX_LOCAL_SYSTEM} == "x86_64-linux" && !isWSL1())
-        extraPlatforms.insert("i686-linux");
-
-    StringSet levels = computeLevels();
-    for (auto iter = levels.begin(); iter != levels.end(); ++iter)
-        extraPlatforms.insert(*iter + "-linux");
-
-    return extraPlatforms;
-}
-
-bool Settings::isWSL1()
-{
-    struct utsname utsbuf;
-    uname(&utsbuf);
-    // WSL1 uses -Microsoft suffix
-    // WSL2 uses -microsoft-standard suffix
-    return hasSuffix(utsbuf.release, "-Microsoft");
-}
-
-const ExternalBuilder * LocalSettings::findExternalDerivationBuilderIfSupported(const Derivation & drv)
-{
-    if (auto it = std::ranges::find_if(
-            externalBuilders.get(), [&](const auto & handler) { return handler.systems.contains(drv.platform); });
-        it != externalBuilders.get().end())
-        return &*it;
-    return nullptr;
-}
-
-ProfileDirsOptions Settings::getProfileDirsOptions() const
-{
-    return {
-        .nixStateDir = nixStateDir,
-        .useXDGBaseDirectories = useXDGBaseDirectories,
-    };
-}
 
 std::string nixVersion = PACKAGE_VERSION;
 
-NLOHMANN_JSON_SERIALIZE_ENUM(
-    SandboxMode,
-    {
-        {SandboxMode::smEnabled, true},
-        {SandboxMode::smRelaxed, "relaxed"},
-        {SandboxMode::smDisabled, false},
-    });
-
-template<>
-SandboxMode BaseSetting<SandboxMode>::parse(const std::string & str) const
-{
-    if (str == "true")
-        return smEnabled;
-    else if (str == "relaxed")
-        return smRelaxed;
-    else if (str == "false")
-        return smDisabled;
-    else
-        throw UsageError("option '%s' has invalid value '%s'", name, str);
-}
-
-template<>
-struct BaseSetting<SandboxMode>::trait
-{
-    static constexpr bool appendable = false;
-};
-
-template<>
-std::string BaseSetting<SandboxMode>::to_string() const
-{
-    if (value == smEnabled)
-        return "true";
-    else if (value == smRelaxed)
-        return "relaxed";
-    else if (value == smDisabled)
-        return "false";
-    else
-        unreachable();
-}
-
-template<>
-void BaseSetting<SandboxMode>::convertToArg(Args & args, const std::string & category)
-{
-    args.addFlag({
-        .longName = name,
-        .aliases = aliases,
-        .description = "Enable sandboxing.",
-        .category = category,
-        .handler = {[this]() { override(smEnabled); }},
-    });
-    args.addFlag({
-        .longName = "no-" + name,
-        .aliases = aliases,
-        .description = "Disable sandboxing.",
-        .category = category,
-        .handler = {[this]() { override(smDisabled); }},
-    });
-    args.addFlag({
-        .longName = "relaxed-" + name,
-        .aliases = aliases,
-        .description = "Enable sandboxing, but allow builds to disable it.",
-        .category = category,
-        .handler = {[this]() { override(smRelaxed); }},
-    });
-}
-
-void to_json(nlohmann::json & j, const ChrootPath & cp)
-{
-    j = nlohmann::json{{"source", cp.source.string()}, {"optional", cp.optional}};
-}
-
-void from_json(const nlohmann::json & j, ChrootPath & cp)
-{
-    cp.source = j.at("source").get<std::string>();
-    cp.optional = j.at("optional").get<bool>();
-}
-
-template<>
-PathsInChroot BaseSetting<PathsInChroot>::parse(const std::string & str) const
-{
-    PathsInChroot pathsInChroot;
-    for (auto i : tokenizeString<StringSet>(str)) {
-        if (i.empty())
-            continue;
-        bool optional = false;
-        if (i[i.size() - 1] == '?') {
-            optional = true;
-            i.pop_back();
-        }
-        size_t p = i.find('=');
-        std::string inside, outside;
-        if (p == std::string::npos) {
-            inside = i;
-            outside = i;
-        } else {
-            inside = i.substr(0, p);
-            outside = i.substr(p + 1);
-        }
-        pathsInChroot[inside] = {.source = outside, .optional = optional};
-    }
-    return pathsInChroot;
-}
-
-template<>
-std::string BaseSetting<PathsInChroot>::to_string() const
-{
-    std::vector<std::string> accum;
-    for (auto & [name, cp] : value) {
-        auto nameStr = name.string();
-        auto sourceStr = cp.source.string();
-        std::string s = name == cp.source ? nameStr : nameStr + "=" + sourceStr;
-        if (cp.optional)
-            s += "?";
-        accum.push_back(std::move(s));
-    }
-    return concatStringsSep(" ", accum);
-}
-
-unsigned int MaxBuildJobsSetting::parse(const std::string & str) const
-{
-    if (str == "auto")
-        return std::max(1U, std::thread::hardware_concurrency());
-    else {
-        if (auto n = string2Int<decltype(value)>(str))
-            return *n;
-        else
-            throw UsageError("configuration setting '%s' should be 'auto' or an integer", name);
-    }
-}
-
-template<>
-LocalSettings::ExternalBuilders BaseSetting<LocalSettings::ExternalBuilders>::parse(const std::string & str) const
-{
-    try {
-        return nlohmann::json::parse(str).template get<LocalSettings::ExternalBuilders>();
-    } catch (std::exception & e) {
-        throw UsageError("parsing setting '%s': %s", name, e.what());
-    }
-}
-
-template<>
-std::string BaseSetting<LocalSettings::ExternalBuilders>::to_string() const
-{
-    return nlohmann::json(value).dump();
-}
-
-template<>
-void BaseSetting<PathsInChroot>::appendOrSet(PathsInChroot newValue, bool append)
-{
-    if (!append)
-        value.clear();
-    value.insert(std::make_move_iterator(newValue.begin()), std::make_move_iterator(newValue.end()));
-}
 
 template<>
 struct BaseSetting<std::vector<StoreReference>>::trait
@@ -500,19 +262,6 @@ void initLibStore(bool loadConfig)
         loadConfFile(globalConfig);
 
     preloadNSS();
-
-    /* Because of an objc quirk[1], calling curl_global_init for the first time
-       after fork() will always result in a crash.
-       Up until now the solution has been to set OBJC_DISABLE_INITIALIZE_FORK_SAFETY
-       for every nix process to ignore that error.
-       Instead of working around that error we address it at the core -
-       by calling curl_global_init here, which should mean curl will already
-       have been initialized by the time we try to do so in a forked process.
-
-       [1]
-       https://github.com/apple-oss-distributions/objc4/blob/01edf1705fbc3ff78a423cd21e03dfc21eb4d780/runtime/objc-initialize.mm#L614-L636
-    */
-    curl_global_init(CURL_GLOBAL_ALL);
 
     initLibStoreDone = true;
 }
