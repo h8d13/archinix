@@ -5,30 +5,6 @@
 
 namespace nix {
 
-class RefScanSink : public Sink
-{
-    StringSet hashes;
-    StringSet seen;
-
-    std::string tail;
-
-    void anchor() override;
-
-public:
-
-    RefScanSink(StringSet && hashes)
-        : hashes(hashes)
-    {
-    }
-
-    StringSet & getResult()
-    {
-        return seen;
-    }
-
-    void operator()(std::string_view data) override;
-};
-
 struct RewritingSink : Sink
 {
 private:

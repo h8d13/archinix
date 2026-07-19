@@ -597,12 +597,6 @@ bool LocalStore::upgradeDBSchema(State & state, bool dryRun)
         schemaMigrations.insert(migrationName);
     };
 
-    if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations))
-        maybeUpgrade(
-            "20251017-ca-derivations",
-#include "ca-specific-schema.sql.gen.hh"
-        );
-
     maybeUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
 
     return ret;

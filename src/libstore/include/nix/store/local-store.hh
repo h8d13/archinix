@@ -5,7 +5,7 @@
 
 #include "nix/store/pathlocks.hh"
 #include "nix/store/store-api.hh"
-#include "nix/store/indirect-root-store.hh"
+#include "nix/store/local-fs-store.hh"
 #include "nix/util/sync.hh"
 
 #include <chrono>
@@ -168,7 +168,7 @@ public:
 
 MakeError(PathInUse, Error);
 
-class LocalStore : public virtual IndirectRootStore, public virtual GcStore
+class LocalStore : public virtual LocalFSStore, public virtual GcStore
 {
     void anchor() override;
 
@@ -337,14 +337,16 @@ private:
 public:
 
     /**
-     * Implementation of IndirectRootStore::addIndirectRoot().
-     *
-     * The weak reference merely is a symlink to `path' from
-     * /nix/var/nix/gcroots/auto/<hash of `path'>.
+     * The permanent root is just the user-facing symlink; roots here
+     * live inside the scanned gcroots dir, so the historical
+     * gcroots/auto indirection layer is gone.
      */
-    void addIndirectRoot(const std::filesystem::path & path) override;
+    std::filesystem::path
+    addPermRoot(const StorePath & storePath, const std::filesystem::path & gcRoot) override;
 
 private:
+
+    void makeSymlink(const std::filesystem::path & link, const std::filesystem::path & target);
 
     void findTempRoots(Roots & roots, bool censor);
 

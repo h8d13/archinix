@@ -123,7 +123,6 @@ subdir('nix-meson-build-support/generate-header')
 generated_headers = []
 foreach header : [
   'schema.sql',
-  'ca-specific-schema.sql',
 ]
   generated_headers += gen_header.process(header)
 endforeach
@@ -200,14 +199,12 @@ sources = files(
   'export-import.cc',
   'gc.cc',
   'globals.cc',
-  'indirect-root-store.cc',
   'local-fs-store.cc',
   'local-gc.cc',
   'local-store.cc',
   'misc.cc',
   'optimise-store.cc',
   'path-info.cc',
-  'path-references.cc',
   'path.cc',
   'pathlocks.cc',
   'posix-fs-canonicalise.cc',

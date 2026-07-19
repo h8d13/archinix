@@ -1,60 +1,14 @@
 #include "nix/store/references.hh"
-#include "nix/store/path.hh"
 #include "nix/util/hash.hh"
-#include "nix/util/base-nix-32.hh"
 
 #include <cstdlib>
 #include <algorithm>
 
 namespace nix {
 
-void RefScanSink::anchor() {}
-
 void HashModuloSink::anchor() {}
 
 void RewritingSink::anchor() {}
-
-static constexpr auto refLength = StorePath::HashLen;
-
-static void search(std::string_view s, StringSet & hashes, StringSet & seen)
-{
-    for (size_t i = 0; i + refLength <= s.size();) {
-        int j;
-        bool match = true;
-        for (j = refLength - 1; j >= 0; --j)
-            if (!BaseNix32::lookupReverse(s[i + j])) {
-                i += j + 1;
-                match = false;
-                break;
-            }
-        if (!match)
-            continue;
-        std::string ref(s.substr(i, refLength));
-        if (hashes.erase(ref)) {
-            debug("found reference to '%1%' at offset '%2%'", ref, i);
-            seen.insert(ref);
-        }
-        ++i;
-    }
-}
-
-void RefScanSink::operator()(std::string_view data)
-{
-    /* It's possible that a reference spans the previous and current
-       fragment, so search in the concatenation of the tail of the
-       previous fragment and the start of the current fragment. */
-    auto s = tail;
-    auto tailLen = std::min(data.size(), refLength);
-    s.append(data.data(), tailLen);
-    search(s, hashes, seen);
-
-    search(data, hashes, seen);
-
-    auto rest = refLength - tailLen;
-    if (rest < tail.size())
-        tail = tail.substr(tail.size() - rest);
-    tail.append(data.data() + data.size() - tailLen, tailLen);
-}
 
 RewritingSink::RewritingSink(const std::string & from, const std::string & to, Sink & nextSink)
     : RewritingSink({{from, to}}, nextSink)
