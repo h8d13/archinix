@@ -12,13 +12,6 @@ for t in import-dir rm-path export-path import-path; do
 	g++ -std=c++23 -O2 "arch/$t.cc" -o "build/$t" \
 		$(pkg-config --cflags --libs nix-store nix-util)
 done
-# C ABI consumer: build.sh proves the C wrappers link, this proves they
-# run. pkg-config drags -std=c++23 in via Requires.private cflags (only
-# correct for C++ consumers), strip it; the wrapper .so's resolve their
-# nix::* symbols against the C++ libs, so link those explicitly too.
-CAPI_CFLAGS=$(pkg-config --cflags nix-store-c nix-util-c | sed 's/-std=c++23//g')
-gcc -std=c11 -O2 tests/c-api.c -o build/c-api $CAPI_CFLAGS \
-	$(pkg-config --libs nix-store-c nix-util-c nix-store nix-util)
 
 FAIL=0
 run() {	# run <name> <command...>: fresh root, restore perms, cleanup
@@ -30,7 +23,6 @@ run() {	# run <name> <command...>: fresh root, restore perms, cleanup
 }
 
 run needed-drift sh -e tests/needed-drift.sh
-run c-api build/c-api
 run parallel-optimise build/parallel-optimise
 run import-hashes build/import-hashes
 run nar-parse build/nar-parse

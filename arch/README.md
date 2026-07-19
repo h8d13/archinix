@@ -8,6 +8,8 @@ Why: pacman live updates replace `/usr/lib/modules` under the running
 kernel (module tree effectively unloaded until reboot). Here an update
 builds the *next* generation offline; the running root is never touched.
 
+![SchemaArchinix](./schema.png)
+
 ## Tools
 
 | script | role |

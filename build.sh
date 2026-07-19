@@ -3,7 +3,7 @@
 PREFIX=${PREFIX:-$PWD/build/prefix}
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
-for lib in libutil libstore libutil-c libstore-c; do
+for lib in libutil libstore; do
 	meson setup "build/$lib" "src/$lib" --prefix "$PREFIX" \
 		-Dbuildtype=release
 	ninja -C "build/$lib" install

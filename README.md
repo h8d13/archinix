@@ -3,7 +3,7 @@
 ## [Nixstore](src/)
 
 Local-store-only extraction of the Nix store layer (libnixutil,
-libnixstore + C API) from [NixOS/nix](https://github.com/NixOS/nix)
+libnixstore) from [NixOS/nix](https://github.com/NixOS/nix)
 2.36.0 (`40f375fa`), buildable on any Linux without Nix: `./build.sh`.
 
 > [!NOTE]
@@ -22,9 +22,7 @@ pacman -S --needed meson ninja gcc pkgconf boost boost-libs openssl \
 
 API reference:
 
-C++ headers install to `include/nix/{util,store}/` ([internal API docs](https://hydra.nixos.org/job/nix/master/internal-api-docs/latest/download-by-type/doc/internal-api-docs))
-
-C API in `nix_api_store.h` ([external API docs](https://hydra.nixos.org/job/nix/master/external-api-docs/latest/download-by-type/doc/external-api-docs)).
+C++ headers install to `include/nix/{util,store}/` ([internal API docs](https://hydra.nixos.org/job/nix/master/internal-api-docs/latest/download-by-type/doc/internal-api-docs)).
 
 ---
 
