@@ -75,11 +75,13 @@ what the headless tests ride on). `passwd root` restores login prompts,
 but the password lives in the tmpfs upper like any write: commit it,
 or the next boot is passwordless autologin again.
 
-## Real hardware (UEFI only, Secure Boot off)
+## Real hardware (UEFI only)
+
+### From releases: [ISO](https://github.com/h8d13/archinix/releases)
 
 Write the ISO to a stick (`dd if=build/nixarch.iso of=/dev/sdX bs=4M
 oflag=direct status=progress`), boot it on the target, shape the system,
-then install what you actually run:
+then install what you are running:
 
 ```
 nixgen-setup /dev/nvme0n1 my-install --fs btrfs
@@ -90,6 +92,8 @@ GPT (ESP + NIXSTORE), a standalone GRUB whose whole job is sourcing
 from the running root. It refuses to run until the device path is typed
 back; everything on the target is lost. `--fs` picks the store
 filesystem; run it with no arguments to list them.
+
+## VM-testing
 
 Dry-run the whole thing first: `arch/uefi-vm.sh` (argless) boots the ISO
 with a single blank disk at `/dev/vda`, exactly the shape of the real
