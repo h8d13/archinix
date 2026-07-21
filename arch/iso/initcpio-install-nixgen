@@ -17,10 +17,10 @@ build() {
 	# never appears for optical/ISO devices
 	add_binary /usr/lib/udev/cdrom_id
 	add_file /usr/lib/udev/rules.d/60-cdrom_id.rules
-	# udevadm arrives with systemd-udev-trigger.service anyway; named
-	# here because nixgen-store calls `udevadm wait` directly
-	add_binary /usr/bin/udevadm
-	add_binary /usr/bin/losetup
+	# no add_binary for udevadm or losetup: the systemd hook already
+	# pulls both in (udevadm via systemd-udev-trigger.service's
+	# ExecStart, losetup with the util-linux set), and listing them
+	# again only makes this hook look like it costs more than it does
 
 	# runtime: a generator turns nixgen= into sysroot.mount, one service
 	# stages what that mount consumes, one binds the store into the new

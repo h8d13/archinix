@@ -79,7 +79,11 @@ mkdir -p "$ISO/boot/grub"
 unshare -r "$GEN1/usr/lib/ld-linux-x86-64.so.2" --library-path "$GEN1/usr/lib" \
 	"$GEN1/usr/bin/mksquashfs" "$SDIR" "$ISO/nixstore.squashfs" \
 	-comp zstd -noappend -wildcards -no-hardlinks \
-	-e '.links' 'tmp-*' '*/var/cache/pacman/pkg/*'
+	-e '.links' 'tmp-*' '*/var/cache/pacman/pkg/*' '*-arch-base'
+	# *-arch-base: the bootstrap base carries no kernel, so nothing in
+	# the box can boot or build from it; it is a host-side build input
+	# that only rode along because the whole store gets squashed (-19MB).
+	# By suffix, not hash: re-bootstrapping mints a new one
 	# -no-hardlinks: store dedup hardlinks would survive into the squash
 	# and alias unrelated paths through one inode under the boot overlay
 	# (writing wtmp rewrote /etc/subuid); squashfs dedups by content, so

@@ -38,7 +38,7 @@ kernel. Store filesystem is ext4 by default, with btrfs, xfs and f2fs
 in the table ([`arch/nixgen/nixgen-fs`](arch/nixgen/nixgen-fs))
 
 `nixgen-setup /dev/disk --fs xfs` installs current running generation to a hard disk.
-> [!NOTE]
+> [!IMPORTANT]
 > The ISO is read-only but, so is a running system. Otherwise vanishes on reboot.
 
 Then, in the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
