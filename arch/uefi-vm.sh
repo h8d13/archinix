@@ -5,9 +5,9 @@
 # booted box, which is what the fresh/keep/boot modes exercise.
 # Derived from archinstoo's TVM.
 #
-# Host artifacts (in build/, git-ignored):
-#   build/ovmf-vars.fd      persistent UEFI NVRAM (copied from OVMF_VARS)
-#   build/vm-target.qcow2   blank disk to install onto (nixgen-setup)
+# Host artifacts (in build/vm/, git-ignored):
+#   build/vm/ovmf-vars.fd     persistent UEFI NVRAM (copied from OVMF_VARS)
+#   build/vm/vm-target.qcow2  blank disk to install onto (nixgen-setup)
 #
 # Usage (argless is the real workflow: ISO in the drive, one empty disk,
 # install onto it with nixgen-setup):
@@ -44,9 +44,9 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO="${ISO:-$REPO/build/nixarch.iso}"
-STORE="${STORE:-$REPO/build/nixstore.img}"
-TARGET="$REPO/build/vm-target.qcow2"
-VARS="$REPO/build/ovmf-vars.fd"
+STORE="${STORE:-$REPO/build/vm/nixstore.img}"
+TARGET="$REPO/build/vm/vm-target.qcow2"
+VARS="$REPO/build/vm/ovmf-vars.fd"
 DISK_SIZE="${DISK_SIZE:-30G}"
 RAM="${RAM:-2G}"
 CPUS="${CPUS:-2}"
@@ -58,6 +58,7 @@ GL="${GL:-off}"
 AUDIO_BACKEND="${AUDIO_BACKEND:-none}"
 SERIAL="${SERIAL:-off}"
 ARG="${1:-fresh}"
+mkdir -p "$REPO/build/vm"
 
 err() {
 	echo "ERROR: $*" >&2

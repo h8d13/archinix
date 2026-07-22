@@ -7,8 +7,9 @@
 cd "$(dirname "$0")/../.."
 . arch/nixgen/nixgen-fs
 
-IMG=${1:-build/nixstore.img} SIZE=${2:-8G} FS=${3:-ext4}
+IMG=${1:-build/vm/nixstore.img} SIZE=${2:-8G} FS=${3:-ext4}
 is_supported_fs "$FS" || exit 1
+mkdir -p "$(dirname "$IMG")"
 rm -f "$IMG"
 truncate -s "$SIZE" "$IMG"
 fs_mkfs "$FS" "$IMG" NIXSTORE

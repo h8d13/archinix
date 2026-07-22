@@ -23,7 +23,8 @@ for t in rm-path import-dir export-path import-path; do
 		$(PKG_CONFIG_PATH=$P/lib/pkgconfig pkg-config --cflags --libs nix-store nix-util)
 done
 
-TMP=$(mktemp -d "$REPO/build/iso.XXXXXX")
+mkdir -p "$REPO/build/tmp"
+TMP=$(mktemp -d "$REPO/build/tmp/iso.XXXXXX")
 trap 'unshare -r rm -rf "$TMP"' EXIT
 
 # Existing nixarch generations are reused so grub/squash tweaks rebuild

@@ -7,13 +7,14 @@
 # (OVMF probe, persistent NVRAM, SERIAL mux) where install-test drives
 # bare qemu over a unix socket.
 # usage: serial-test.py [phase1|phase2]   (no arg = both)
-# transcript: build/serial-test.log
+# transcript: build/tmp/serial-test.log
 import os, pty, select, subprocess, sys, time
 
 REPO = os.path.dirname(os.path.dirname(
 	os.path.dirname(os.path.abspath(__file__))))
-LOG = os.path.join(REPO, "build/serial-test.log")
+LOG = os.path.join(REPO, "build/tmp/serial-test.log")
 NAME = "serial-test"
+os.makedirs(os.path.dirname(LOG), exist_ok=True)
 
 def run_phase(mode, steps, boot_timeout):
 	log = open(LOG, "ab")

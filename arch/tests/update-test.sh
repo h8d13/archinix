@@ -21,8 +21,9 @@ cd "$(dirname "$0")/../.."
 
 ACCEL=
 [ -w /dev/kvm ] && ACCEL="-accel kvm"
-LOG=build/update-test.log
-SOCK=build/update-test.sock
+LOG=build/tmp/update-test.log
+SOCK=build/tmp/update-test.sock
+mkdir -p build/tmp
 rm -f "$LOG" "$SOCK"
 
 drive() { python3 - "$SOCK" "$LOG" "$@" <<'PY'
@@ -98,7 +99,7 @@ fi
 arch/iso/mkstoredisk.sh
 echo "--- boot 1: ISO + fresh disk, offline kernel version change in the box"
 qemu-system-x86_64 $ACCEL -m 2G -boot d -cdrom build/nixarch.iso \
-	-drive file=build/nixstore.img,format=raw,if=virtio \
+	-drive file=build/vm/nixstore.img,format=raw,if=virtio \
 	-nic user,model=virtio-net-pci \
 	-display none -no-reboot -serial "unix:$SOCK,server,nowait" &
 QPID=$!
@@ -121,38 +122,38 @@ if grep -aq "directory permissions differ" "$LOG"; then
 	exit 1
 fi
 
-debugfs -R "cat /entries.cfg" build/nixstore.img 2>/dev/null \
+debugfs -R "cat /entries.cfg" build/vm/nixstore.img 2>/dev/null \
 	| grep -q "nixgen=$NEWGEN" || { echo "FAIL: no GRUB entry on disk"; exit 1; }
 echo "GRUB entry present on store disk"
 
 # the ISO kernel must have been replaced by the snapshot one, and the
 # ALPM hook must have rebuilt the initramfs (nixgen hook included)
-rm -f build/iso-vmlinuz build/iso-initrd build/test-vmlinuz build/test-initrd
+rm -f build/tmp/iso-vmlinuz build/tmp/iso-initrd build/tmp/test-vmlinuz build/tmp/test-initrd
 xorriso -osirrox on -indev build/nixarch.iso \
-	-extract /boot/vmlinuz-linux build/iso-vmlinuz \
-	-extract /boot/initramfs-linux.img build/iso-initrd
-debugfs -R "dump /nix/store/$NEWGEN/boot/vmlinuz-linux build/test-vmlinuz" \
-	build/nixstore.img 2>/dev/null
-debugfs -R "dump /nix/store/$NEWGEN/boot/initramfs-linux.img build/test-initrd" \
-	build/nixstore.img 2>/dev/null
-[ -s build/test-vmlinuz ] && [ -s build/test-initrd ] \
+	-extract /boot/vmlinuz-linux build/tmp/iso-vmlinuz \
+	-extract /boot/initramfs-linux.img build/tmp/iso-initrd
+debugfs -R "dump /nix/store/$NEWGEN/boot/vmlinuz-linux build/tmp/test-vmlinuz" \
+	build/vm/nixstore.img 2>/dev/null
+debugfs -R "dump /nix/store/$NEWGEN/boot/initramfs-linux.img build/tmp/test-initrd" \
+	build/vm/nixstore.img 2>/dev/null
+[ -s build/tmp/test-vmlinuz ] && [ -s build/tmp/test-initrd ] \
 	|| { echo "FAIL: kernel/initramfs not extracted from img"; exit 1; }
 if [ -z "$FAST" ]; then
-	cmp -s build/iso-vmlinuz build/test-vmlinuz \
+	cmp -s build/tmp/iso-vmlinuz build/tmp/test-vmlinuz \
 		&& { echo "FAIL: kernel unchanged (archive install broken)"; exit 1; }
-	cmp -s build/iso-initrd build/test-initrd \
+	cmp -s build/tmp/iso-initrd build/tmp/test-initrd \
 		&& { echo "FAIL: initramfs not regenerated"; exit 1; }
 	echo "kernel version changed, initramfs regenerated"
 fi
 
 echo "--- boot 2: new generation from store disk only (no ISO)"
-rm -f "$SOCK" build/install-test.img
-truncate -s 6G build/install-test.img
+rm -f "$SOCK" build/tmp/install-test.img
+truncate -s 6G build/tmp/install-test.img
 qemu-system-x86_64 $ACCEL -m 2G \
-	-kernel build/test-vmlinuz -initrd build/test-initrd \
+	-kernel build/tmp/test-vmlinuz -initrd build/tmp/test-initrd \
 	-append "nixgen=$NEWGEN console=ttyS0,115200" \
-	-drive file=build/nixstore.img,format=raw,if=virtio \
-	-drive file=build/install-test.img,format=raw,if=virtio \
+	-drive file=build/vm/nixstore.img,format=raw,if=virtio \
+	-drive file=build/tmp/install-test.img,format=raw,if=virtio \
 	-nic user,model=virtio-net-pci \
 	-display none -no-reboot -serial "unix:$SOCK,server,nowait" &
 QPID=$!
@@ -223,7 +224,7 @@ drive "NIXARCH BOOT OK" \
 	"PROMPT_TTY1" \
 	"poweroff" > /dev/null || { kill $QPID 2>/dev/null; exit 1; }
 wait $QPID
-rm -f build/iso-vmlinuz build/iso-initrd build/test-vmlinuz build/test-initrd
+rm -f build/tmp/iso-vmlinuz build/tmp/iso-initrd build/tmp/test-vmlinuz build/tmp/test-initrd
 
 echo "--- boot 3: installed disk alone under OVMF (nixgen-setup output)"
 OVMF_CODE= OVMF_VARS=
@@ -238,12 +239,12 @@ for pair in \
 	fi
 done
 [ -n "$OVMF_CODE" ] || { echo "FAIL: no OVMF firmware (edk2-ovmf)"; exit 1; }
-cp "$OVMF_VARS" build/test-ovmf-vars.fd
+cp "$OVMF_VARS" build/tmp/test-ovmf-vars.fd
 rm -f "$SOCK"
 qemu-system-x86_64 $ACCEL -machine q35 -m 2G \
 	-drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
-	-drive if=pflash,format=raw,file=build/test-ovmf-vars.fd \
-	-drive file=build/install-test.img,format=raw,if=virtio \
+	-drive if=pflash,format=raw,file=build/tmp/test-ovmf-vars.fd \
+	-drive file=build/tmp/install-test.img,format=raw,if=virtio \
 	-nic user,model=virtio-net-pci \
 	-display none -no-reboot -serial "unix:$SOCK,server,nowait" &
 QPID=$!
@@ -252,12 +253,12 @@ drive "NIXARCH BOOT OK" \
 	"-inst-test" \
 	"poweroff" > /dev/null || { kill $QPID 2>/dev/null; exit 1; }
 wait $QPID
-rm -f build/install-test.img build/test-ovmf-vars.fd
+rm -f build/tmp/install-test.img build/tmp/test-ovmf-vars.fd
 echo "installed disk booted under OVMF"
 
 grep -aq "nixgen=$NEWGEN" "$LOG" || { echo "FAIL: marker missing"; exit 1; }
 # the removed generation's entry is gone, the surviving one remains
-ENTRIES=$(debugfs -R "cat /entries.cfg" build/nixstore.img 2>/dev/null)
+ENTRIES=$(debugfs -R "cat /entries.cfg" build/vm/nixstore.img 2>/dev/null)
 echo "$ENTRIES" | grep -q "test-rm" \
 	&& { echo "FAIL: pruned GRUB entry still on disk"; exit 1; }
 # test-up went over the wire: exported, removed, imported back,

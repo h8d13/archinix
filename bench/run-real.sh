@@ -36,7 +36,7 @@ TREE=$1
 [ -d "$TREE" ] || { echo "no tree to bench (run arch/bootstrap.sh or pass one)" >&2; exit 1; }
 TREE=$(realpath "$TREE")
 
-WORKPARENT=${2:-$REPO/build}
+WORKPARENT=${2:-$REPO/build/tmp}
 mkdir -p "$WORKPARENT"
 WORK=$(mktemp -d "$WORKPARENT/benchreal.XXXXXX")
 # chmod DIRS only before cleanup: the variants are cp -al copies whose
@@ -46,7 +46,8 @@ WORK=$(mktemp -d "$WORKPARENT/benchreal.XXXXXX")
 # dir write permission.
 trap 'find "$WORK" -type d -exec chmod u+w {} + ; rm -rf "$WORK"' EXIT
 
-g++ -std=c++23 -O2 bench/bench-import.cc -o build/bench-import \
+mkdir -p build/tmp
+g++ -std=c++23 -O2 bench/bench-import.cc -o build/tmp/bench-import \
 	$(pkg-config --cflags --libs nix-store nix-util)
 [ -x build/import-dir ] || g++ -std=c++23 -O2 arch/import-dir.cc -o build/import-dir \
 	$(pkg-config --cflags --libs nix-store nix-util)
@@ -70,7 +71,7 @@ fi
 
 echo
 echo "--- capture off/on, fresh store each (cold farm)"
-LD_LIBRARY_PATH=$P/lib build/bench-import "$WORK/ab" --tree "$TREE"
+LD_LIBRARY_PATH=$P/lib build/tmp/bench-import "$WORK/ab" --tree "$TREE"
 
 echo
 echo "--- fresh install: import-dir into empty store"

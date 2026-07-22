@@ -12,10 +12,11 @@
 # label instead of going straight to the hunt put 10s here.
 cd "$(dirname "$0")/../.."
 
-LOG=build/isohunt-test.log
+LOG=build/tmp/isohunt-test.log
 NOISE=${NOISE:-0}
 LIMIT=${LIMIT:-15}
-rm -f build/isohunt-vmlinuz build/isohunt-initrd "$LOG"
+mkdir -p build/tmp
+rm -f build/tmp/isohunt-vmlinuz build/tmp/isohunt-initrd "$LOG"
 
 # store mtimes are canonicalised, so there is no newest to pick
 G1=
@@ -25,18 +26,18 @@ for g in build/archstore/nix/store/*-nixarch-1; do
 	G1=$(basename "$g")
 done
 [ -n "$G1" ] || { echo "no nixarch generation: run arch/iso/mkiso.sh" >&2; exit 1; }
-[ -f build/nixstore.img ] || { echo "no build/nixstore.img: run arch/iso/mkstoredisk.sh" >&2; exit 1; }
+[ -f build/vm/nixstore.img ] || { echo "no build/vm/nixstore.img: run arch/iso/mkstoredisk.sh" >&2; exit 1; }
 
 xorriso -osirrox on -indev build/nixarch.iso \
-	-extract /boot/vmlinuz-linux build/isohunt-vmlinuz \
-	-extract /boot/initramfs-linux.img build/isohunt-initrd
+	-extract /boot/vmlinuz-linux build/tmp/isohunt-vmlinuz \
+	-extract /boot/initramfs-linux.img build/tmp/isohunt-initrd
 
 ACCEL=
 [ -w /dev/kvm ] && ACCEL="-accel kvm"
 qemu-system-x86_64 $ACCEL -m 1536 \
-	-kernel build/isohunt-vmlinuz -initrd build/isohunt-initrd \
+	-kernel build/tmp/isohunt-vmlinuz -initrd build/tmp/isohunt-initrd \
 	-append "nixgen=$G1 nixlabel=BOGUS rd.systemd.gpt_auto=0 console=tty0 console=ttyS0,115200" \
-	-drive file=build/nixstore.img,format=raw,if=virtio \
+	-drive file=build/vm/nixstore.img,format=raw,if=virtio \
 	-drive file=build/nixarch.iso,format=raw,if=virtio \
 	-display none -no-reboot -serial "file:$LOG" &
 QPID=$!

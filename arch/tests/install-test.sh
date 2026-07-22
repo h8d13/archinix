@@ -15,10 +15,11 @@
 cd "$(dirname "$0")/../.."
 
 FS=${FS:-ext4}
-IMG=build/install-test.img
-LOG=build/install-test.log
-SOCK=build/install-test.sock
-VARS=build/install-test-vars.fd
+IMG=build/tmp/install-test.img
+LOG=build/tmp/install-test.log
+SOCK=build/tmp/install-test.sock
+VARS=build/tmp/install-test-vars.fd
+mkdir -p build/tmp
 rm -f "$LOG" "$SOCK" "$IMG" "$VARS"
 
 [ -f build/nixarch.iso ] || { echo "no build/nixarch.iso: run arch/iso/mkiso.sh" >&2; exit 1; }

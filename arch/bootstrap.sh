@@ -32,7 +32,8 @@ $UNSHARE true || {
 	UNSHARE="unshare --map-root-user"
 }
 
-TMP=$(mktemp -d "$REPO/build/bootstrap.XXXXXX")
+mkdir -p "$REPO/build/tmp"
+TMP=$(mktemp -d "$REPO/build/tmp/bootstrap.XXXXXX")
 mkdir "$TMP/root"
 trap '$UNSHARE rm -rf "$TMP"' EXIT
 

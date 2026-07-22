@@ -10,9 +10,10 @@
 # snapshot and no second boot.
 cd "$(dirname "$0")/../.."
 
-LOG=build/diskless-test.log
-SOCK=build/diskless-test.sock
+LOG=build/tmp/diskless-test.log
+SOCK=build/tmp/diskless-test.sock
 LIMIT=${LIMIT:-60}
+mkdir -p build/tmp
 rm -f "$LOG" "$SOCK"
 
 ACCEL=

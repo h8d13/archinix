@@ -69,7 +69,8 @@ trap cleanup EXIT
 BASHRC='^f	644	1100	1100	\./home/tuser/\.bashrc$'
 HOMEDIR='^d	[0-7]*	1100	1100	\./home/tuser$'
 
-TMP=$(mktemp -d "$REPO/build/meta.XXXXXX")
+mkdir -p "$REPO/build/tmp"
+TMP=$(mktemp -d "$REPO/build/tmp/meta.XXXXXX")
 
 echo "--- gen A: useradd in a sandbox on $(basename "$BASE")"
 GENOUT=$TMP/gena arch/generation.sh "$STORE" "$BASE" meta-a \

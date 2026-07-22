@@ -35,7 +35,8 @@ $UNSHARE true || {
 	UNSHARE="unshare --map-root-user"
 }
 
-TMP=$(mktemp -d "$REPO/build/gen.XXXXXX")
+mkdir -p "$REPO/build/tmp"
+TMP=$(mktemp -d "$REPO/build/tmp/gen.XXXXXX")
 mkdir "$TMP/upper" "$TMP/work" "$TMP/mnt"
 # overlayfs creates work/work with mode 000; userns root can still rm it
 trap '$UNSHARE rm -rf "$TMP"' EXIT

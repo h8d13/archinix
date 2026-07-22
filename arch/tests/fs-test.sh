@@ -7,7 +7,8 @@
 cd "$(dirname "$0")/../.."
 . arch/nixgen/nixgen-fs
 
-T=$(mktemp -d build/fs-test.XXXXXX)
+mkdir -p build/tmp
+T=$(mktemp -d build/tmp/fs-test.XXXXXX)
 trap 'rm -rf "$T"' EXIT
 rc=0
 
