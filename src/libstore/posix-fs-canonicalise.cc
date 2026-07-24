@@ -17,11 +17,15 @@ static void canonicaliseTimestampAndPermissions(const std::filesystem::path & pa
 
         /* Mask out all type related bits. */
         mode_t mode = st.st_mode & ~S_IFMT;
-        bool isDir = S_ISDIR(st.st_mode);
-        if ((mode != 0444 || isDir) && mode != 0555) {
-            mode = (st.st_mode & S_IFMT) | 0444 | (st.st_mode & S_IXUSR || isDir ? 0111 : 0);
-            chmod(path, mode);
-        }
+        /* dirs canonicalise to 0755: root-owned, so the write bit gates
+           nothing, and it is the mode nearly every dir on a real system
+           carries, which keeps the nixgen perms manifest (and its
+           boot-time copy-up replay) down to true deviations. Dir modes
+           never enter the NAR hash. Files keep 0444/0555: their
+           read-only bit is what makes the .links farm safe to share. */
+        mode_t canon = S_ISDIR(st.st_mode) ? 0755 : (st.st_mode & S_IXUSR) ? 0555 : 0444;
+        if (mode != canon)
+            chmod(path, (st.st_mode & S_IFMT) | canon);
     }
 
     if (st.st_mtime != mtimeStore) {

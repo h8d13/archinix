@@ -24,18 +24,21 @@
   through commit it branches with the config tree. `/var/lib/pacman`
   is deliberately not listed: the package db describes the static tree
   and must roll back with it.
-- **Import canonicalises permissions** (dirs 0555, files 0444/0555,
-  root-owned, no xattrs: NAR keeps only the executable bit).
-  `nixgen-savemeta` captures what that strips (modes, ownership incl.
-  symlinks, capabilities, POSIX ACLs) into
-  `etc/nixgen/{perms,caps,acls}`; `nixgen-restmeta` replays it at boot
-  (nixgen-perms.service) and inside every build sandbox. A base
-  imported without the manifest breaks the chain: pacman warns on
-  every dir and rejects its 0555 cachedir (downloads fall back to
-  /tmp = more RAM). generation.sh warns when the base lacks it;
+- **Import canonicalises permissions** (dirs 0755, files 0444/0555,
+  root-owned, no xattrs: NAR keeps only the executable bit; 0755 dirs
+  keep the manifest to true deviations instead of every dir in the
+  tree, one boot-time copy-up per row). `nixgen-savemeta` captures
+  what that strips (modes, ownership incl. symlinks, capabilities,
+  POSIX ACLs) into `etc/nixgen/{perms,caps,acls}`; `nixgen-restmeta`
+  replays it at boot (nixgen-perms.service) and inside every build
+  sandbox. A base imported without the manifest breaks the chain:
+  special bits and ownership are gone and sub-444 secrets (shadow)
+  turn world-readable on the booted view. generation.sh warns when
+  the base lacks it;
   re-bootstrap to fix. Plain 644-vs-444 file modes stay canonical on
   purpose (root bypasses them; restoring would copy-up every file),
-  except /etc/skel: useradd copies its modes to new users, so it is
+  except /etc/skel (useradd copies its modes to new users) and /root
+  (the operator's own files must not come back readonly), both
   captured whole (tests/meta-test.sh pins this).
 - **Diskless BIOS boots pay ~10s** of GRUB probing for the absent
   NIXSTORE label. Known cost, attached-disk boots don't pay it.

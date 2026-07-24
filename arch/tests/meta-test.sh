@@ -68,17 +68,32 @@ trap cleanup EXIT
 
 BASHRC='^f	644	1100	1100	\./home/tuser/\.bashrc$'
 HOMEDIR='^d	[0-7]*	1100	1100	\./home/tuser$'
+# root's own files are root:root 644 (nothing else flags them); the
+# /root whole-capture rule is what keeps them writable after a rebuild
+ROOTCFG='^f	644	0	0	\./root/test\.cfg$'
+# user-CREATED file in a fresh subdir, not a skel copy: dir and file
+# rows ride the non-root-owner rule
+USERDIR='^d	755	1100	1100	\./home/tuser/\.config$'
+USERCFG='^f	644	1100	1100	\./home/tuser/\.config/mycfg$'
 
 mkdir -p "$REPO/build/tmp"
 TMP=$(mktemp -d "$REPO/build/tmp/meta.XXXXXX")
 
 echo "--- gen A: useradd in a sandbox on $(basename "$BASE")"
 GENOUT=$TMP/gena arch/generation.sh "$STORE" "$BASE" meta-a \
-	'useradd -m -u 1100 -U tuser'
+	'useradd -m -u 1100 -U tuser && echo conf=1 > /root/test.cfg
+	mkdir -m 755 /home/tuser/.config
+	echo k=v > /home/tuser/.config/mycfg
+	chmod 644 /home/tuser/.config/mycfg
+	chown -R tuser:tuser /home/tuser/.config'
 GENA=$(cat "$TMP/gena")
 grep -q "$BASHRC" "$GENA/etc/nixgen/perms" || {
 	echo "FAIL: savemeta dropped the fresh .bashrc row; tuser rows in A:" >&2
 	grep 'tuser' "$GENA/etc/nixgen/perms" >&2 || echo "(none)" >&2
+	exit 1
+}
+grep -q "$ROOTCFG" "$GENA/etc/nixgen/perms" || {
+	echo "FAIL: savemeta dropped the fresh /root/test.cfg row" >&2
 	exit 1
 }
 
@@ -101,6 +116,16 @@ grep -q "$HOMEDIR" "$M" || {
 	echo "FAIL: home dir row lost across the rebuild" >&2
 	exit 1
 }
+grep -q "$ROOTCFG" "$M" || {
+	echo "FAIL: /root/test.cfg row lost across the rebuild" >&2
+	exit 1
+}
+for pat in "$USERDIR" "$USERCFG"; do
+	grep -q "$pat" "$M" || {
+		echo "FAIL: user .config row lost across the rebuild: $pat" >&2
+		exit 1
+	}
+done
 echo "manifest rows survived the rebuild"
 
 echo "--- replay: restmeta over an overlay of gen B"
@@ -111,11 +136,15 @@ mount -t overlay overlay \
 	-o "lowerdir=$GENB,upperdir=$TMP/upper,workdir=$TMP/work,userxattr" "$TMP/mnt"
 "$REPO/arch/nixgen/nixgen-restmeta" "$TMP/mnt"
 stat -c '%a %u %g' "$TMP/mnt/home/tuser/.bashrc"
+stat -c '%a %u %g' "$TMP/mnt/root/test.cfg"
+stat -c '%a %u %g' "$TMP/mnt/home/tuser/.config/mycfg"
 EOF
 OUT=$($UNSHARE -mpf --kill-child sh "$TMP/inner.sh")
-echo "replayed .bashrc: $OUT"
-[ "$OUT" = "644 1100 1100" ] || {
-	echo "FAIL: replay left '$OUT' on .bashrc (want '644 1100 1100')" >&2
+echo "replayed .bashrc + /root/test.cfg + user .config/mycfg: $OUT"
+[ "$OUT" = "644 1100 1100
+644 0 0
+644 1100 1100" ] || {
+	echo "FAIL: replay left '$OUT' (want 644 1100 1100 / 644 0 0 / 644 1100 1100)" >&2
 	exit 1
 }
 

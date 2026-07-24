@@ -151,9 +151,9 @@ public:
      * When set (canonical mode only), completed directories are
      * recorded here instead of being touched, children before
      * parents. For callers whose streamed dedup renames files
-     * asynchronously: a rename would both fail against an already
-     * read-only (0555) directory and bump its just-stamped mtime, so
-     * directory metadata must land after that machinery drains.
+     * asynchronously: a rename would bump the just-stamped mtime of
+     * the containing directory, so directory metadata must land after
+     * that machinery drains.
      */
     std::vector<std::filesystem::path> * deferCanonicalDirs = nullptr;
 

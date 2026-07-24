@@ -1,6 +1,6 @@
 #!/bin/sh -e
 # Capture filesystem metadata that store import will canonicalise away
-# (every dir becomes 0555 root:root, files lose special bits and
+# (every dir becomes 0755 root:root, files lose special bits and
 # ownership, all xattrs vanish: NAR keeps only the executable bit) as
 # plain data inside the tree: etc/nixgen/perms (type, mode, owner per
 # deviating path; symlink rows are ownership-only), etc/nixgen/caps
@@ -35,11 +35,14 @@ BAD=$(find . -xdev \( -path "*${TAB}*" -o -path "*${NL}*" \) -print | wc -l)
 # /etc/skel is captured whole: its modes are template data that
 # useradd copies to new users; canonical 444 there means every user
 # starts with a readonly .bashrc
+# /root too: the operator's own files are root:root 644, exactly the
+# class skipped above, and a 444 ~/foo.cfg trips every editor's
+# readonly check after commit+reboot (root only force-writes past it)
 # tmp trees are pruned (the 1777 dirs themselves stay captured):
 # runtime droppings like systemd PrivateTmp dirs vanish between the
 # walk and the import on a live commit, leaving rows with no file
 # -mindepth 1: the tree root's mode is the builder's upper mkdir (755
-# sandbox, 755 boot tmpfs, 555 iso build): capturing "." makes equal
+# sandbox, 755 boot tmpfs, 755 iso build): capturing "." makes equal
 # trees produce different manifests depending on who built them
 # nixstore mountpoints excluded: baked dirs sit under a mount on every
 # booted system, so a captured row replays onto the mounted fs; the
@@ -48,9 +51,9 @@ BAD=$(find . -xdev \( -path "*${TAB}*" -o -path "*${NL}*" \) -print | wc -l)
 find . -mindepth 1 -xdev \( -path './tmp/*' -o -path './var/tmp/*' \) -prune \
 	-o ! -path "*${TAB}*" ! -path "*${NL}*" \
 	! -path ./nixstore ! -path ./nixstoredev \
-	\( -type d ! \( -perm 555 -user 0 -group 0 \) \
+	\( -type d ! \( -perm 755 -user 0 -group 0 \) \
 	-o -type f \( -perm /7022 -o ! -perm -444 -o ! -user 0 -o ! -group 0 \
-		-o -path ./etc/skel/\* \) \
+		-o -path ./etc/skel/\* -o -path ./root/\* \) \
 	-o -type l ! \( -user 0 -group 0 \) \) \
 	-printf '%y\t%m\t%U\t%G\t%p\n' | LC_ALL=C sort -t'	' -k5 > etc/nixgen/perms
 # sorted explicit list for the same determinism reason as acls below

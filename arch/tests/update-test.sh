@@ -116,7 +116,7 @@ NEWGEN=$(echo "$OUT" | sed -n 's/.*updated: \([^ ]*\).*/\1/p')
 [ -n "$NEWGEN" ] || { echo "FAIL: no generation name captured"; exit 1; }
 echo "new generation: $NEWGEN"
 
-# restored dir modes in the update sandbox = no canonical-555 complaints
+# restored dir modes in the update sandbox = no canonical-mode complaints
 if grep -aq "directory permissions differ" "$LOG"; then
 	echo "FAIL: pacman permission warnings in update sandbox"
 	exit 1

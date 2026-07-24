@@ -72,7 +72,8 @@ set -e
 mount -t overlay overlay \
 	-o "lowerdir=$LOWER,upperdir=$SCRATCH/upper,workdir=$SCRATCH/work" "$SCRATCH/mnt"
 # merged view gets the modes captured at the lower's import (store
-# lower is canonical 0555; pacman would warn on every dir otherwise)
+# lower is canonical 0755; pacman would warn on deviating dirs
+# otherwise)
 /usr/local/bin/nixgen-restmeta "$SCRATCH/mnt"
 mount --rbind /dev "$SCRATCH/mnt/dev"
 mount -t proc proc "$SCRATCH/mnt/proc"

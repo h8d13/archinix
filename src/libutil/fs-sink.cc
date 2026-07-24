@@ -195,8 +195,9 @@ void RestoreSink::finishCanonical()
         return;
     }
     /* dirs are made 0777-masked so they stay populatable; canonical
-       mode and mtime land only once the subtree is closed */
-    if (fchmod(dirFd.get(), 0555) == -1)
+       mode (0755, see posix-fs-canonicalise.cc) and mtime land only
+       once the subtree is closed */
+    if (fchmod(dirFd.get(), 0755) == -1)
         throw SysError("fchmod");
     if (futimens(dirFd.get(), canonicalTimes) == -1)
         throw SysError("setting mtime of %1%", PathFmt(dstPath));

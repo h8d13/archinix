@@ -31,9 +31,8 @@ set -e
 # generation.sh)
 mount -t overlay overlay \
 	-o "lowerdir=$BASE,upperdir=$TMP/upper,workdir=$TMP/work,userxattr" "$TMP/mnt"
-# replay captured modes over the canonical 0555 lower (pacman rejects a
-# no-write-bits cachedir even as root); copy-ups land in the throwaway
-# upper. See nixgen-savemeta
+# replay captured modes over the canonical 0755 lower; copy-ups land
+# in the throwaway upper. See nixgen-savemeta
 if [ -f "$BASE/etc/nixgen/perms" ]; then
 	"$REPO/arch/nixgen/nixgen-restmeta" "$TMP/mnt"
 fi

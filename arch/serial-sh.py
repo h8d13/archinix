@@ -13,6 +13,9 @@ ESCAPES = re.compile(
 	rb"|\x1b\[[0-9;?]*[A-Za-z]"	# CSI
 	rb"|\r")
 
+# long commands (nixgen-setup: pacman deps + store copy + grub) need
+# more than the interactive default
+CMD_TIMEOUT = int(os.environ.get("SERIAL_CMD_TIMEOUT", "60"))
 mode, cmds = sys.argv[1], sys.argv[2:]
 master, slave = pty.openpty()
 env = dict(os.environ, SERIAL="on")
@@ -48,7 +51,7 @@ for cmd in cmds:
 	os.write(master, cmd.encode() + b"\r")
 	# "]# " = end of "[root@nixarch ~]# "; bare "# " false-matches
 	# things like getfacl's "# file:" header lines
-	if not wait_for(b"]# ", 60):
+	if not wait_for(b"]# ", CMD_TIMEOUT):
 		print(f"FAIL: no prompt after: {cmd}")
 		p.kill()
 		sys.exit(1)

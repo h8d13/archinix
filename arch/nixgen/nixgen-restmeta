@@ -6,7 +6,7 @@
 # touched path is a metadata-only copy-up into the tmpfs upper. Also
 # run inside build sandboxes right after the overlay mount, so pacman
 # sees the modes it expects (no "directory permissions differ"
-# warnings against the 0555 store lower).
+# warnings on dirs deviating from the 0755 store lower).
 # usage: nixgen-restmeta [root]   (default /; run by nixgen-perms.service)
 R=${1:-/}
 M=$R/etc/nixgen/perms

@@ -119,7 +119,7 @@ install -Dm755 "$I/nixgen-data-generator" \
 install -d /etc/nixgen
 printf '/home\n/var/log\n' > /etc/nixgen/state
 
-# store import canonicalises permissions (dirs 0555, no setuid/sticky/
+# store import canonicalises permissions (dirs 0755, no setuid/sticky/
 # ownership/caps); replay the captured manifest before anything else
 # runs. See nixgen-savemeta/-restmeta
 cat > /etc/systemd/system/nixgen-perms.service <<EOF

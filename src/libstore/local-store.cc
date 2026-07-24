@@ -1398,10 +1398,10 @@ static void restorePathCapturingHashes(
     RestoreSink inner{startFsync, canonical};
     inner.dstPath = path;
     /* directory canonicalisation must wait for the hasher: its
-       streamed dedup swaps files via link+rename, which both fails
-       against an already read-only (0555) directory and bumps its
-       just-stamped mtime. Children land in the list before parents,
-       the root last (finishCanonical below). */
+       streamed dedup swaps files via link+rename, which bumps the
+       just-stamped mtime of the containing directory. Children land
+       in the list before parents, the root last (finishCanonical
+       below). */
     std::vector<std::filesystem::path> dirs;
     if (canonical)
         inner.deferCanonicalDirs = &dirs;
@@ -1414,7 +1414,7 @@ static void restorePathCapturingHashes(
        permission on the moved directory itself, so the caller
        canonicalises the root once it reaches its final path */
     for (auto & dir : dirs) {
-        chmod(dir, 0555);
+        chmod(dir, 0755);
         setWriteTime(dir, 1, 1, false); /* mtimeStore */
     }
 }

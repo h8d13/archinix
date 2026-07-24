@@ -58,11 +58,12 @@ set -e
 mount -t overlay overlay \
 	-o "lowerdir=$BASE,upperdir=$TMP/upper,workdir=$TMP/work,userxattr" "$TMP/mnt"
 # give the merged view the modes the base captured before import
-# (store lower is canonical 0555); see nixgen-savemeta
+# (store lower is canonical 0755; deviating dirs, special bits and
+# ownership need the replay); see nixgen-savemeta
 if [ -f "$BASE/etc/nixgen/perms" ]; then
 	"$REPO/arch/nixgen/nixgen-restmeta" "$TMP/mnt"
 else
-	echo "WARN: $BASE has no etc/nixgen/perms; canonical 0555 modes" \
+	echo "WARN: $BASE has no etc/nixgen/perms; canonical modes" \
 		"stay, pacman will warn (re-bootstrap the base)" >&2
 fi
 # minimal /dev (arch-chroot unshare_setup parity): six pseudo-device
