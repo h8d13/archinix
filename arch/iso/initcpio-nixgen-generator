@@ -25,7 +25,11 @@ mkdir -p "$DEST/initrd-root-fs.target.requires" \
 # lowerdir and the upper both come from nixgen-store.service, which
 # Wants= pulls in and After= orders. Not Requires=: that edge also
 # propagates deactivation, so the stager being stopped during the
-# switch-root cleanup would unmount the root filesystem with it
+# switch-root cleanup would unmount the root filesystem with it.
+# metacopy=on: restmeta replays the whole-/etc mode manifest every
+# boot; metadata-only copy-up keeps that from duplicating /etc data
+# into the RAM upper (upper is a fresh tmpfs each boot, so no
+# cross-mount metacopy compat to worry about)
 cat > "$DEST/sysroot.mount" <<EOF
 [Unit]
 Description=nixgen generation $gen as the root filesystem
@@ -40,7 +44,7 @@ Before=shutdown.target
 What=overlay
 Where=/sysroot
 Type=overlay
-Options=lowerdir=/run/nixstore/$gen,upperdir=/run/cow/upper,workdir=/run/cow/work
+Options=lowerdir=/run/nixstore/$gen,upperdir=/run/cow/upper,workdir=/run/cow/work,metacopy=on
 EOF
 ln -sf ../sysroot.mount \
 	"$DEST/initrd-root-fs.target.requires/sysroot.mount"

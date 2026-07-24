@@ -9,9 +9,10 @@
 # numeric dump). Being content, the manifests are hashed and deduped
 # with the generation and roll back with it. nixgen-restmeta replays
 # them at boot and in build sandboxes.
-# Plain-file mode diffs (644 vs canonical 444) are skipped on purpose:
-# owner is root, root bypasses modes, and restoring them would
-# metadata-copy-up every file instead of a few dozen paths.
+# Plain-file mode diffs (644 vs canonical 444) are skipped on purpose
+# outside /etc: owner is root, root bypasses modes, and restoring them
+# would copy-up every file instead of a few dozen paths. /etc is
+# captured whole: small, and it is where humans cp defaults from.
 # usage: nixgen-savemeta <root>
 R=$1
 [ -d "$R" ] || { echo "usage: $0 <root>" >&2; exit 1; }
@@ -32,9 +33,13 @@ BAD=$(find . -xdev \( -path "*${TAB}*" -o -path "*${NL}*" \) -print | wc -l)
 # files STRICTER than that (shadow, ssh host keys, 600/640/440) must
 # be captured and replayed on the booted view; the store's own 0444
 # copies sit behind the 0700 store dir (import-dir enforces it).
-# /etc/skel is captured whole: its modes are template data that
-# useradd copies to new users; canonical 444 there means every user
-# starts with a readonly .bashrc
+# /etc is captured whole (subsumes the old /etc/skel rule: skel modes
+# are template data useradd copies to new users): canonical 444 there
+# means every `cp /etc/foo ~` mints a readonly copy. ~2k small files
+# on a stock tree; replay batches to one chmod per mode, and the boot
+# copy-up is metadata-only (sysroot mounts metacopy=on). etc/nixgen
+# stays canonical: perms is open for write during this very walk and
+# nobody hand-edits the manifests
 # /root too: the operator's own files are root:root 644, exactly the
 # class skipped above, and a 444 ~/foo.cfg trips every editor's
 # readonly check after commit+reboot (root only force-writes past it)
@@ -53,7 +58,8 @@ find . -mindepth 1 -xdev \( -path './tmp/*' -o -path './var/tmp/*' \) -prune \
 	! -path ./nixstore ! -path ./nixstoredev \
 	\( -type d ! \( -perm 755 -user 0 -group 0 \) \
 	-o -type f \( -perm /7022 -o ! -perm -444 -o ! -user 0 -o ! -group 0 \
-		-o -path ./etc/skel/\* -o -path ./root/\* \) \
+		-o -path ./etc/\* ! -path ./etc/nixgen/\* \
+		-o -path ./root/\* \) \
 	-o -type l ! \( -user 0 -group 0 \) \) \
 	-printf '%y\t%m\t%U\t%G\t%p\n' | LC_ALL=C sort -t'	' -k5 > etc/nixgen/perms
 # sorted explicit list for the same determinism reason as acls below

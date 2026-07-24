@@ -69,8 +69,13 @@ trap 'rm -rf "$SCRATCH"' EXIT
 # import so the merged view contains only real files.
 cat > "$SCRATCH/inner.sh" <<EOF
 set -e
+# metacopy=on: restmeta below chmods the whole-/etc manifest; keep
+# those copy-ups metadata-only (real root here, trusted xattrs OK;
+# the userxattr sandboxes in generation.sh/enter.sh can't: the kernel
+# rejects userxattr with metacopy)
 mount -t overlay overlay \
-	-o "lowerdir=$LOWER,upperdir=$SCRATCH/upper,workdir=$SCRATCH/work" "$SCRATCH/mnt"
+	-o "lowerdir=$LOWER,upperdir=$SCRATCH/upper,workdir=$SCRATCH/work,metacopy=on" \
+	"$SCRATCH/mnt"
 # merged view gets the modes captured at the lower's import (store
 # lower is canonical 0755; pacman would warn on deviating dirs
 # otherwise)

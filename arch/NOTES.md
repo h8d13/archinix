@@ -37,9 +37,15 @@
   the base lacks it;
   re-bootstrap to fix. Plain 644-vs-444 file modes stay canonical on
   purpose (root bypasses them; restoring would copy-up every file),
-  except /etc/skel (useradd copies its modes to new users) and /root
-  (the operator's own files must not come back readonly), both
-  captured whole (tests/meta-test.sh pins this).
+  except /etc (captured whole, minus etc/nixgen: it is where humans
+  `cp` defaults from, and a canonical-444 source mints readonly
+  copies; subsumes the old /etc/skel rule useradd depends on) and
+  /root (the operator's own files must not come back readonly).
+  tests/meta-test.sh pins both. The boot/switch/update overlays mount
+  `metacopy=on` so the /etc replay copies up metadata only; userns
+  builds (generation.sh, enter.sh) keep full copy-up, the kernel
+  rejects metacopy with userxattr. Bases predating the /etc rule
+  replay 444 there; re-bootstrap to fix (meta-test refuses them).
 - **Diskless BIOS boots pay ~10s** of GRUB probing for the absent
   NIXSTORE label. Known cost, attached-disk boots don't pay it.
 - **USB store disks enumerate late.** `udevadm settle` doesn't wait

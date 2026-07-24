@@ -1,80 +1,51 @@
 #!/bin/sh -e
-# End-to-end test of nixgen-update: boot the ISO with a fresh store
-# disk, run an offline update in the box that installs the kernel from
-# a dated Arch Linux Archive snapshot: a real version change (direction
-# is irrelevant to the machinery: new kernel files land in the overlay,
-# the ALPM hook regenerates the initramfs, the new generation boots its
-# own kernel). Archive use lives here only; stock generations track
-# live mirrors. Poweroff; then boot the new generation directly from
-# the store disk (no ISO: proves self-hosting)
-# and check the boot marker, restored permissions, and the new package,
-# then run the rest of the in-box lifecycle: nixgen-remove must refuse
-# the running generation, a committed generation must remove cleanly
-# (store path GC'd, GRUB entry pruned), nixgen-switch must soft-reboot
-# into a committed generation with the marker (not the stale cmdline)
-# driving running-generation detection afterwards, and nixgen-setup
-# must install onto a blank disk that then boots alone under OVMF
-# (boot 3: real firmware, real ESP, the in-box install path).
-# Serial console is a unix socket driven by the embedded python
-# (expect pattern / send line); debugfs reads the ext4 img without root.
+# End-to-end test of nixgen-update, driven over tests/serial-sh.py:
+# one phase per boot, assertions on the host between phases, so a
+# stall dies at the offending command with the console tail printed
+# instead of deep inside an embedded expect script.
+# boot 1 (ISO + fresh store disk): offline update in the box installs
+# the kernel from a dated Arch Linux Archive snapshot: a real version
+# change (direction is irrelevant to the machinery: new kernel files
+# land in the overlay, the ALPM hook regenerates the initramfs, the
+# new generation boots its own kernel). Archive use lives here only;
+# stock generations track live mirrors. A no-op update must refuse to
+# mint a generation.
+# boot 2 (that generation direct-kernel from the store disk, no ISO:
+# proves self-hosting; VM_CMD, uefi-vm.sh has no -kernel mode): boot
+# marker, restored permissions, the new package, then the in-box
+# lifecycle: remove refuses the running generation, a committed one
+# removes cleanly (store path GC'd, GRUB entry pruned), soft-switch,
+# getty toggles, metadata round trip, export/import ship cycle with
+# adopt, and nixgen-setup onto a blank disk.
+# boot 3 (that disk alone under OVMF): real firmware, real ESP, the
+# in-box install path; nixdata= inherited, /home on the data fs.
+# debugfs reads the ext4 img without root. In-box markers echo with
+# split quotes (STORE_"GATED") so a wrapped command echo can never
+# satisfy its own assertion.
 cd "$(dirname "$0")/../.."
+
+SERSH=arch/tests/serial-sh.py
+L1=build/tmp/update-test-b1.log
+L2=build/tmp/update-test-b2.log
+L3=build/tmp/update-test-b3.log
+mkdir -p build/tmp
+rm -f "$L1" "$L2" "$L3"
 
 ACCEL=
 [ -w /dev/kvm ] && ACCEL="-accel kvm"
-LOG=build/tmp/update-test.log
-SOCK=build/tmp/update-test.sock
-mkdir -p build/tmp
-rm -f "$LOG" "$SOCK"
 
-drive() { python3 - "$SOCK" "$LOG" "$@" <<'PY'
-import socket, sys, time
-
-sock_path, log_path = sys.argv[1], sys.argv[2]
-script = sys.argv[3:]           # expect [send expect]... [send]
-
-s = socket.socket(socket.AF_UNIX)
-deadline = time.time() + 30
-while True:
-	try:
-		s.connect(sock_path)
-		break
-	except OSError:
-		if time.time() > deadline:
-			sys.exit("connect timeout on " + sock_path)
-		time.sleep(0.5)
-s.settimeout(1.0)
-log = open(log_path, "ab")
-buf = b""
-
-def wait_for(pat, timeout):
-	global buf
-	end = time.time() + timeout
-	while pat.encode() not in buf:
-		if time.time() > end:
-			sys.exit("timeout waiting for: " + pat)
-		try:
-			d = s.recv(4096)
-		except TimeoutError:
-			continue
-		if not d:
-			sys.exit("eof waiting for: " + pat)
-		buf += d
-		log.write(d)
-		log.flush()
-	for line in buf.decode(errors="replace").splitlines():
-		if pat in line:
-			print(line)
-	buf = b""
-
-wait_for(script[0], 300)
-i = 1
-while i < len(script):
-	s.sendall(script[i].encode() + b"\n")
-	if i + 1 >= len(script):
-		break           # trailing send (e.g. poweroff), no expect
-	wait_for(script[i + 1], 900)
-	i += 2
-PY
+# -e: patterns may start with a dash (-test-sw)
+need() {
+	grep -aq -e "$2" "$1" || { echo "FAIL: missing '$2' in $1"; exit 1; }
+}
+# exact occurrence count: shared messages (remove-refusal, entry
+# pruned) must each appear once per leg that triggers them
+need_n() {
+	N=$(grep -ac -e "$2" "$1")
+	[ "$N" -eq "$3" ] || {
+		echo "FAIL: want $3 of '$2' in $1, got $N"
+		exit 1
+	}
 }
 
 # the in-box update installs the kernel from a dated archive snapshot:
@@ -98,26 +69,17 @@ fi
 
 arch/iso/mkstoredisk.sh
 echo "--- boot 1: ISO + fresh disk, offline kernel version change in the box"
-qemu-system-x86_64 $ACCEL -m 2G -boot d -cdrom build/nixarch.iso \
-	-drive file=build/vm/nixstore.img,format=raw,if=virtio \
-	-nic user,model=virtio-net-pci \
-	-display none -no-reboot -serial "unix:$SOCK,server,nowait" &
-QPID=$!
-# expect a pattern *after* the generation name: matching on "updated: "
-# can fire mid-line, before the name has arrived over the serial socket
-OUT=$(drive "NIXARCH BOOT OK" \
+SERIAL_CMD_TIMEOUT=1800 python3 "$SERSH" iso \
 	"nixgen-update test-up '$UPCMD'" \
-	"reboot to switch" \
-	"nixgen-update noop-up true" \
-	"no change" \
-	"poweroff") || { kill $QPID 2>/dev/null; exit 1; }
-wait $QPID
-NEWGEN=$(echo "$OUT" | sed -n 's/.*updated: \([^ ]*\).*/\1/p')
+	"nixgen-update noop-up true" > "$L1"
+need "$L1" "reboot to switch"
+need "$L1" "no change"
+NEWGEN=$(sed -n 's/.*updated: \([^ ]*\).*/\1/p' "$L1" | head -1)
 [ -n "$NEWGEN" ] || { echo "FAIL: no generation name captured"; exit 1; }
 echo "new generation: $NEWGEN"
 
 # restored dir modes in the update sandbox = no canonical-mode complaints
-if grep -aq "directory permissions differ" "$LOG"; then
+if grep -aq "directory permissions differ" "$L1"; then
 	echo "FAIL: pacman permission warnings in update sandbox"
 	exit 1
 fi
@@ -147,84 +109,87 @@ if [ -z "$FAST" ]; then
 fi
 
 echo "--- boot 2: new generation from store disk only (no ISO)"
-rm -f "$SOCK" build/tmp/install-test.img
+rm -f build/tmp/install-test.img
 truncate -s 6G build/tmp/install-test.img
-qemu-system-x86_64 $ACCEL -m 2G \
-	-kernel build/tmp/test-vmlinuz -initrd build/tmp/test-initrd \
-	-append "nixgen=$NEWGEN console=ttyS0,115200" \
-	-drive file=build/vm/nixstore.img,format=raw,if=virtio \
-	-drive file=build/tmp/install-test.img,format=raw,if=virtio \
-	-nic user,model=virtio-net-pci \
-	-display none -no-reboot -serial "unix:$SOCK,server,nowait" &
-QPID=$!
-drive "NIXARCH BOOT OK" \
-	"stat -c %a /var/tmp" \
-	"1777" \
-	'pacman -Q 2>&1 >/dev/null | grep -q "duplicated database" || echo DB_CLEAN' \
-	"DB_CLEAN" \
+VM_CMD="qemu-system-x86_64 $ACCEL -m 2G \
+ -kernel build/tmp/test-vmlinuz -initrd build/tmp/test-initrd \
+ -append 'nixgen=$NEWGEN console=ttyS0,115200' \
+ -drive file=build/vm/nixstore.img,format=raw,if=virtio \
+ -drive file=build/tmp/install-test.img,format=raw,if=virtio \
+ -nic user,model=virtio-net-pci \
+ -display none -no-reboot -serial mon:stdio"
+export VM_CMD
+# nixgen-setup downloads grub + mkfs deps in the box; soft-switch
+# restarts the serial session (its command output ends at the fresh
+# banner's prompt, which is exactly what the assertions read)
+SERIAL_CMD_TIMEOUT=600 python3 "$SERSH" custom \
+	'grep -o "nixgen=[^ ]*" /proc/cmdline' \
+	'echo "vartmp=$(stat -c %a /var/tmp)"' \
+	'pacman -Q 2>&1 >/dev/null | grep -q "duplicated database" || echo DB_"CLEAN"' \
 	'echo "shadow=$(stat -c %a /etc/shadow)"' \
-	"shadow=600" \
 	'echo "storemode=$(stat -c %a /nixstoredev/nix/store)-$(stat -c %a /nixstore)"' \
-	"storemode=700-700" \
-	"command -v $(basename $TOOL)" \
-	"$TOOL" \
+	"echo \"tool=\$(command -v $(basename "$TOOL"))\"" \
 	"nixgen-remove $NEWGEN" \
-	"refusing to remove the running generation" \
 	"nixgen-commit test-rm" \
-	"visible next boot" \
 	'R=$(basename "$(ls -d /nixstoredev/nix/store/*-test-rm)"); nixgen-remove test-rm' \
-	"GRUB entry pruned" \
-	'[ -e "/nixstoredev/nix/store/$R" ] || echo STORE_PATH_GONE' \
-	"STORE_PATH_GONE" \
-	'ps -o args= -C agetty | grep tty1 | grep -q autologin && echo AUTO_TTY1' \
-	"AUTO_TTY1" \
-	'systemctl start getty@tty2 && sleep 1 && ps -o args= -C agetty | grep tty2 | grep -q autologin && echo AUTO_TTY2' \
-	"AUTO_TTY2" \
+	'[ -e "/nixstoredev/nix/store/$R" ] || echo STORE_PATH_"GONE"' \
+	'loginctl list-sessions --no-legend | grep tty1 | grep -q root && echo AUTO_"TTY1"' \
+	'systemctl start getty@tty2 && sleep 1 && loginctl list-sessions --no-legend | grep tty2 | grep -q root && echo AUTO_"TTY2"' \
 	'useradd -m -u 1100 -U tuser && touch /etc/diffmark && ln -s /tmp /var/linktest && chown -h 977:977 /var/linktest && touch /etc/acltest && setfacl -m u:977:r /etc/acltest && nixgen-commit test-sw' \
-	"visible next boot" \
 	"nixgen-switch test-sw" \
-	"-test-sw (soft)" \
-	'echo "$(stat -c %a /usr)-$(stat -c %a /var/tmp)"' \
-	"755-1777" \
-	'echo "$(stat -c %u /var/linktest):$(getfacl --numeric /etc/acltest | grep -c "user:977:r--"):$(getcap /usr/bin/newuidmap | grep -c setuid)"' \
-	"977:1:1" \
+	'echo "postsw=$(stat -c %a /usr)-$(stat -c %a /var/tmp)"' \
+	'echo "meta=$(stat -c %u /var/linktest):$(getfacl --numeric /etc/acltest | grep -c "user:977:r--"):$(getcap /usr/bin/newuidmap | grep -c setuid)"' \
 	'echo "bashrc=$(stat -c %a:%u:%g /home/tuser/.bashrc)"' \
-	"bashrc=644:1100:1100" \
 	'su - tuser -c "echo mark >> ~/.bashrc"; echo "uwrite=$?"' \
-	"uwrite=0" \
 	'su - tuser -c "ls /nixstore" 2>&1 | grep -q "Permission denied" && echo STORE_"GATED"' \
-	"STORE_GATED" \
 	"nixgen-remove test-sw" \
-	"refusing to remove the running generation" \
 	"nixgen-listid" \
-	"test-sw (running)" \
 	"nixgen-diffid test-up test-sw" \
-	"Only in b/etc: diffmark" \
 	'ID=$(nixgen-listid | grep test-up | cut -c1-8); nixgen-diffid "$ID" test-sw' \
-	"Only in b/etc: diffmark" \
-	'ok=1; for t in /usr/local/bin/nixgen-*; do nixgen-help | grep -q "$(basename "$t")" || { echo "undocumented: $t"; ok=0; }; done; [ $ok = 1 ] && echo HELP_OK' \
-	"HELP_OK" \
+	'ok=1; for t in /usr/local/bin/nixgen-*; do nixgen-help | grep -q "$(basename "$t")" || { echo "undocumented: $t"; ok=0; }; done; [ $ok = 1 ] && echo HELP_"OK"' \
 	'S=$(basename "$(ls -d /nixstoredev/nix/store/*-test-up)"); export-path /nixstoredev "$S" > /nixstoredev/ship.bundle && echo SHIP_"OK"' \
-	"SHIP_OK" \
 	"nixgen-remove test-up" \
-	"GRUB entry pruned" \
 	'[ ! -e "/nixstoredev/nix/store/$S" ] && echo SHIP_"GONE"' \
-	"SHIP_GONE" \
 	'B=$(import-path /nixstoredev < /nixstoredev/ship.bundle) && rm /nixstoredev/ship.bundle && [ "$(basename "$B")" = "$S" ] && echo SHIP_"BACK"' \
-	"SHIP_BACK" \
 	'nixgen-adopt "$S"' \
-	"GRUB entry added" \
 	'nixgen-adopt "$S" 2>&1 || echo DUP_"REFUSED"' \
-	"DUP_REFUSED" \
-	"nixgen-setup /dev/vdb inst-test --data 1G" \
-	"type the device path to continue" \
-	"/dev/vdb" \
-	"installed: inst-test on /dev/vdb" \
-	'echo root:secret | chpasswd && systemctl restart getty@tty1 && sleep 1 && ps -o args= -C agetty | grep tty1 | grep -qv autologin && echo PROMPT_TTY1' \
-	"PROMPT_TTY1" \
-	"poweroff" > /dev/null || { kill $QPID 2>/dev/null; exit 1; }
-wait $QPID
+	"echo /dev/vdb | nixgen-setup /dev/vdb inst-test --data 1G" \
+	'echo root:secret | chpasswd && systemctl restart getty@tty1 && sleep 1 && ps -o args= -C agetty | grep tty1 | grep -qv autologin && echo PROMPT_"TTY1"' \
+	> "$L2"
+unset VM_CMD
 rm -f build/tmp/iso-vmlinuz build/tmp/iso-initrd build/tmp/test-vmlinuz build/tmp/test-initrd
+
+need "$L2" "nixgen=$NEWGEN"
+need "$L2" "vartmp=1777"
+need "$L2" "DB_CLEAN"
+need "$L2" "shadow=600"
+need "$L2" "storemode=700-700"
+need "$L2" "tool=$TOOL"
+need_n "$L2" "refusing to remove the running generation" 2
+need_n "$L2" "GRUB entry pruned" 2
+need "$L2" "committed: .*-test-rm"
+need "$L2" "committed: .*-test-sw"
+need "$L2" "committed: .*-inst-test"
+need "$L2" "adopted: .*-test-up"
+need "$L2" "STORE_PATH_GONE"
+need "$L2" "AUTO_TTY1"
+need "$L2" "AUTO_TTY2"
+need "$L2" "-test-sw (soft)"
+need "$L2" "postsw=755-1777"
+need "$L2" "meta=977:1:1"
+need "$L2" "bashrc=644:1100:1100"
+need "$L2" "uwrite=0"
+need "$L2" "STORE_GATED"
+need "$L2" "test-sw (running)"
+need_n "$L2" "Only in b/etc: diffmark" 2
+need "$L2" "HELP_OK"
+need "$L2" "SHIP_OK"
+need "$L2" "SHIP_GONE"
+need "$L2" "SHIP_BACK"
+need "$L2" "DUP_REFUSED"
+need "$L2" "installed: inst-test on /dev/vdb"
+need "$L2" "PROMPT_TTY1"
+echo "lifecycle assertions clean"
 
 echo "--- boot 3: installed disk alone under OVMF (nixgen-setup output)"
 OVMF_CODE= OVMF_VARS=
@@ -240,27 +205,25 @@ for pair in \
 done
 [ -n "$OVMF_CODE" ] || { echo "FAIL: no OVMF firmware (edk2-ovmf)"; exit 1; }
 cp "$OVMF_VARS" build/tmp/test-ovmf-vars.fd
-rm -f "$SOCK"
-qemu-system-x86_64 $ACCEL -machine q35 -m 2G \
-	-drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
-	-drive if=pflash,format=raw,file=build/tmp/test-ovmf-vars.fd \
-	-drive file=build/tmp/install-test.img,format=raw,if=virtio \
-	-nic user,model=virtio-net-pci \
-	-display none -no-reboot -serial "unix:$SOCK,server,nowait" &
-QPID=$!
-drive "NIXARCH BOOT OK" \
+VM_CMD="qemu-system-x86_64 $ACCEL -machine q35 -m 2G \
+ -drive if=pflash,format=raw,readonly=on,file=$OVMF_CODE \
+ -drive if=pflash,format=raw,file=build/tmp/test-ovmf-vars.fd \
+ -drive file=build/tmp/install-test.img,format=raw,if=virtio \
+ -nic user,model=virtio-net-pci \
+ -display none -no-reboot -serial mon:stdio"
+export VM_CMD
+python3 "$SERSH" custom \
 	'grep -o "nixgen=[^ ]*" /proc/cmdline' \
-	"-inst-test" \
 	'grep -o "nixdata=[^ ]*" /proc/cmdline' \
-	"nixdata=NIXDATA" \
 	'echo "homefs=$(findmnt -no FSTYPE -T /home)"' \
-	"homefs=ext4" \
-	"poweroff" > /dev/null || { kill $QPID 2>/dev/null; exit 1; }
-wait $QPID
+	> "$L3"
+unset VM_CMD
+need "$L3" "-inst-test"
+need "$L3" "nixdata=NIXDATA"
+need "$L3" "homefs=ext4"
 rm -f build/tmp/install-test.img build/tmp/test-ovmf-vars.fd
 echo "installed disk booted under OVMF"
 
-grep -aq "nixgen=$NEWGEN" "$LOG" || { echo "FAIL: marker missing"; exit 1; }
 # the removed generation's entry is gone, the surviving one remains
 ENTRIES=$(debugfs -R "cat /entries.cfg" build/vm/nixstore.img 2>/dev/null)
 echo "$ENTRIES" | grep -q "test-rm" \

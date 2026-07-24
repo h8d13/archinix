@@ -40,6 +40,13 @@ for f in .bashrc .bash_profile .bash_logout; do
 		exit 1
 	}
 done
+# /etc defaults must be captured writable too: the whole-/etc rule is
+# what makes a plain `cp /etc/foo ~` land editable on the booted view
+grep -q "^f	644	0	0	\./etc/bash\.bashrc\$" "$BASE/etc/nixgen/perms" || {
+	echo "FAIL: $BASE manifest lacks 644 row for etc/bash.bashrc;" \
+		"stale base, re-run arch/bootstrap.sh" >&2
+	exit 1
+}
 
 UNSHARE="unshare --map-auto --map-root-user"
 $UNSHARE true || {
@@ -75,6 +82,8 @@ ROOTCFG='^f	644	0	0	\./root/test\.cfg$'
 # rows ride the non-root-owner rule
 USERDIR='^d	755	1100	1100	\./home/tuser/\.config$'
 USERCFG='^f	644	1100	1100	\./home/tuser/\.config/mycfg$'
+# stock /etc default, root:root 644: rides only the whole-/etc rule
+ETCCFG='^f	644	0	0	\./etc/bash\.bashrc$'
 
 mkdir -p "$REPO/build/tmp"
 TMP=$(mktemp -d "$REPO/build/tmp/meta.XXXXXX")
@@ -94,6 +103,10 @@ grep -q "$BASHRC" "$GENA/etc/nixgen/perms" || {
 }
 grep -q "$ROOTCFG" "$GENA/etc/nixgen/perms" || {
 	echo "FAIL: savemeta dropped the fresh /root/test.cfg row" >&2
+	exit 1
+}
+grep -q "$ETCCFG" "$GENA/etc/nixgen/perms" || {
+	echo "FAIL: savemeta dropped the /etc/bash.bashrc row" >&2
 	exit 1
 }
 
@@ -120,9 +133,9 @@ grep -q "$ROOTCFG" "$M" || {
 	echo "FAIL: /root/test.cfg row lost across the rebuild" >&2
 	exit 1
 }
-for pat in "$USERDIR" "$USERCFG"; do
+for pat in "$USERDIR" "$USERCFG" "$ETCCFG"; do
 	grep -q "$pat" "$M" || {
-		echo "FAIL: user .config row lost across the rebuild: $pat" >&2
+		echo "FAIL: row lost across the rebuild: $pat" >&2
 		exit 1
 	}
 done
@@ -138,13 +151,22 @@ mount -t overlay overlay \
 stat -c '%a %u %g' "$TMP/mnt/home/tuser/.bashrc"
 stat -c '%a %u %g' "$TMP/mnt/root/test.cfg"
 stat -c '%a %u %g' "$TMP/mnt/home/tuser/.config/mycfg"
+stat -c '%a %u %g' "$TMP/mnt/etc/bash.bashrc"
+# the point of the whole-/etc capture: a plain cp of a default must
+# land writable. Mode check, not [ -w ]: access(2) always grants W to
+# the sandbox root, a 444 copy would pass -w and hide the regression
+cp "$TMP/mnt/etc/bash.bashrc" "$TMP/grabbed"
+stat -c '%a' "$TMP/grabbed"
 EOF
 OUT=$($UNSHARE -mpf --kill-child sh "$TMP/inner.sh")
-echo "replayed .bashrc + /root/test.cfg + user .config/mycfg: $OUT"
+echo "replayed .bashrc, /root/test.cfg, user mycfg, /etc + cp: $OUT"
 [ "$OUT" = "644 1100 1100
 644 0 0
-644 1100 1100" ] || {
-	echo "FAIL: replay left '$OUT' (want 644 1100 1100 / 644 0 0 / 644 1100 1100)" >&2
+644 1100 1100
+644 0 0
+644" ] || {
+	echo "FAIL: replay left '$OUT'" \
+		"(want 644 1100 1100 / 644 0 0 / 644 1100 1100 / 644 0 0 / 644)" >&2
 	exit 1
 }
 

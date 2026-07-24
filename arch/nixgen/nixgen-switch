@@ -73,8 +73,11 @@ COW=$(mktemp -d /run/nixgen-cow.XXXXXX)
 mount -t tmpfs -o size=75%,mode=0755 cow "$COW"
 mkdir "$COW/upper" "$COW/work"
 mkdir -p /run/nextroot
+# metacopy=on: same economics as sysroot.mount, the restmeta replay
+# below must not duplicate /etc data into the tmpfs upper
 mount -t overlay overlay \
-	-o "lowerdir=$LOWER,upperdir=$COW/upper,workdir=$COW/work" /run/nextroot
+	-o "lowerdir=$LOWER,upperdir=$COW/upper,workdir=$COW/work,metacopy=on" \
+	/run/nextroot
 # replay the target's perms manifest now: nixgen-perms.service has
 # DefaultDependencies=no, so soft-reboot's shutdown never stops it and
 # its active state deserializes into the new root as already-run
