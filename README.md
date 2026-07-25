@@ -8,7 +8,7 @@ libnixstore) from [NixOS/nix](https://github.com/NixOS/nix)
 
 > [!NOTE]
 > Remote stores (s3/http/ssh/daemon), the `.drv` realisation machinery (arguably, what an overlay already is; in kernel)
-> are cut: stores hold imported trees only. [`arch/`](arch/) is the shell/C++ glue that retrieves and integrates them 
+> are cut: stores hold imported trees only. [`arch/`](arch/) is the shell/C++ glue that retrieves and integrates them
 > with userland. Also removes any support for other platforms than `unix` and `linux`, from build targets.
 
 Build depends on: `meson`, `ninja`, C++23 compiler:
@@ -38,7 +38,7 @@ Immutable `x86-efi` generations on the Nixstore. In roughly ~2k LoC (excluding t
 
 `nixgen-setup /dev/disk --fs xfs` installs current running generation to a hard disk.
 
-Optional: pass `--data 100G` for a separate `/home` persistent part. 
+**Optional:** pass `--data 100G` for a separate `/home` persistent part (outside gens).
 
 And `--user myuser` to create a user's home directly.
 
