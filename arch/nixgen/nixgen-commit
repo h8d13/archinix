@@ -31,7 +31,25 @@ fi
 SNAP=/run/nixgen-snap
 mkdir -p "$SNAP"
 mount --bind / "$SNAP"
-trap 'umount "$SNAP"' EXIT
+# -R: the journal mount below is a submount, and a plain umount of a
+# tree with one is EBUSY
+trap 'umount -R "$SNAP"' EXIT
+# rprivate first, or the mount below propagates back to / and hides the
+# live journal from the running system
+mount --make-rprivate "$SNAP"
+
+# journald preallocates an 8 MiB window and mutates it in place, so a
+# content-addressed store sees a wholly new object every time: 8 MiB
+# charged per commit whether or not anything was logged, then frozen
+# into the generation and rolled back with it. Hidden from the dump
+# with an empty tmpfs rather than deleted, because the live journal has
+# to keep running (savemeta already prunes this path from the ACL
+# manifest, for the same churn reason). Logs that should survive a
+# reboot belong on the data partition: /var/log is in the default
+# /etc/nixgen/state
+if [ -d "$SNAP/var/log/journal" ]; then
+	mount -t tmpfs -o size=1M,mode=0755 none "$SNAP/var/log/journal"
+fi
 
 # sockets/fifos (NAR can't represent them) are skipped by the dump
 # itself: the live root is never mutated to appease the serializer.
