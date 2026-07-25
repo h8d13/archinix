@@ -84,7 +84,7 @@
   cutting down cb**. Instead of being adversarial for everything (and
   hallucinating "problems/solutions"), catches issues real-time as it
   adapts cb, this creates a self-virtuous loop. + smaller end-result.
-  In 7 days this resulted in +4k lines (2k of which docs) and -60k
+  In 7 days this resulted in +4k lines (2k of which docs/comms) and -60k
   lines from original. I also tried to make "code as docs/comments".
 - **cutting into `libstore` and `libutil`** What served only those two
   goes with them: path signing (content is re-hashed against the db
