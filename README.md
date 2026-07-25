@@ -29,16 +29,19 @@ C++ headers install to `include/nix/{util,store}/` ([internal API docs](https://
 
 ## [Arch Linux generations](arch/)
 
-Immutable `x86-efi` generations on the store: updates build the next
-generation offline, rollback is booting an older GRUB entry.
+Immutable `x86-efi` generations on the Nixstore.
 
 ### From releases: [ISO](https://github.com/h8d13/archinix/releases)
 
-**GRUB only**. Store filesystem is `ext4` by default, with `btrfs`, `xfs` and `f2fs`([`arch/nixgen/nixgen-fs`](arch/nixgen/nixgen-fs))
+**GRUB only**. Store filesystem is `ext4` by default, with `btrfs`, `xfs` and `f2fs`
+
+> Sourced here: ([`arch/nixgen/nixgen-fs`](arch/nixgen/nixgen-fs))
 
 `nixgen-setup /dev/disk --fs xfs` installs current running generation to a hard disk.
 
-> Optional: pass `--data 100G` for a separate `/home` persistent part. And `--user myuser` to create a user's home directly.
+Optional: pass `--data 100G` for a separate `/home` persistent part. 
+
+And `--user myuser` to create a user's home directly.
 
 > [!IMPORTANT]
 > The ISO is read-only, and so is a running system: writes land in a
