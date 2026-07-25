@@ -57,4 +57,8 @@ Then, in the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
 
 `nixgen-help` is the full [reference](https://github.com/h8d13/archinix/blob/main/arch/nixgen/nixgen-help).
 
-Examples of post scripts: https://github.com/h8d13/nixarch.cfg
+---
+
+## [Example scripts](https://github.com/h8d13/nixarch.cfg/)
+
+This aims to document/illustrate examples of configurations that can shape a system.
