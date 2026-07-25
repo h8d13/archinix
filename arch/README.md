@@ -87,6 +87,8 @@ Scope note: this is the nix *store* layer (interference-free, deduped,
 GC-rooted, atomic rollback), not the nix *language* layer. Generations
 are content-addressed snapshots, not reproducible builds from
 derivations. **It is not meant to be used with `nix` pkg-manager or env.**
+The idea is that simplicity in arch packaging and philosophy already ship;
+a minimalist enough base, if you follow a little the stuff you use...
 
 Autologin only while root is passwordless (stock state,
 what the headless tests ride on). `passwd root` restores login prompts,
