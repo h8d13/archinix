@@ -59,3 +59,7 @@
 - **update-test.sh pins a dated Arch Archive snapshot** to prove a real
   kernel version change; archive use lives in the test only, stock
   generations track live mirrors.
+- **space saving** out of the arch tarball (~500mb) the system already saves
+about ~24mb. Mostly duplicated `.mo` files (fixed upstream) and license files
+or similar. This was found on first day of making this project at first store
+import.
