@@ -24,6 +24,8 @@ Yet for the current to vanish when nothing to `-commit`:
 
 Deps inside the box (installed by [`setup-boot.sh`](./iso/setup-boot.sh))
 
++ Actual [`nixgen-setup`](./nixgen/nixgen-setup)
+
 ## Resources
 
 - https://wiki.archlinux.org/title/File_permissions_and_attributes
