@@ -60,4 +60,4 @@ Then, in the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
 
 ## [Example scripts](https://github.com/h8d13/nixarch.cfg/)
 
-This aims to document/illustrate examples of configurations that can shape a system, for you to make your own.
+Aims to document/illustrate examples of configurations that can shape a system, for you to make your own.
