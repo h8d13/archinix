@@ -1716,11 +1716,16 @@ std::optional<std::string> LocalStore::getVersion()
     return nixVersion;
 }
 
-ref<Store> openStore(const std::filesystem::path & root)
+ref<Store> openStore(const std::filesystem::path & root, bool mustExist)
 {
     if (!root.is_absolute())
         throw UsageError("store root '%s' must be an absolute path", root.string());
     auto config = make_ref<LocalStore::Config>(root);
+    /* Checked before the store is constructed: the constructor creates
+       the store and state directories, so by the time it could report
+       an empty store it has already made one. */
+    if (mustExist && !std::filesystem::exists(config->stateDir / "db" / "db.sqlite"))
+        throw Error("no store at '%s': no database", root.string());
     auto store = config->openStore();
     store->init();
     return store;

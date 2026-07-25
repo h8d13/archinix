@@ -53,7 +53,7 @@ try {
 
 	initLibStore();
 
-	auto store = openStore(std::filesystem::absolute(root));
+	auto store = openStore(std::filesystem::absolute(root), true);
 	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	/* verifyStore reports through the logger and returns true when it

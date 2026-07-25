@@ -20,6 +20,16 @@ namespace nix {
  * arch/ is the operator surface, and store knobs are plain defaults in
  * `LocalSettings` that you change by editing and recompiling.
  */
-ref<Store> openStore(const std::filesystem::path & root);
+/**
+ * Open the local store rooted at `root`.
+ *
+ * @param mustExist refuse a root that has no store yet, instead of
+ * creating one. Opening a store creates its whole skeleton, so a
+ * read-only query against a typo, or against a mountpoint whose disk
+ * is not attached, would otherwise report an empty store and succeed.
+ * Writers leave this false: a blank disk gets its store on first
+ * import.
+ */
+ref<Store> openStore(const std::filesystem::path & root, bool mustExist = false);
 
 } // namespace nix

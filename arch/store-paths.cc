@@ -33,7 +33,7 @@ try {
 	initLibStore();
 	verbosity = lvlError;
 
-	auto store = openStore(std::filesystem::absolute(argv[1]));
+	auto store = openStore(std::filesystem::absolute(argv[1]), true);
 	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	std::vector<std::pair<std::string, time_t>> rows;
