@@ -31,16 +31,6 @@ const Descriptor INVALID_DESCRIPTOR =
     ;
 
 /**
- * Convert a native `Descriptor` to a POSIX file descriptor
- *
- * This is a no-op except on Windows.
- */
-static inline Descriptor toDescriptor(int fd)
-{
-    return fd;
-}
-
-/**
  * Read the contents of a resource into a string.
  */
 std::string readFile(Descriptor fd);
@@ -48,8 +38,7 @@ std::string readFile(Descriptor fd);
 /**
  * Platform-specific read into a buffer.
  *
- * Thin wrapper around ::read (Unix) or ReadFile (Windows).
- * Handles EINTR on Unix. Treats ERROR_BROKEN_PIPE as EOF on Windows.
+ * Thin wrapper around ::read. Handles EINTR.
  *
  * @param fd The file descriptor to read from
  * @param buffer The buffer to read into
@@ -61,7 +50,7 @@ size_t read(Descriptor fd, std::span<std::byte> buffer);
 /**
  * Platform-specific write from a buffer.
  *
- * Thin wrapper around ::write (Unix) or WriteFile (Windows).
+ * Thin wrapper around ::write.
  * Handles EINTR on Unix.
  *
  * @param fd The file descriptor to write to
@@ -74,7 +63,7 @@ size_t write(Descriptor fd, std::span<const std::byte> buffer, bool allowInterru
 /**
  * Get the size of a file.
  *
- * Thin wrapper around fstat (Unix) or GetFileSizeEx (Windows).
+ * Thin wrapper around fstat.
  *
  * @param fd The file descriptor
  * @return The file size
@@ -85,7 +74,7 @@ std::make_unsigned_t<off_t> getFileSize(Descriptor fd);
 /**
  * Platform-specific positioned read into a buffer.
  *
- * Thin wrapper around pread (Unix) or ReadFile with OVERLAPPED (Windows).
+ * Thin wrapper around pread.
  * Does NOT handle EINTR on Unix - caller must catch and retry if needed.
  *
  * @param fd The file descriptor to read from (must be seekable)
@@ -105,30 +94,7 @@ size_t readOffset(Descriptor fd, off_t offset, std::span<std::byte> buffer);
  */
 void copyFdRange(Descriptor fd, off_t offset, size_t nbytes, Sink & sink);
 
-/**
- * Wrappers around read()/write() that read/write exactly the
- * requested number of bytes.
- */
-void readFull(Descriptor fd, char * buf, size_t count);
-
 void writeFull(Descriptor fd, std::string_view s, bool allowInterrupts = true);
-
-/**
- * Read a line from an unbuffered file descriptor.
- * See BufferedSource::readLine for a buffered variant.
- *
- * @param fd The file descriptor to read from
- * @param eofOk If true, return an unterminated line if EOF is reached. (e.g. the empty string)
- * @param terminator The chartacter that ends the line
- *
- * @return A line of text ending in `\n`, or a string without `\n` if `eofOk` is true and EOF is reached.
- */
-std::string readLine(Descriptor fd, bool eofOk = false, char terminator = '\n');
-
-/**
- * Write a line to a file descriptor.
- */
-void writeLine(Descriptor fd, std::string s);
 
 /**
  * Perform a blocking fsync operation on a file descriptor.
@@ -254,14 +220,6 @@ public:
     void startFsync() const;
 };
 
-/**
- * Duplicate a file descriptor.
- *
- * Returns a new file descriptor that refers to the same open file
- * description as the original.
- */
-AutoCloseFD dupDescriptor(Descriptor fd);
-
 class Pipe
 {
 public:
@@ -277,36 +235,10 @@ public:
 namespace unix {
 
 /**
- * Close all file descriptors except stdio fds (ie 0, 1, 2).
- * Good practice in child processes.
- */
-void closeExtraFDs();
-
-/**
  * Set the close-on-exec flag for the given file descriptor.
  */
 void closeOnExec(Descriptor fd);
 
-/**
- * A useful primitive for asynchronous poll() loops to notify about some work
- * completing that gets polled alongside other file descriptors.
- */
-struct SelfPipe
-{
-    Pipe pipe;
-
-    void create();
-
-    /**
-     * Write some data to the pipe in a non-blocking manner.
-     */
-    void notify();
-
-    /**
-     * Drain all data from the pipe.
-     */
-    void drain();
-};
 
 } // namespace unix
 

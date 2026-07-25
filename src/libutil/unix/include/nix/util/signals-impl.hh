@@ -4,10 +4,6 @@
  *
  * Implementation of some inline definitions for Unix signals, and also
  * some extra Unix-only interfaces.
- *
- * (The only reason everything about signals isn't Unix-only is some
- * no-op definitions are provided on Windows to avoid excess CPP in
- * downstream code.)
  */
 
 #include "nix/util/types.hh"
@@ -49,17 +45,7 @@ void _interrupted();
  */
 void startSignalHandlerThread();
 
-/**
- * Saves the signal mask, which is the signal mask that nix will restore
- * before creating child processes.
- */
-void saveSignalMask();
 
-/**
- * To use in a process that already called `startSignalHandlerThread()`
- * or `saveSignalMask()` first.
- */
-void restoreSignals();
 
 void triggerInterrupt();
 

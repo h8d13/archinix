@@ -77,7 +77,7 @@ int main(int argc, char ** argv)
 	fs::path storeDir = root + "/nix/store";
 	fs::path linksDir = storeDir / ".links";
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::path(root));
@@ -195,23 +195,41 @@ int main(int argc, char ** argv)
 	ok(zeroLinks == 0, "link farm holds no empty entries",
 		fmt("%d zero-size entries", zeroLinks));
 
-	/* Permissions restored: nothing writable below store paths. */
-	unsigned writable = 0;
+	/* Permissions restored. optimisePath_ chmods a directory +w to swap
+	   a file in and leans on ~MakeReadOnly to put the mode back, so a
+	   leak here is a real hazard. Assert the canonical mode itself
+	   (posix-fs-canonicalise.cc: dirs 0755, files 0555 if executable
+	   else 0444) rather than "nothing writable": store dirs are 0755
+	   by design, so an owner-writable dir is correct, and a leak shows
+	   up as a file left at 0644. */
+	unsigned offCanon = 0;
+	std::string firstBad;
+	auto checkCanon = [&](const fs::path & p) {
+		struct stat st;
+		if (::lstat(p.c_str(), &st) != 0 || S_ISLNK(st.st_mode))
+			return;
+		mode_t mode = st.st_mode & ~S_IFMT;
+		mode_t canon = S_ISDIR(st.st_mode) ? 0755
+			: (mode & S_IXUSR)           ? 0555
+						     : 0444;
+		if (mode == canon)
+			return;
+		if (!offCanon)
+			firstBad = fmt("%s is %04o, want %04o",
+				p.string(), mode, canon);
+		offCanon++;
+	};
 	for (auto & ent : fs::directory_iterator(storeDir)) {
 		auto name = ent.path().filename().string();
 		if (name == ".links" || name.starts_with(".tmp-link"))
 			continue;
-		struct stat st;
-		if (::lstat(ent.path().c_str(), &st) == 0 && (st.st_mode & S_IWUSR))
-			writable++;
+		checkCanon(ent.path());
 		if (ent.is_directory())
 			for (auto & f : fs::recursive_directory_iterator(ent.path()))
-				if (::lstat(f.path().c_str(), &st) == 0 && !S_ISLNK(st.st_mode)
-					&& (st.st_mode & S_IWUSR))
-					writable++;
+				checkCanon(f.path());
 	}
-	ok(writable == 0, "permissions restored (nothing user-writable)",
-		fmt("%d writable entries", writable));
+	ok(offCanon == 0, "permissions restored (canonical modes)",
+		fmt("%d entries off canon, first: %s", offCanon, firstBad));
 
 	printf("1..%d\n", testNum);
 	return failures ? 1 : 0;

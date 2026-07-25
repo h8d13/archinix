@@ -1,13 +1,18 @@
 #!/bin/sh -e
 # Replay metadata the store canonicalisation stripped, captured by
-# nixgen-savemeta in etc/nixgen/{perms,caps,acls}: directory modes,
+# nixgen-savemeta in etc/nixgen/{perms,caps,acls,xattrs,attrs}: modes,
 # special mode bits (setuid/sticky/...), non-root ownership (symlinks
-# included), capability xattrs, POSIX ACLs. On the booted overlay each
+# included), capability xattrs, POSIX ACLs,
+# user/trusted xattrs and chattr flags. On the booted overlay each
 # touched path is a metadata-only copy-up into the tmpfs upper. Also
 # run inside build sandboxes right after the overlay mount, so pacman
 # sees the modes it expects (no "directory permissions differ"
 # warnings on dirs deviating from the 0755 store lower).
 # usage: nixgen-restmeta [root]   (default /; run by nixgen-perms.service)
+# the store is 0700 root:root and the work below mounts, imports or
+# writes it: bail here rather than at whichever privileged call
+# happens to fail first, which reads as a missing file
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 R=${1:-/}
 M=$R/etc/nixgen/perms
 [ -f "$M" ] || exit 0
@@ -46,4 +51,28 @@ if [ -s "$A" ]; then
 	# -P: rows are physical paths (getfacl -R capture); following a
 	# symlink component would apply an ACL outside the tree
 	setfacl -P --restore="$A" || echo "restmeta: some ACLs skipped" >&2
+fi
+
+X=$R/etc/nixgen/xattrs
+if [ -s "$X" ]; then
+	# -hP: setfattr warns that either alone is unsafe, and both are
+	# needed for the reason setfacl gets -P -- rows are physical paths,
+	# and a symlink in one would land an xattr outside the tree, as
+	# root, at boot
+	setfattr -hP --restore="$X" || echo "restmeta: some xattrs skipped" >&2
+fi
+
+# Attributes last, and it has to be last: an immutable file rejects
+# every chmod/chown/setcap/setfacl above, so replaying +i earlier
+# would silently drop the rest of this generation's metadata.
+# + not =: the store copy carries no flags, so only additions are
+# needed, and = would try to clear filesystem-internal ones (e, I)
+# that chattr cannot touch. Fail soft per row: the flag set a
+# filesystem accepts varies across the nixgen-fs table
+T=$R/etc/nixgen/attrs
+if [ -s "$T" ]; then
+	while IFS='	' read -r fl p; do
+		chattr "+$fl" "$p" \
+			|| echo "restmeta: chattr +$fl $p skipped" >&2
+	done < "$T"
 fi

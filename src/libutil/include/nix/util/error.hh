@@ -324,18 +324,8 @@ public:
 /**
  * POSIX system error, created using `errno`, `strerror` friends.
  *
- * Throw this, but prefer not to catch this, and catch `SystemError`
- * instead. This allows implementations to freely switch between this
- * and `windows::WinError` without breaking catch blocks.
- *
- * However, it is permissible to catch this and rethrow so long as
- * certain conditions are not met (e.g. to catch only if `errNo =
- * EFooBar`). In that case, try to also catch the equivalent `windows::WinError`
- * code.
- *
- * @todo Rename this to `PosixError` or similar. At this point Windows
- * support is too WIP to justify the code churn, but if it is finished
- * then a better identifier becomes moe worth it.
+ * Throw this, but prefer to catch `SystemError` instead, which is the
+ * category this belongs to.
  */
 class SysError final : public CloneableError<SysError, SystemError>
 {
@@ -426,16 +416,6 @@ void throwExceptionSelfCheck();
 void panic(std::string_view msg);
 
 /**
- * Run a function, printing an error and returning on exception.
- * Useful for wrapping a `main` function that may throw
- *
- * @param programName Name of program, usually argv[0]
- * @param body Function to run inside the try block
- * @return exit code: 0 if success, 1 if exception does not specify.
- */
-int handleExceptions(const std::string & programName, fun<void()> body);
-
-/**
  * Print a basic error message with source position and std::terminate().
  *
  * @note: This assumes that the logger is operational
@@ -452,11 +432,6 @@ int handleExceptions(const std::string & programName, fun<void()> body);
 #endif
 
 
-/**
- * Convenience alias for when we use a `errno`-based error handling
- * function on Unix, and `GetLastError()`-based error handling on on
- * Windows.
- */
 using NativeSysError =
     SysError
     ;

@@ -19,11 +19,6 @@ void SymlinkNotAllowed::anchor() {}
 
 static std::atomic<size_t> nextNumber{0};
 
-bool SourceAccessor::Stat::isNotNARSerialisable()
-{
-    return this->type != tRegular && this->type != tSymlink && this->type != tDirectory;
-}
-
 std::string SourceAccessor::Stat::typeString()
 {
     switch (this->type) {

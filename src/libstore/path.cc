@@ -1,7 +1,5 @@
-#include <nlohmann/json.hpp>
 
 #include "nix/store/store-dir-config.hh"
-#include "nix/util/json-utils.hh"
 
 namespace nix {
 
@@ -63,33 +61,7 @@ StorePath::StorePath(const Hash & hash, std::string_view _name)
     checkPathName(baseName, name());
 }
 
-bool StorePath::isDerivation() const noexcept
-{
-    return hasSuffix(name(), drvExtension);
-}
-
-void StorePath::requireDerivation() const
-{
-    if (!isDerivation())
-        throw FormatError("store path '%s' is not a valid derivation path", to_string());
-}
-
 StorePath StorePath::dummy("ffffffffffffffffffffffffffffffff-x");
 
 } // namespace nix
 
-namespace nlohmann {
-
-using namespace nix;
-
-StorePath adl_serializer<StorePath>::from_json(const json & json)
-{
-    return StorePath{getString(json)};
-}
-
-void adl_serializer<StorePath>::to_json(json & json, const StorePath & storePath)
-{
-    json = storePath.to_string();
-}
-
-} // namespace nlohmann

@@ -5,7 +5,6 @@
 
 #include "nix/util/archive.hh"
 #include "nix/util/alignment.hh"
-#include "nix/util/config-global.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/source-path.hh"
 #include "nix/util/file-system.hh"
@@ -13,22 +12,16 @@
 
 namespace nix {
 
-struct ArchiveSettings : Config
+struct ArchiveSettings
 {
-private:
-    void anchor() override;
-public:
-
-    Setting<bool> useCaseHack{
-        this,
-        false,
-        "use-case-hack",
-        "Whether to enable a macOS-specific hack for dealing with file name case collisions."};
+    /**
+     * macOS-specific hack for file name case collisions. Off: this
+     * store only ever runs on Linux.
+     */
+    bool useCaseHack = false;
 };
 
 static ArchiveSettings archiveSettings;
-
-static GlobalConfig::Register rArchiveSettings(&archiveSettings);
 
 /* Maximum directory nesting depth for dumpPath()/parseDump(). Bounds
    stack usage so deep trees cannot overflow the (possibly coroutine)
@@ -132,24 +125,11 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
     }(*this, path, path, 0);
 }
 
-void ArchiveSettings::anchor() {}
-
-time_t dumpPathAndGetMtime(const std::filesystem::path & path, Sink & sink, PathFilter & filter)
-{
-    SourcePath path2 = makeFSSourceAccessor(absPath(path), /*trackLastModified=*/true);
-    path2.dumpPath(sink, filter);
-    return path2.accessor->getLastModified().value();
-}
 
 void dumpPath(const std::filesystem::path & path, Sink & sink, PathFilter & filter)
 {
     SourcePath path2 = makeFSSourceAccessor(absPath(path), /*trackLastModified=*/false);
     path2.dumpPath(sink, filter);
-}
-
-void dumpString(std::string_view s, Sink & sink)
-{
-    sink << narVersionMagic1 << "(" << "type" << "regular" << "contents" << s << ")";
 }
 
 template<typename... Args>
@@ -332,18 +312,6 @@ void restorePath(const std::filesystem::path & path, Source & source, bool start
        moved directory itself. The final-path owner finishes the root
        (canonicaliseTimestampAndPermissions); file and symlink roots
        were already finished at creation. */
-}
-
-void copyNAR(Source & source, Sink & sink)
-{
-    // FIXME: if 'source' is the output of dumpPath() followed by EOF,
-    // we should just forward all data directly without parsing.
-
-    NullFileSystemObjectSink parseSink; /* just parse the NAR */
-
-    TeeSource wrapper{source, sink};
-
-    parseDump(parseSink, wrapper);
 }
 
 } // namespace nix

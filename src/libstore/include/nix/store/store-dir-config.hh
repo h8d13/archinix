@@ -4,7 +4,6 @@
 #include "nix/util/canon-path.hh"
 #include "nix/util/hash.hh"
 #include "nix/store/content-address.hh"
-#include "nix/util/configuration.hh"
 
 #include <map>
 #include <string>
@@ -41,29 +40,10 @@ struct StoreDirConfig
     std::string printStorePath(const StorePath & path) const;
 
     /**
-     * Deprecated
-     *
-     * \todo remove
-     */
-    StorePathSet parseStorePathSet(const StringSet & paths) const;
-
-    StringSet printStorePathSet(const StorePathSet & path) const;
-
-    /**
-     * Display a set of paths in human-readable form (i.e., between quotes
-     * and separated by commas).
-     */
-    /**
      * @return true if *path* is in the Nix store (but not the Nix
      * store itself).
      */
     bool isInStore(std::string_view path) const;
-
-    /**
-     * @return true if *path* is a store path, i.e. a direct child of the
-     * Nix store.
-     */
-    bool isStorePath(std::string_view path) const;
 
     /**
      * Split a path like `/nix/store/<hash>-<name>/<bla>` into
@@ -82,17 +62,6 @@ struct StoreDirConfig
 
     StorePath makeFixedOutputPathFromCA(std::string_view name, const ContentAddressWithReferences & ca) const;
 
-    /**
-     * Read-only variant of addToStore(). It returns the store
-     * path for the given file system object.
-     */
-    std::pair<StorePath, Hash> computeStorePath(
-        std::string_view name,
-        const SourcePath & path,
-        ContentAddressMethod method = ContentAddressMethod::Raw::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = {},
-        PathFilter & filter = defaultPathFilter) const;
 };
 
 } // namespace nix

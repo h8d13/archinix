@@ -9,7 +9,7 @@ for t in parallel-optimise import-hashes nar-parse; do
 	g++ -std=c++23 -O2 "tests/$t.cc" -o "build/tmp/$t" \
 		$(pkg-config --cflags --libs nix-store nix-util)
 done
-for t in import-dir rm-path export-path import-path; do
+for t in import-dir rm-path export-path import-path store-paths store-resolve verify-store; do
 	g++ -std=c++23 -O2 "arch/$t.cc" -o "build/$t" \
 		$(pkg-config --cflags --libs nix-store nix-util)
 done
@@ -31,5 +31,6 @@ run import-select sh -e tests/import-select.sh
 run gc-links sh -e tests/gc-links.sh
 run export-roundtrip sh -e tests/export-roundtrip.sh
 run specials-skip sh -e tests/specials-skip.sh
+run tool-errors sh -e tests/tool-errors.sh
 
 exit $FAIL

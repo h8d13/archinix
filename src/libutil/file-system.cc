@@ -20,8 +20,6 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include <boost/iostreams/device/mapped_file.hpp>
-#include <boost/filesystem/path.hpp>
 
 
 
@@ -147,11 +145,6 @@ bool isInDir(const std::filesystem::path & path, const std::filesystem::path & d
     return first != "." && first != "..";
 }
 
-bool isDirOrInDir(const std::filesystem::path & path, const std::filesystem::path & dir)
-{
-    return path == dir || isInDir(path, dir);
-}
-
 #  define STAT stat
 
 PosixStat stat(const std::filesystem::path & path)
@@ -180,18 +173,6 @@ bool pathExists(const std::filesystem::path & path)
     return maybeLstat(path).has_value();
 }
 
-bool pathAccessible(const std::filesystem::path & path)
-{
-    try {
-        return pathExists(path);
-    } catch (SystemError & e) {
-        // swallow EPERM
-        if (e.is(std::errc::operation_not_permitted))
-            return false;
-        throw;
-    }
-}
-
 std::filesystem::path readLink(const std::filesystem::path & path)
 {
     checkInterrupt();
@@ -208,29 +189,6 @@ std::string readFile(const std::filesystem::path & path)
     if (!fd)
         throw NativeSysError("opening file %s", PathFmt(path));
     return readFile(fd.get());
-}
-
-void readFile(const std::filesystem::path & path, Sink & sink, bool memory_map)
-{
-    // Memory-map the file for faster processing where possible.
-    if (memory_map) {
-        try {
-            /* mapped_file_source can't be constructed from a std::filesystem::path. */
-            boost::iostreams::mapped_file_source mmap(boost::filesystem::path(path.native()));
-            if (mmap.is_open()) {
-                sink({mmap.data(), mmap.size()});
-                return;
-            }
-        } catch (const boost::exception & e) {
-        }
-        debug("memory-mapping failed for path: %s", PathFmt(path));
-    }
-
-    // Stream the file instead if memory-mapping fails or is disabled.
-    auto fd = openFileReadonly(std::filesystem::path(path));
-    if (!fd)
-        throw NativeSysError("opening file %s", PathFmt(path));
-    drainFD(fd.get(), sink);
 }
 
 void writeFile(
@@ -308,13 +266,11 @@ void syncParent(const std::filesystem::path & path)
     AutoCloseFD fd = openDirectory(path.parent_path(), FinalSymlink::Follow);
     if (!fd)
         throw NativeSysError("opening file %s", PathFmt(path));
-    /* TODO: Fix on windows, FlushFileBuffers requires GENERIC_WRITE. */
     fd.fsync();
 }
 
 void recursiveSync(const std::filesystem::path & path)
 {
-    /* TODO: Fix on windows, FlushFileBuffers requires GENERIC_WRITE. */
     /* If it's a file or symlink, just fsync and return. */
     auto st = lstat(path);
     if (S_ISREG(st.st_mode)) {
@@ -355,17 +311,6 @@ void recursiveSync(const std::filesystem::path & path)
             throw NativeSysError("opening directory %1%", PathFmt(*dir));
         fd.fsync();
     }
-}
-
-void createDir(const std::filesystem::path & path, mode_t mode)
-{
-    if (mkdir(
-            path.string().c_str()
-                ,
-            mode
-            )
-        == -1)
-        throw SysError("creating directory %s", PathFmt(path));
 }
 
 void createDirs(const std::filesystem::path & path)
@@ -435,55 +380,6 @@ std::filesystem::path createTempDir(const std::filesystem::path & tmpRoot, const
     }
 }
 
-AutoCloseFD createAnonymousTempFile()
-{
-    AutoCloseFD fd;
-
-#  ifdef O_TMPFILE
-    static std::atomic_flag tmpfileUnsupported{};
-    if (!tmpfileUnsupported.test()) /* Try with O_TMPFILE first. */ {
-        /* Use O_EXCL, because the file is never supposed to be linked into filesystem. */
-        fd = ::open(defaultTempDir().c_str(), O_TMPFILE | O_CLOEXEC | O_RDWR | O_EXCL, S_IWUSR | S_IRUSR);
-        if (!fd) {
-            /* Not supported by the filesystem or the kernel. */
-            if (errno == EOPNOTSUPP || errno == EISDIR)
-                tmpfileUnsupported.test_and_set(); /* Set flag and fall through to createTempFile. */
-            else
-                throw SysError("creating anonymous temporary file");
-        } else {
-            return fd; /* Successfully created. */
-        }
-    }
-#  endif
-    auto [fd2, path] = createTempFile("nix-anonymous");
-    if (!fd2)
-        throw SysError("creating temporary file %s", PathFmt(path));
-    fd = std::move(fd2);
-    tryUnlink(path); /* We only care about the file descriptor. */
-
-    return fd;
-}
-
-std::pair<AutoCloseFD, std::filesystem::path>
-createTempFile(const std::filesystem::path & root, const std::filesystem::path & prefix)
-{
-    assert(!prefix.is_absolute());
-    auto tmpl = (root / (prefix.string() + ".XXXXXX")).string();
-    // FIXME: use O_TMPFILE.
-    // `mkstemp` modifies the string to contain the actual filename.
-    AutoCloseFD fd = toDescriptor(mkstemp(tmpl.data()));
-
-    if (!fd)
-        throw SysError("creating temporary file '%s'", tmpl);
-    unix::closeOnExec(fd.get());
-    return {std::move(fd), std::filesystem::path(std::move(tmpl))};
-}
-
-std::pair<AutoCloseFD, std::filesystem::path> createTempFile(const std::filesystem::path & prefix)
-{
-    return createTempFile(defaultTempDir(), prefix);
-}
-
 std::filesystem::path makeTempPath(const std::filesystem::path & root, const std::string & suffix)
 {
     // start the counter at a random value to minimize issues with preexisting temp paths
@@ -499,32 +395,6 @@ void createSymlink(const std::filesystem::path & target, const std::filesystem::
     std::filesystem::create_symlink(target, link, ec);
     if (ec)
         throw SysError(ec.value(), "creating symlink %s -> %s", PathFmt(link), PathFmt(target));
-}
-
-void replaceSymlink(const std::filesystem::path & target, const std::filesystem::path & link)
-{
-    for (unsigned int n = 0; true; n++) {
-        auto tmp = link.parent_path() / std::filesystem::path{fmt(".%d_%s", n, link.filename().string())};
-        tmp = tmp.lexically_normal();
-
-        try {
-            std::filesystem::create_symlink(target, tmp);
-        } catch (std::filesystem::filesystem_error & e) {
-            if (e.code() == std::errc::file_exists)
-                continue;
-            throw SystemError(e.code(), "creating symlink %1% -> %2%", PathFmt(tmp), PathFmt(target));
-        }
-
-        try {
-            std::filesystem::rename(tmp, link);
-        } catch (std::filesystem::filesystem_error & e) {
-            if (e.code() == std::errc::file_exists)
-                continue;
-            throw SystemError(e.code(), "renaming %1% to %2%", PathFmt(tmp), PathFmt(link));
-        }
-
-        break;
-    }
 }
 
 void setWriteTime(const std::filesystem::path & path, const PosixStat & st)
@@ -596,19 +466,6 @@ void moveFile(const std::filesystem::path & oldName, const std::filesystem::path
 }
 
 //////////////////////////////////////////////////////////////////////
-
-bool isExecutableFileAmbient(const std::filesystem::path & exe)
-{
-    // Check file type, because directory being executable means
-    // something completely different.
-    // `is_regular_file` follows symlinks before checking.
-    return std::filesystem::is_regular_file(exe)
-           && access(
-                  exe.string().c_str(),
-                  X_OK
-                  )
-                  == 0;
-}
 
 void chmod(const std::filesystem::path & path, mode_t mode)
 {

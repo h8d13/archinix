@@ -125,12 +125,6 @@ SQLite::~SQLite()
     }
 }
 
-void SQLite::isCache()
-{
-    exec("pragma synchronous = off");
-    exec("pragma main.journal_mode = wal");
-}
-
 void SQLite::exec(const std::string & stmt)
 {
     retrySQLite<void>([&]() {
@@ -248,11 +242,6 @@ int64_t SQLiteStmt::Use::getInt(int col)
 {
     // FIXME: detect nulls?
     return sqlite3_column_int64(stmt, col);
-}
-
-bool SQLiteStmt::Use::isNull(int col)
-{
-    return sqlite3_column_type(stmt, col) == SQLITE_NULL;
 }
 
 SQLiteTxn::SQLiteTxn(sqlite3 * db)

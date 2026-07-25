@@ -1,4 +1,4 @@
-## Gotchas
+## Gotchas / Notes
 
 - **Reruns of mkiso.sh reuse the nixarch generations** and only
   reassemble the ISO. `REBUILD=1` discards them first; required after
@@ -24,12 +24,21 @@
   through commit it branches with the config tree. `/var/lib/pacman`
   is deliberately not listed: the package db describes the static tree
   and must roll back with it.
+- **A store root is two directories.** `<root>/nix/store` holds the
+  paths and `<root>/nix/var/nix/db` holds the registration db, which is
+  the source of truth for what is valid: a directory listing also shows
+  the `.links` dedup farm and half-written `tmp-*` imports, so ask
+  `store-paths` rather than globbing. `rootDir` moves both (`/` on the
+  host build, `/nixstoredev` in the box), but only the physical half:
+  GRUB entries and the initramfs spell out the logical `/nix/store`, so
+  that one cannot move.
 - **Import canonicalises permissions** (dirs 0755, files 0444/0555,
   root-owned, no xattrs: NAR keeps only the executable bit; 0755 dirs
   keep the manifest to true deviations instead of every dir in the
   tree, one boot-time copy-up per row). `nixgen-savemeta` captures
   what that strips (modes, ownership incl. symlinks, capabilities,
-  POSIX ACLs) into `etc/nixgen/{perms,caps,acls}`; `nixgen-restmeta`
+  POSIX ACLs, user/trusted xattrs, chattr flags) into
+  `etc/nixgen/{perms,caps,acls,xattrs,attrs}`; `nixgen-restmeta`
   replays it at boot (nixgen-perms.service) and inside every build
   sandbox. A base imported without the manifest breaks the chain:
   special bits and ownership are gone and sub-444 secrets (shadow)
@@ -59,7 +68,53 @@
 - **update-test.sh pins a dated Arch Archive snapshot** to prove a real
   kernel version change; archive use lives in the test only, stock
   generations track live mirrors.
-- **space saving** out of the arch tarball (~500mb) the system already saves
-about ~24mb. Mostly duplicated `.mo` files (fixed upstream) and license files
-or similar. This was found on first day of making this project at first store
-import.
+- **space saving** out of the arch tarball (~500mb) the system
+  already saves about ~24mb. Mostly duplicated `.mo` files (fixed
+  upstream) and license files or similar. This was found on first day
+  of making this project at first store import.
+- **what happens if AI is tasked with un-slopping** instead of
+  creating slop? Idea was that atomic FS are fascinating and the
+  "larger" part of the `Eelco Dolstra`
+  [thesis](https://edolstra.github.io/pubs/phd-thesis.pdf), yet much
+  code got intertwined to bolt into FS semantics, without ever asking
+  if it can still be standalone... SoC, and OoO? The idea was that any
+  surface covered is potential failures. And small glue instead,
+  enables understanding + optimizing complex parts to liking.
+- **Flow:** one agent drives VMs over `serial QEMU` and the other **is
+  cutting down cb**. Instead of being adversarial for everything (and
+  hallucinating "problems/solutions"), catches issues real-time as it
+  adapts cb, this creates a self-virtuous loop. + smaller end-result.
+  In 7 days this resulted in +4k lines (2k of which docs) and -60k
+  lines from original. I also tried to make "code as docs/comments".
+- **cutting into `libstore` and `libutil`** What served only those two
+  goes with them: path signing (content is re-hashed against the db
+  instead), JSON output, the terminal width tables, subprocess
+  spawning, and the garbage collector's daemon half. GC no longer
+  guesses which paths are live by walking `/proc` and shelling out to
+  `lsof`, and has no roots socket, temp-root protocol or auto-GC:
+  roots are explicit, `import-dir`/`import-path` register one per path
+  and `rm-path` drops it before deleting.
+- **the store takes a path and nothing else.** The `Setting<T>` /
+  `Config` framework went with nix.conf: no config file, no `NIX_*`
+  discovery, no URI query parameters, no settings singleton. What
+  survived became plain fields with defaults, held per-store rather
+  than globally, so changing one is an edit and a recompile. arch/ is
+  the operator surface; a knob nothing can reach is not a knob.
+- **references are refused at the door.** A generation is an
+  independent, self-contained tree: `import-dir` creates them with
+  none, and sharing between them is the `.links` hardlink farm, which
+  works on content below the store-path level. `import-path` now
+  rejects a stream that claims references, so the invariant is
+  enforced rather than assumed, and the closure walk that existed for
+  a case that never occurs is gone. The `Refs` table and its `on
+  delete restrict` FK stay as backstop: bypass the door and a delete
+  fails loudly instead of losing data.
+- **store layout stays in the library.** `store-paths` (list) and
+  `store-resolve` (name / hash-prefix / full basename -> basename) ask
+  the db, which is the only thing that knows what is registered;
+  `nixgen-remove`, `-switch` and `-diffid` used to glob the store dir
+  and would match the `.links` farm or a half-written `tmp-*` import
+  as readily as a generation. `nixgen-verify` closes the other half:
+  content addressing is the premise and the store is the root
+  filesystem, so `--content` re-hashes every path and link against the
+  db before a boot finds the corruption for you.

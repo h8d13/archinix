@@ -79,12 +79,8 @@ OsString readLinkAt(Descriptor dirFd, const CanonPath & path);
  * @param dirFd Directory handle to open relative to
  * @param path Relative path (with no `..` or `.` components)
  *
- * @param desiredAccess (Windows) Windows `ACCESS_MASK`
- * @param createOptions (Windows) Windows create options
- * @param createDisposition (Windows) `FILE_OPEN`, `FILE_CREATE`, etc.
- *
- * @param flags (Unix) `O_*` flags (must not include `O_NOFOLLOW`)
- * @param mode (Unix) Mode for `O_{CREAT,TMPFILE}`
+ * @param flags `O_*` flags (must not include `O_NOFOLLOW`)
+ * @param mode Mode for `O_{CREAT,TMPFILE}`
  *
  * @param dirFdCallback Callback invoked that gets the ownership of an intermediate directory fd.
  *
@@ -93,7 +89,7 @@ OsString readLinkAt(Descriptor dirFd, const CanonPath & path);
  * @throws SymlinkNotAllowed if an interior path component is a
  *     symlink, or if the final component is a symlink and `O_PATH`
  *     (without `O_DIRECTORY`) was *not* passed. With `O_PATH`
- *     (without `O_DIRECTORY`) on Unix, a trailing symlink is
+ *     (without `O_DIRECTORY`), a trailing symlink is
  *     permitted and the caller receives a "path fd" to the symlink
  *     itself.
  *
@@ -103,8 +99,8 @@ OsString readLinkAt(Descriptor dirFd, const CanonPath & path);
  *     caller sees a failed descriptor with `errno == EEXIST`.
  *
  * @return A valid descriptor on success, or an invalid descriptor
- *     on non-symlink errors (Unix: `errno` set, e.g. `ENOENT`,
- *     `ENOTDIR`, `EACCES`; Windows: last error set). The caller is
+ *     on non-symlink errors (`errno` set, e.g. `ENOENT`,
+ *     `ENOTDIR`, `EACCES`). The caller is
  *     responsible for checking the return value.
  *
  *     `errno` will never be `ELOOP` because that case is translated

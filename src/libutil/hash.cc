@@ -6,11 +6,9 @@
 #include <openssl/sha.h>
 
 #include "nix/util/hash.hh"
-#include "nix/util/configuration.hh"
 #include "nix/util/split.hh"
 #include "nix/util/base-n.hh"
 #include "nix/util/base-nix-32.hh"
-#include "nix/util/json-utils.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -232,26 +230,6 @@ Hash Hash::parseAnyPrefixed(std::string_view original)
         .first;
 }
 
-Hash Hash::parseAny(std::string_view original, std::optional<HashAlgorithm> optAlgo)
-{
-    return parseAnyReturningFormat(original, optAlgo).first;
-}
-
-std::pair<Hash, HashFormat>
-Hash::parseAnyReturningFormat(std::string_view original, std::optional<HashAlgorithm> optAlgo)
-{
-    return parseAnyHelper(original, [&](std::optional<HashAlgorithm> optParsedAlgo) {
-        // Either the string or user must provide the type, if they both do they
-        // must agree.
-        if (!optParsedAlgo && !optAlgo)
-            throw BadHash("hash '%s' does not include a type, nor is the type otherwise known from context", original);
-        else if (optParsedAlgo && optAlgo && *optParsedAlgo != *optAlgo)
-            throw BadHash("hash '%s' should have type '%s'", original, printHashAlgo(*optAlgo));
-
-        return optParsedAlgo ? *optParsedAlgo : *optAlgo;
-    });
-}
-
 Hash Hash::parseNonSRIUnprefixed(std::string_view s, HashAlgorithm algo)
 {
     return parseExplicitFormatUnprefixed(s, algo, baseFromSize(s, algo));
@@ -260,18 +238,6 @@ Hash Hash::parseNonSRIUnprefixed(std::string_view s, HashAlgorithm algo)
 Hash Hash::parseExplicitFormatUnprefixed(std::string_view s, HashAlgorithm algo, HashFormat format)
 {
     return parseLowLevel(s, algo, baseExplicit(format));
-}
-
-Hash newHashAllowEmpty(std::string_view hashStr, std::optional<HashAlgorithm> ha)
-{
-    if (hashStr.empty()) {
-        if (!ha)
-            throw BadHash("empty hash requires explicit hash algorithm");
-        Hash h(*ha);
-        warn("found empty hash, assuming '%s'", h.to_string(HashFormat::SRI, true));
-        return h;
-    } else
-        return Hash::parseAny(hashStr, ha);
 }
 
 union Hash::Ctx
@@ -356,13 +322,6 @@ Hash hashString(HashAlgorithm ha, std::string_view s)
     return hash;
 }
 
-Hash hashFile(HashAlgorithm ha, const std::filesystem::path & path)
-{
-    HashSink sink(ha);
-    readFile(path, sink);
-    return sink.finish().hash;
-}
-
 HashSink::HashSink(HashAlgorithm ha)
     : ha(ha)
 {
@@ -407,49 +366,6 @@ Hash compressHash(const Hash & hash, unsigned int newSize)
     for (unsigned int i = 0; i < hash.hashSize; ++i)
         h.hash[i % newSize] ^= hash.hash[i];
     return h;
-}
-
-std::optional<HashFormat> parseHashFormatOpt(std::string_view hashFormatName)
-{
-    if (hashFormatName == "base16")
-        return HashFormat::Base16;
-    if (hashFormatName == "nix32")
-        return HashFormat::Nix32;
-    if (hashFormatName == "base32") {
-        warn(R"("base32" is a deprecated alias for hash format "nix32".)");
-        return HashFormat::Nix32;
-    }
-    if (hashFormatName == "base64")
-        return HashFormat::Base64;
-    if (hashFormatName == "sri")
-        return HashFormat::SRI;
-    return std::nullopt;
-}
-
-HashFormat parseHashFormat(std::string_view hashFormatName)
-{
-    auto opt_f = parseHashFormatOpt(hashFormatName);
-    if (opt_f)
-        return *opt_f;
-    throw UsageError("unknown hash format '%1%', expect 'base16', 'base32', 'base64', or 'sri'", hashFormatName);
-}
-
-std::string_view printHashFormat(HashFormat HashFormat)
-{
-    switch (HashFormat) {
-    case HashFormat::Base64:
-        return "base64";
-    case HashFormat::Nix32:
-        return "nix32";
-    case HashFormat::Base16:
-        return "base16";
-    case HashFormat::SRI:
-        return "sri";
-    default:
-        // illegal hash base enum value internally, as opposed to external input
-        // which should be validated with nice error message.
-        assert(false);
-    }
 }
 
 std::optional<HashAlgorithm> parseHashAlgoOpt(std::string_view s)
@@ -498,19 +414,3 @@ std::string_view printHashAlgo(HashAlgorithm ha)
 
 } // namespace nix
 
-namespace nlohmann {
-
-using namespace nix;
-
-Hash adl_serializer<Hash>::from_json(const json & json)
-{
-    auto & s = getString(json);
-    return Hash::parseSRI(s);
-}
-
-void adl_serializer<Hash>::to_json(json & json, const Hash & hash)
-{
-    json = hash.to_string(HashFormat::SRI, true);
-}
-
-} // namespace nlohmann

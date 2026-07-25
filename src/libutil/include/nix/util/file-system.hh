@@ -23,20 +23,11 @@
 #include <functional>
 #include <optional>
 
-/**
- * Polyfill for MinGW
- *
- * Windows does in fact support symlinks, but the C runtime interfaces predate this.
- * We define S_IFLNK and S_ISLNK so that our lstat implementation can properly
- * indicate symlinks by setting these mode bits when it detects a reparse point.
- */
 #ifndef S_IFLNK
-#    error "S_IFLNK should be defined on non-Windows platforms"
-#  define S_IFLNK 0120000
+#    error "S_IFLNK should be defined"
 #endif
 #ifndef S_ISLNK
-#    error "S_ISLNK should be defined on non-Windows platforms"
-#  define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#    error "S_ISLNK should be defined"
 #endif
 
 namespace nix {
@@ -83,13 +74,6 @@ std::string_view baseNameOf(std::string_view path);
 bool isInDir(const std::filesystem::path & path, const std::filesystem::path & dir);
 
 /**
- * Check whether 'path' is equal to 'dir' or a descendant of
- * 'dir'. Both paths must be canonicalized.
- */
-bool isDirOrInDir(const std::filesystem::path & path, const std::filesystem::path & dir);
-
-/**
- * `struct stat` is not 64-bit everywhere on Windows.
  */
 using PosixStat =
     struct ::stat
@@ -117,14 +101,6 @@ std::optional<PosixStat> maybeStat(const std::filesystem::path & path);
 bool pathExists(const std::filesystem::path & path);
 
 /**
- * A version of pathExists that returns false on a permission error.
- * Useful for inferring default paths across directories that might not
- * be readable.
- * @return true iff the given path can be accessed and exists
- */
-bool pathAccessible(const std::filesystem::path & path);
-
-/**
  * Read the contents (target) of a symbolic link.  The result is not
  * in any way canonicalised.
  */
@@ -138,9 +114,9 @@ std::filesystem::path readLink(const std::filesystem::path & path);
  * paths (that is a rather trivial TOCTOU --- the error message is best
  * effort) but for anything else we do.
  *
- * @note this function will clobber `errno` (Unix) / "last error"
- * (Windows), so care must be used to get those error codes, then call
- * this, then build a `SysError` / `WinError` with the saved error code.
+ * @note this function will clobber `errno`, so care must be used to
+ * save the error code before calling this, then build the `SysError`
+ * with the saved code.
  */
 std::filesystem::path descriptorToPath(Descriptor fd);
 
@@ -183,10 +159,8 @@ struct OpenNewFileForWriteParams
  * Open a `Descriptor` for write access or create it if it doesn't exist or truncate existing depending on @ref
  * truncateExisting.
  *
- * @param mode POSIX permission bits. Ignored on Windows.
+ * @param mode POSIX permission bits.
  * @throws Nothing.
- *
- * @todo Reparse points on Windows.
  */
 AutoCloseFD openNewFileForWrite(const std::filesystem::path & path, mode_t mode, OpenNewFileForWriteParams params);
 
@@ -194,7 +168,6 @@ AutoCloseFD openNewFileForWrite(const std::filesystem::path & path, mode_t mode,
  * Read the contents of a file into a string.
  */
 std::string readFile(const std::filesystem::path & path);
-void readFile(const std::filesystem::path & path, Sink & sink, bool memory_map = true);
 
 enum struct FsSync { Yes, No };
 
@@ -245,11 +218,6 @@ void deletePath(const std::filesystem::path & path, uint64_t & bytesFreed);
 void createDirs(const std::filesystem::path & path);
 
 /**
- * Create a single directory.
- */
-void createDir(const std::filesystem::path & path, mode_t mode = 0755);
-
-/**
  * Set the access and modification times of the given path, not
  * following symlinks.
  *
@@ -278,11 +246,6 @@ void setWriteTime(const std::filesystem::path & path, const PosixStat & st);
  *
  */
 void createSymlink(const std::filesystem::path & target, const std::filesystem::path & link);
-
-/**
- * Atomically create or replace a symlink.
- */
-void replaceSymlink(const std::filesystem::path & target, const std::filesystem::path & link);
 
 /**
  * Similar to 'renameFile', but fallback to a copy+remove if `src` and `dst`
@@ -386,34 +349,10 @@ std::filesystem::path
 createTempDir(const std::filesystem::path & tmpRoot = "", const std::string & prefix = "nix", mode_t mode = 0755);
 
 /**
- * Create an anonymous readable/writable temporary file, returning a file handle.
- * On UNIX there resulting file isn't linked to any path on the filesystem.
- */
-AutoCloseFD createAnonymousTempFile();
-
-/**
- * Create a temporary file at a root, returning a file handle and its path.
- */
-std::pair<AutoCloseFD, std::filesystem::path>
-createTempFile(const std::filesystem::path & root, const std::filesystem::path & prefix);
-
-/**
- * Create a temporary file, returning a file handle and its path.
- */
-std::pair<AutoCloseFD, std::filesystem::path> createTempFile(const std::filesystem::path & prefix = "nix");
-
-/**
  * Return `TMPDIR`, or the default temporary directory if unset or empty.
- * Uses GetTempPathW on windows which respects TMP, TEMP, USERPROFILE env variables.
  * Does not resolve symlinks and the returned path might not be directory or exist at all.
  */
 std::filesystem::path defaultTempDir();
-
-/**
- * Interpret `exe` as a location in the ambient file system and return
- * whether it resolves to a file that is executable.
- */
-bool isExecutableFileAmbient(const std::filesystem::path & exe);
 
 /**
  * Return temporary path constructed by appending a suffix to a root path.

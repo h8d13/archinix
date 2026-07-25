@@ -6,7 +6,6 @@
 #include "nix/store/path.hh"
 #include "nix/util/file-content-address.hh"
 #include "nix/util/variant-wrapper.hh"
-#include "nix/util/json-impls.hh"
 
 namespace nix {
 
@@ -83,37 +82,6 @@ struct ContentAddressMethod
     std::string_view render() const;
 
     /**
-     * Parse the prefix tag which indicates how the files
-     * were ingested, with the fixed output case not prefixed for back
-     * compat.
-     *
-     * @param m A string that should begin with the
-     * prefix. On return, the remainder of the string after the
-     * prefix.
-     */
-    static ContentAddressMethod parsePrefix(std::string_view & m);
-
-    /**
-     * Render the prefix tag which indicates how the files wre ingested.
-     *
-     * The rough inverse of `parsePrefix()`.
-     */
-    std::string_view renderPrefix() const;
-
-    /**
-     * Parse a content addressing method and hash algorithm.
-     */
-    static std::pair<ContentAddressMethod, HashAlgorithm> parseWithAlgo(std::string_view rawCaMethod);
-
-    /**
-     * Render a content addressing method and hash algorithm in a
-     * nicer way, prefixing both cases.
-     *
-     * The rough inverse of `parse()`.
-     */
-    std::string renderWithAlgo(HashAlgorithm ha) const;
-
-    /**
      * Get the underlying way to content-address file system objects.
      *
      * Different ways of hashing store objects may use the same method
@@ -163,8 +131,6 @@ struct ContentAddress
     static ContentAddress parse(std::string_view rawCa);
 
     static std::optional<ContentAddress> parseOpt(std::string_view rawCaOpt);
-
-    std::string printMethodAlgo() const;
 };
 
 /**
@@ -298,15 +264,4 @@ struct ContentAddressWithReferences
     Hash getHash() const;
 };
 
-template<>
-struct json_avoids_null<ContentAddressMethod> : std::true_type
-{};
-
-template<>
-struct json_avoids_null<ContentAddress> : std::true_type
-{};
-
 } // namespace nix
-
-JSON_IMPL(nix::ContentAddressMethod)
-JSON_IMPL(nix::ContentAddress)

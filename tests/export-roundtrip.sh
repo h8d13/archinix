@@ -77,7 +77,7 @@ ok $s "truncated bundle rejected"
 # GRUB-invisible until nixgen-adopt appends its menuentry. Pin the
 # refusals (no kernel, duplicate) and the stanza itself; the shape must
 # stay prunable by nixgen-remove's awk (menuentry line through '}')
-ADOPT="sh arch/nixgen/nixgen-adopt"
+ADOPT="sh -e arch/nixgen/nixgen-adopt"
 if $ADOPT "$(basename "$P2")" "$ROOT/b" > "$ROOT/log-adopt" 2>&1; then
 	s=1; else s=0; fi
 ok $s "adopt refuses generation without kernel"

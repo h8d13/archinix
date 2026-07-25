@@ -4,4 +4,3 @@
 #include "nix/util/signals.hh"
 #include "nix/util/source-accessor.hh"
 
-#include <nlohmann/json.hpp>

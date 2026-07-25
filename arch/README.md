@@ -11,7 +11,7 @@ builds the *next* generation offline; the running root is never touched.
 It also aims to solve partial updates in a way, since the current gen;
 only lives in RAM and `checkupdates` equivalent is ran before `nixgen-update`.
 
-![SchemaArchinix](./schema.png)
+![SchemaArchinix](./schema.svg)
 
 This was generally the idea (like having `git` through changes you make on system).
 
@@ -22,10 +22,7 @@ Yet for the current to vanish when nothing to `-commit`:
 > My goal was for trying new stuff inside a box to be "forgiving".
 > But also be more deliberate about what you do carry into a system.
 
-Inside the box (installed by `setup-boot.sh`):
-All commands: reference is `nixgen-help` (source:
-[nixgen/nixgen-help](nixgen-help), drift-checked by
-update-test: every installed [nixgen-*](./nixgen/) must appear in it).
+Deps inside the box (installed by [`setup-boot.sh`](./iso/setup-boot.sh))
 
 ## Resources
 
@@ -67,7 +64,7 @@ from `nixstore.squashfs` on the ISO, and stages the tmpfs upper; a
 generator writes the `sysroot.mount` that overlays them, so the root
 filesystem is a unit like any other; `nixgen-bind.service` exposes the
 store at `/nixstore` and the store-disk root at `/nixstoredev` before
-switch-root.
+switch-root. See [NOTES](./NOTES.md) for more details.
 
 Networking is baked in (networkd DHCP on `en*`, resolved DNS).
 
@@ -87,7 +84,7 @@ the static tree.
 Scope note: this is the nix *store* layer (interference-free, deduped,
 GC-rooted, atomic rollback), not the nix *language* layer. Generations
 are content-addressed snapshots, not reproducible builds from
-derivations.
+derivations. **It is not meant to be used with `nix` pkg-manager or env.**
 
 Autologin only while root is passwordless (stock state,
 what the headless tests ride on). `passwd root` restores login prompts,
@@ -136,3 +133,5 @@ arch/uefi-vm.sh                                  # QEMU (UEFI): ISO + one blank 
 #   in the box: nixgen-setup /dev/vda my-install [--fs btrfs]
 arch/uefi-vm.sh boot                             # boot what you installed
 ```
+
+![StatesArchinix](./states.svg)

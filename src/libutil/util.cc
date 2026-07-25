@@ -44,30 +44,10 @@ void initLibUtil()
 
 //////////////////////////////////////////////////////////////////////
 
-std::vector<char *> stringsToCharPtrs(const Strings & ss)
-{
-    std::vector<char *> res;
-    for (auto & s : ss)
-        res.push_back((char *) s.c_str());
-    res.push_back(0);
-    return res;
-}
-
-//////////////////////////////////////////////////////////////////////
-
 std::string chomp(std::string_view s)
 {
     size_t i = s.find_last_not_of(" \n\r\t");
     return i == s.npos ? "" : std::string(s, 0, i + 1);
-}
-
-std::string trim(std::string_view s, std::string_view whitespace)
-{
-    auto i = s.find_first_not_of(whitespace);
-    if (i == s.npos)
-        return "";
-    auto j = s.find_last_not_of(whitespace);
-    return std::string(s, i, j == s.npos ? j : j - i + 1);
 }
 
 std::string replaceStrings(std::string res, std::string_view from, std::string_view to)
@@ -148,23 +128,6 @@ SizeUnit getSizeUnit(int64_t value)
     return *unit;
 }
 
-std::optional<SizeUnit> getCommonSizeUnit(std::initializer_list<int64_t> values)
-{
-    assert(values.size() > 0);
-
-    auto it = values.begin();
-    SizeUnit unit = getSizeUnit(*it);
-    it++;
-
-    for (; it != values.end(); it++) {
-        if (unit != getSizeUnit(*it)) {
-            return std::nullopt;
-        }
-    }
-
-    return unit;
-}
-
 std::string renderSizeWithoutUnit(int64_t value, SizeUnit unit, bool align)
 {
     // bytes should also displayed as KiB => 100 Bytes => 0.1 KiB
@@ -196,32 +159,6 @@ std::string renderSize(int64_t value, bool align)
 bool hasPrefix(std::string_view s, std::string_view prefix)
 {
     return s.compare(0, prefix.size(), prefix) == 0;
-}
-
-bool hasSuffix(std::string_view s, std::string_view suffix)
-{
-    return s.size() >= suffix.size() && s.substr(s.size() - suffix.size()) == suffix;
-}
-
-std::string toLower(std::string s)
-{
-    for (auto & c : s)
-        c = std::tolower(c);
-    return s;
-}
-
-std::string escapeShellArgAlways(const std::string_view s)
-{
-    std::string r;
-    r.reserve(s.size() + 2);
-    r += '\'';
-    for (auto & i : s)
-        if (i == '\'')
-            r += "'\\''";
-        else
-            r += i;
-    r += '\'';
-    return r;
 }
 
 void ignoreExceptionInDestructor(Verbosity lvl)
@@ -293,20 +230,6 @@ std::string stripIndentation(std::string_view s)
     }
 
     return res;
-}
-
-std::pair<std::string_view, std::string_view> getLine(std::string_view s)
-{
-    auto newline = s.find('\n');
-
-    if (newline == s.npos) {
-        return {s, ""};
-    } else {
-        auto line = s.substr(0, newline);
-        if (!line.empty() && line[line.size() - 1] == '\r')
-            line = line.substr(0, line.size() - 1);
-        return {line, s.substr(newline + 1)};
-    }
 }
 
 } // namespace nix

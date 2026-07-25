@@ -13,6 +13,10 @@
 # is recorded in /run/nixgen-active (/run survives soft-reboot, fresh
 # on a real boot); nixgen-update/-remove consult it first.
 # usage: nixgen-switch <name|id>
+# the store is 0700 root:root and the work below mounts, imports or
+# writes it: bail here rather than at whichever privileged call
+# happens to fail first, which reads as a missing file
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 NAME=$1
 [ -n "$NAME" ] || { echo "usage: $0 <name|id>" >&2; exit 1; }
 
@@ -26,6 +30,17 @@ for S in /nixstore /nixstoredev/nix/store; do
 		LOWER=$S/$NAME STOREDIR=$S
 		break
 	fi
+	# the store disk has a db, so ask it: a glob here matches the
+	# .links farm and half-written tmp-* imports too
+	if [ "$S" = /nixstoredev/nix/store ]; then
+		if b=$(store-resolve /nixstoredev "$NAME"); then
+			LOWER=$S/$b STOREDIR=$S
+			break
+		fi
+		continue
+	fi
+	# the ISO store is a squashfs of the store dir alone, with no db
+	# beside it, so here there is nothing to ask: match by name
 	n=0
 	for m in "$S"/*-"$NAME"; do
 		[ -d "$m" ] || continue

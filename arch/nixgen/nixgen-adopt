@@ -4,11 +4,41 @@
 # adopt it (commit snapshots the running root into a new path).
 # Validate the path can boot at all, then append the same entries.cfg
 # stanza commit writes.
-# usage: nixgen-adopt <store-path-basename> [store-root]
+# usage: nixgen-adopt <name|id|basename> [store-root]
 #        store-root default /nixstoredev
 GEN=$1
 TARGET=${2:-/nixstoredev}
-[ -n "$GEN" ] || { echo "usage: $0 <store-path-basename> [store-root]" >&2; exit 1; }
+# Only the default target implies /nixstoredev, which is 0700 root:root:
+# bail there rather than at whichever write fails first. An explicit
+# store root can be an ordinary user-owned directory (host builds and
+# tests/export-roundtrip.sh adopt into one), so it is not guarded
+[ -n "$2" ] || [ "$(id -u)" = 0 ] \
+	|| { echo "${0##*/}: needs root" >&2; exit 1; }
+[ -n "$GEN" ] || { echo "usage: $0 <name|id|basename> [store-root]" >&2; exit 1; }
+# Same guard nixgen-commit uses, and for a sharper reason here: every
+# generation bakes an empty /nixstoredev mountpoint, and openStore
+# creates a store wherever it is pointed. Without this, a diskless boot
+# has store-resolve mint nix/store inside that dir in the RAM upper and
+# then report "no generation matches", which reads as a missing
+# generation rather than a missing disk
+if [ "$TARGET" = /nixstoredev ]; then
+	mountpoint -q /nixstoredev || {
+		echo "no store disk: boot with a NIXSTORE disk attached" >&2
+		exit 1
+	}
+elif [ ! -d "$TARGET" ]; then
+	echo "no store at $TARGET" >&2
+	exit 1
+fi
+# A bare name or a -listid id, as -remove/-switch/-diffid take: a
+# shipped generation is registered by import-path before it gets here,
+# so the db can resolve it. Skipped when the basename already names a
+# directory, which is both the documented form and the only one the
+# host build passes (store-resolve is not on its PATH). Exit code is
+# store-resolve's: 2 no match, 3 ambiguous
+if [ ! -d "$TARGET/nix/store/$GEN" ]; then
+	GEN=$(store-resolve "$TARGET" "$GEN") || exit $?
+fi
 DIR=$TARGET/nix/store/$GEN
 [ -d "$DIR" ] || { echo "no $DIR: import-path the bundle first" >&2; exit 1; }
 [ -f "$DIR/boot/vmlinuz-linux" ] && [ -f "$DIR/boot/initramfs-linux.img" ] || {
@@ -16,6 +46,12 @@ DIR=$TARGET/nix/store/$GEN
 	exit 1
 }
 # nixgen-entry refuses duplicates and roots the path: an adopted
-# (import-path'd) generation may predate its root
-/usr/local/lib/nixgen-entry "$TARGET" "$GEN" adopted
+# (import-path'd) generation may predate its root.
+# Beside this script when run from a checkout, in /usr/local/lib once
+# installed. Explicit || exit: a caller that runs this as `sh <script>`
+# loses the shebang's -e, and a missing writer would otherwise print
+# "adopted" and return 0 having written no entry and no GC root
+LIB=${0%/*}
+[ -x "$LIB/nixgen-entry" ] || LIB=/usr/local/lib
+"$LIB/nixgen-entry" "$TARGET" "$GEN" adopted || exit 1
 echo "adopted: $GEN"

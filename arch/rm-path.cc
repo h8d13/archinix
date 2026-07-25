@@ -12,26 +12,24 @@
 #include <nix/store/local-fs-store.hh>
 #include <nix/store/store-cast.hh>
 #include <nix/store/store-open.hh>
-#include <nix/util/config-global.hh>
 
 using namespace nix;
 
 int main(int argc, char ** argv)
-{
+try {
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s <store-root> <store-path-basename>...\n", argv[0]);
 		return 1;
 	}
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
-	globalConfig.set("build-users-group", "");
 
 	auto store = openStore(std::filesystem::absolute(argv[1]));
 	auto & gcStore = require<GcStore>(*store);
 
 	auto & fsStore = require<LocalFSStore>(*store);
-	auto gcroots = fsStore.config.stateDir.get().path() / "gcroots";
+	auto gcroots = fsStore.config.stateDir / "gcroots";
 
 	GCOptions::SpecificPaths specific;
 	for (int i = 2; i < argc; i++) {
@@ -51,4 +49,9 @@ int main(int argc, char ** argv)
 	printf("deleted %zu paths, freed %.1f MiB\n",
 		results.paths.size(), results.bytesFreed / (1024.0 * 1024.0));
 	return 0;
+} catch (std::exception & e) {
+	/* a bad basename, an unreadable store or a full disk must not
+	   end in std::terminate: callers get a message and rc 1 */
+	fprintf(stderr, "rm-path: %s\n", e.what());
+	return 1;
 }

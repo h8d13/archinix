@@ -11,75 +11,35 @@ struct LocalFSStoreConfig : virtual StoreConfig
 private:
     void anchor() override;
 
-    static Setting<std::optional<AbsolutePath>>
-    makeRootDirSetting(LocalFSStoreConfig & self, std::optional<AbsolutePath> defaultValue)
-    {
-        return {
-            &self,
-            std::move(defaultValue),
-            "root",
-            "Directory prefixed to all other paths.",
-        };
-    }
-
 public:
-    LocalFSStoreConfig(const Params & params)
-        : StoreConfig(params, FilePathType::Native)
-    {
-    }
+    /**
+     * The store is opened with a root path and nothing else. `stateDir`
+     * and `realStoreDir` are derived from it rather than being
+     * separately settable: there is no config surface to set them
+     * through, and arch/ owns the layout above this point.
+     */
+    LocalFSStoreConfig(const std::filesystem::path & rootDir);
 
     /**
-     * Used to override the `root` settings. Can't be done via modifying
-     * `params` reliably because this parameter is unused except for
-     * passing to base class constructors.
-     *
-     * @todo Make this less error-prone with new store settings system.
+     * Directory prefixed to all other paths.
      */
-    LocalFSStoreConfig(const std::filesystem::path & path, const Params & params);
+    std::filesystem::path rootDir;
 
-    Setting<std::optional<AbsolutePath>> rootDir = makeRootDirSetting(*this, std::nullopt);
+    /**
+     * Directory where the store keeps its state (`<root>/nix/var/nix`).
+     */
+    std::filesystem::path stateDir;
 
-    Setting<AbsolutePath> stateDir{
-        this,
-        rootDir.get() ? *rootDir.get() / "nix" / "var" / "nix" : StoreConfig::getStateDir(),
-        "state",
-        R"(
-          Directory where Nix stores state.
-
-          Defaults to [`NIX_STATE_DIR`](@docroot@/command-ref/env-common.md#env-NIX_STATE_DIR) when [`root`](#@store-slug@-root) is not set.
-        )",
-    };
-
-    Setting<AbsolutePath> logDir{
-        this,
-        rootDir.get() ? *rootDir.get() / "nix" / "var" / "log" / "nix" : StoreConfig::getLogDir(),
-        "log",
-        R"(
-          Directory where Nix stores log files.
-
-          Defaults to [`NIX_LOG_DIR`](@docroot@/command-ref/env-common.md#env-NIX_LOG_DIR) when [`root`](#@store-slug@-root) is not set.
-        )",
-    };
-
-    Setting<AbsolutePath> realStoreDir{
-        this,
-        rootDir.get() ? *rootDir.get() / "nix" / "store" : std::filesystem::path{storeDir},
-        "real",
-        R"(
-          Physical path of the Nix store.
-
-          Defaults to [`store`](#@store-slug@-store) when [`root`](#@store-slug@-root) is not set.
-        )",
-    };
+    /**
+     * Physical path of the store (`<root>/nix/store`). The *logical*
+     * store path stays `storeDir`; only the physical half moves with
+     * the root.
+     */
+    std::filesystem::path realStoreDir;
 
     const std::filesystem::path & getStateDir() const override
     {
-        return stateDir.get();
-    }
-
-    const std::filesystem::path & getLogDir() const override
-    {
-        return logDir.get();
+        return stateDir;
     }
 };
 

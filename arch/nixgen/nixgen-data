@@ -11,6 +11,10 @@
 # usage: nixgen-data <partition> [--fs <type>]
 #        fs default ext4 (nixgen-fs table; no GRUB constraint here,
 #        the kernel just has to mount it)
+# the store is 0700 root:root and the work below mounts, imports or
+# writes it: bail here rather than at whichever privileged call
+# happens to fail first, which reads as a missing file
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 . /usr/local/lib/nixgen-fs
 
 DEV= FS=ext4

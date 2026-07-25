@@ -1,7 +1,6 @@
 #pragma once
 ///@file
 
-#include "nix/util/signature.hh"
 #include "nix/store/path.hh"
 #include "nix/util/hash.hh"
 #include "nix/store/content-address.hh"
@@ -13,24 +12,6 @@ namespace nix {
 
 class Store;
 struct StoreDirConfig;
-
-/**
- * JSON format version for path info output.
- */
-enum class PathInfoJsonFormat {
-    /// Legacy format with string hashes and full store paths
-    V1 = 1,
-    /// New format with structured hashes and store path base names
-    V2 = 2,
-    /// New format with structured signatures
-    V3 = 3,
-};
-
-/**
- * Convert an integer version number to PathInfoJsonFormat.
- * Throws Error if the version is not supported.
- */
-PathInfoJsonFormat parsePathInfoJsonFormat(uint64_t version);
 
 struct SubstitutablePathInfo
 {
@@ -96,8 +77,6 @@ struct UnkeyedValidPathInfo
      */
     bool ultimate = false;
 
-    std::set<Signature> sigs;
-
     /**
      * If non-empty, an assertion that the path is content-addressed,
      * i.e., that the store path is computed from a cryptographic hash
@@ -145,10 +124,6 @@ struct UnkeyedValidPathInfo
      *               string content addresses. Version 2 uses structured
      *               hashes and structured content addresses.
      */
-    virtual nlohmann::json
-    toJSON(const StoreDirConfig * store, bool includeImpureInfo, PathInfoJsonFormat format) const;
-    static UnkeyedValidPathInfo fromJSON(const StoreDirConfig * store, const nlohmann::json & json);
-
 private:
     /* VTable anchor to avoid weak linkage of the vtable - it breaks
        dynamic_cast across shared libraries on Darwin. */
@@ -173,11 +148,6 @@ struct ValidPathInfo : virtual UnkeyedValidPathInfo
      * @return true iff the path is verifiably content-addressed.
      */
     bool isContentAddressed(const StoreDirConfig & store) const;
-
-    /**
-     * References as store path basenames, including a self reference if it has one.
-     */
-    Strings shortRefs() const;
 
     ValidPathInfo(StorePath && path, UnkeyedValidPathInfo info)
         : UnkeyedValidPathInfo(info)
@@ -205,7 +175,3 @@ static_assert(std::is_move_constructible_v<ValidPathInfo>);
 using ValidPathInfos = std::map<StorePath, ValidPathInfo>;
 
 } // namespace nix
-
-JSON_IMPL(nix::PathInfoJsonFormat)
-JSON_IMPL(nix::UnkeyedValidPathInfo)
-JSON_IMPL(nix::ValidPathInfo)

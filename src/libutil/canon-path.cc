@@ -123,60 +123,10 @@ CanonPath CanonPath::operator/(std::string_view c) const
     return res;
 }
 
-bool CanonPath::isAllowed(const std::set<CanonPath> & allowed) const
-{
-    /* Check if `this` is an exact match or the parent of an
-       allowed path. */
-    auto lb = allowed.lower_bound(*this);
-    if (lb != allowed.end()) {
-        if (lb->isWithin(*this))
-            return true;
-    }
-
-    /* Check if a parent of `this` is allowed. */
-    auto path = *this;
-    while (!path.isRoot()) {
-        path.pop();
-        if (allowed.count(path))
-            return true;
-    }
-
-    return false;
-}
-
 std::ostream & operator<<(std::ostream & stream, const CanonPath & path)
 {
     stream << path.abs();
     return stream;
-}
-
-std::string CanonPath::makeRelative(const CanonPath & path) const
-{
-    auto p1 = begin();
-    auto p2 = path.begin();
-
-    for (; p1 != end() && p2 != path.end() && *p1 == *p2; ++p1, ++p2)
-        ;
-
-    if (p1 == end() && p2 == path.end())
-        return ".";
-    else if (p1 == end())
-        return std::string(p2.remaining);
-    else {
-        std::string res;
-        while (p1 != end()) {
-            ++p1;
-            if (!res.empty())
-                res += '/';
-            res += "..";
-        }
-        if (p2 != path.end()) {
-            if (!res.empty())
-                res += '/';
-            res += p2.remaining;
-        }
-        return res;
-    }
 }
 
 } // namespace nix

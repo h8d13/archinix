@@ -36,7 +36,7 @@ int main(int argc, char ** argv)
 		return 1;
 	}
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
 	globalConfig.set("build-users-group", "");
 	/* the path-based optimisePath is a no-op unless auto-optimise is

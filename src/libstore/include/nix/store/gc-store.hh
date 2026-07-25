@@ -123,15 +123,6 @@ public:
     inline static std::string operationName = "Garbage collection";
 
     /**
-     * Find the roots of the garbage collector.  Each root is a pair
-     * `(link, storepath)` where `link` is the path of the symlink
-     * outside of the Nix store that point to `storePath`. If
-     * `censor` is true, privacy-sensitive information about roots
-     * found in `/proc` is censored.
-     */
-    virtual Roots findRoots(bool censor) = 0;
-
-    /**
      * Perform a garbage collection.
      */
     virtual void collectGarbage(const GCOptions & options, GCResults & results) = 0;

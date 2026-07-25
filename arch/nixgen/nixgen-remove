@@ -6,6 +6,10 @@
 # refused; generations living only in the ISO squashfs are untouchable
 # here anyway (read-only store).
 # usage: nixgen-remove <name|id>...
+# the store is 0700 root:root and the work below mounts, imports or
+# writes it: bail here rather than at whichever privileged call
+# happens to fail first, which reads as a missing file
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 [ $# -ge 1 ] || { echo "usage: $0 <name|id>..." >&2; exit 1; }
 # mountpoint, not -d: generations carry the bare mountpoint dir, a
 # diskless boot would GC a RAM copy and touch nothing real
@@ -24,35 +28,13 @@ fi
 rc=0
 for GEN in "$@"; do
 	# bare names (the <name> given at import) and hash prefixes
-	# (nixgen-listid ids) resolve to <hash>-<name> when exactly one
-	# generation on the disk matches
-	if [ ! -d "/nixstoredev/nix/store/$GEN" ]; then
-		n=0
-		for m in /nixstoredev/nix/store/*-"$GEN"; do
-			if [ -d "$m" ]; then
-				n=$((n + 1))
-				match=${m##*/}
-			fi
-		done
-		if [ "$n" -eq 0 ]; then
-			for m in "/nixstoredev/nix/store/$GEN"*; do
-				if [ -d "$m" ]; then
-					n=$((n + 1))
-					match=${m##*/}
-				fi
-			done
-		fi
-		if [ "$n" -eq 1 ]; then
-			GEN=$match
-		elif [ "$n" -gt 1 ]; then
-			echo "ambiguous name '$GEN' ($n matches), use the full basename" >&2
-			rc=1
-			continue
-		else
-			echo "not on the store disk: $GEN" >&2
-			rc=1
-			continue
-		fi
+	# (nixgen-listid ids) resolve to <hash>-<name>; store-resolve asks
+	# the db, which is the only thing that knows what is registered.
+	# Globbing the store dir here used to match the .links farm and
+	# half-written tmp-* imports as readily as real generations.
+	if ! GEN=$(store-resolve /nixstoredev "$GEN"); then
+		rc=1
+		continue
 	fi
 	if [ "$GEN" = "$RUNNING" ]; then
 		echo "refusing to remove the running generation: $GEN" >&2

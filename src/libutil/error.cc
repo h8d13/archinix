@@ -2,7 +2,6 @@
 
 #include "nix/util/error.hh"
 #include "nix/util/environment-variables.hh"
-#include "nix/util/exit.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/terminal.hh"
 #include "nix/util/util.hh"
@@ -389,43 +388,6 @@ void unreachable(std::source_location loc)
     if (n < 0)
         panic("Unexpected condition and could not format error message");
     panic(std::string_view(buf, std::min(static_cast<int>(sizeof(buf)), n)));
-}
-
-int handleExceptions(const std::string & programName, fun<void()> body)
-{
-    ReceiveInterrupts receiveInterrupts; // FIXME: need better place for this
-
-    ErrorInfo::programName = baseNameOf(programName);
-
-    auto doLog = [&](BaseError & e) {
-        try {
-            logError(e.info());
-        } catch (...) {
-            printError(ANSI_RED "error:" ANSI_NORMAL " Exception while printing an exception.");
-        }
-    };
-
-    std::string error = ANSI_RED "error:" ANSI_NORMAL " ";
-    try {
-        body();
-    } catch (Exit & e) {
-        return e.status;
-    } catch (UsageError & e) {
-        doLog(e);
-        printError("Try '%1% --help' for more information.", programName);
-        return 1;
-    } catch (BaseError & e) {
-        doLog(e);
-        return e.info().status;
-    } catch (std::bad_alloc & e) {
-        printError(error + "out of memory");
-        return 1;
-    } catch (std::exception & e) {
-        printError(error + e.what());
-        return 1;
-    }
-
-    return 0;
 }
 
 } // namespace nix

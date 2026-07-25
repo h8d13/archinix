@@ -6,6 +6,10 @@
 // from that hash; a stream whose content does not hash back to the
 // path it claims is rejected before registration. (Plain importPaths
 // would accept it: framing-valid corruption keeps the claimed name.)
+// Each imported path is registered as a GC root under
+// <root>/nix/var/nix/gcroots/<basename>, as import-dir does: arriving
+// content is live before it has a GRUB entry, and rm-path unroots
+// before deleting.
 // stdout is the imported real paths, one per line, import order;
 // diagnostics go to stderr.
 // usage: import-path <store-root> < bundle
@@ -18,7 +22,6 @@
 #include <nix/store/local-store.hh>
 #include <nix/store/store-open.hh>
 #include <nix/util/archive.hh>
-#include <nix/util/config-global.hh>
 #include <nix/util/fs-sink.hh>
 #include <nix/util/serialise.hh>
 #include <nix/store/common-protocol.hh>
@@ -62,6 +65,18 @@ static StorePaths importVerified(Store & store, Source & source)
 				"hashes to '%s' (corrupted or not a CA NixArchive path)",
 				store.printStorePath(path), store.printStorePath(expected));
 
+		/* Generations are independent, self-contained trees: import-dir
+		   creates them with no references, and sharing between them is
+		   the .links hardlink farm, which works on content below the
+		   store-path level. This is the only door references could
+		   enter through, so refuse them here rather than carry a
+		   closure walk for a case that never occurs. */
+		if (!references.empty())
+			throw Error(
+				"path '%s' claims %zu references; this store holds "
+				"independent trees",
+				store.printStorePath(path), references.size());
+
 		ValidPathInfo info{path, {store, narHash}};
 		info.references = references;
 		info.narSize = saved.s.size();
@@ -73,14 +88,14 @@ static StorePaths importVerified(Store & store, Source & source)
 			readString(source);
 
 		StringSource body{saved.s};
-		store.addToStore(info, body, NoRepair, NoCheckSigs);
+		store.addToStore(info, body, NoRepair);
 		res.push_back(path);
 	}
 	return res;
 }
 
 int main(int argc, char ** argv)
-{
+try {
 	if (argc != 2) {
 		fprintf(stderr, "usage: %s <store-root> < bundle\n", argv[0]);
 		return 1;
@@ -90,9 +105,8 @@ int main(int argc, char ** argv)
 		return 1;
 	}
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
-	globalConfig.set("build-users-group", "");
 
 	auto store = openStore(std::filesystem::absolute(argv[1]));
 	auto local = store.dynamic_pointer_cast<LocalStore>();
@@ -106,6 +120,15 @@ int main(int argc, char ** argv)
 		return 1;
 	}
 
+	/* Root before anything else can collect them: a received
+	   generation is live from the moment it lands, whether or not it
+	   ever gets a GRUB entry. nixgen-adopt hands out entries later and
+	   nixgen-remove drops entry and root together. */
+	for (auto & path : paths)
+		local->addPermRoot(path,
+			local->config->stateDir / "gcroots"
+				/ std::string(path.to_string()));
+
 	OptimiseStats stats;
 	for (auto & path : paths)
 		local->optimisePath(path, stats, nullptr);
@@ -115,4 +138,9 @@ int main(int argc, char ** argv)
 	for (auto & path : paths)
 		printf("%s\n", local->toRealPath(path).c_str());
 	return 0;
+} catch (std::exception & e) {
+	/* a bad basename, an unreadable store or a full disk must not
+	   end in std::terminate: callers get a message and rc 1 */
+	fprintf(stderr, "import-path: %s\n", e.what());
+	return 1;
 }

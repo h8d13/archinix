@@ -1,0 +1,34 @@
+#!/bin/sh -e
+# Check the store disk against its own db: registration is consistent,
+# and with --content every path and .links entry still hashes to what
+# the db recorded at import.
+#
+# Worth having because the store here *is* the root filesystem. A
+# corrupt generation is a boot failure, not a bad package, and nothing
+# else in the box looks: export-path re-hashes on the way out, so a
+# path can rot on disk for as long as you never ship it.
+#
+# Detect only: nothing here writes to the store or its db. A path that
+# has disappeared is reported, not unregistered, because its basename
+# is what a GRUB entry and its gcroot name and you want to see that
+# before it goes. Prune it with `rm-path /nixstoredev <basename>`,
+# which works even though the directory is gone. A corrupt generation
+# is fixed by booting an older one and re-importing, not in place.
+# usage: nixgen-verify [--content]
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
+
+# the ISO store is a squashfs of the store dir with no db beside it, so
+# there is nothing to verify against; only the store disk can be asked
+[ -d /nixstoredev/nix/store ] || {
+	echo "${0##*/}: no store disk (diskless boot has no db to verify against)" >&2
+	exit 1
+}
+
+case ${1:-} in
+--content) exec /usr/local/bin/verify-store /nixstoredev --content ;;
+"") exec /usr/local/bin/verify-store /nixstoredev ;;
+*)
+	echo "usage: ${0##*/} [--content]" >&2
+	exit 1
+	;;
+esac

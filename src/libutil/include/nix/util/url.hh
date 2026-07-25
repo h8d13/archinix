@@ -16,9 +16,5 @@ namespace nix {
  */
 std::string percentEncode(std::string_view s, std::string_view keep = "");
 
-/**
- * Render a query map as `k=v&k2=v2` with percent-encoding.
- */
-std::string encodeQuery(const StringMap & query);
 
 } // namespace nix

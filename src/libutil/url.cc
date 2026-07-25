@@ -20,20 +20,4 @@ std::string percentEncode(std::string_view s, std::string_view keep)
     return res;
 }
 
-std::string encodeQuery(const StringMap & ss)
-{
-    const static std::string allowedInQuery = ":@/?";
-    std::string res;
-    bool first = true;
-    for (auto & [name, value] : ss) {
-        if (!first)
-            res += '&';
-        first = false;
-        res += percentEncode(name, allowedInQuery);
-        res += '=';
-        res += percentEncode(value, allowedInQuery);
-    }
-    return res;
-}
-
 } // namespace nix

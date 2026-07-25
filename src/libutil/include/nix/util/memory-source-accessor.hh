@@ -4,7 +4,6 @@
 #include "nix/util/source-path.hh"
 #include "nix/util/fs-sink.hh"
 #include "nix/util/variant-wrapper.hh"
-#include "nix/util/json-impls.hh"
 
 namespace nix {
 
@@ -170,53 +169,4 @@ public:
     void createSymlink(const CanonPath & path, const std::string & target) override;
 };
 
-template<>
-struct json_avoids_null<MemorySourceAccessor::File::Regular> : std::true_type
-{};
-
-template<>
-struct json_avoids_null<MemorySourceAccessor::File::Directory> : std::true_type
-{};
-
-template<>
-struct json_avoids_null<MemorySourceAccessor::File::Symlink> : std::true_type
-{};
-
-template<>
-struct json_avoids_null<MemorySourceAccessor::File> : std::true_type
-{};
-
-template<>
-struct json_avoids_null<MemorySourceAccessor> : std::true_type
-{};
-
 } // namespace nix
-
-namespace nlohmann {
-
-using namespace nix;
-
-#define ARG fso::Regular<RegularContents>
-template<typename RegularContents>
-JSON_IMPL_INNER(ARG);
-#undef ARG
-
-#define ARG fso::DirectoryT<Child>
-template<typename Child>
-JSON_IMPL_INNER(ARG);
-#undef ARG
-
-template<>
-JSON_IMPL_INNER(fso::Symlink);
-
-template<>
-JSON_IMPL_INNER(fso::Opaque);
-
-#define ARG fso::VariantT<RegularContents, recur>
-template<typename RegularContents, bool recur>
-JSON_IMPL_INNER(ARG);
-#undef ARG
-
-} // namespace nlohmann
-
-JSON_IMPL(MemorySourceAccessor)

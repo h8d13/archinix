@@ -24,7 +24,6 @@
 #include <nix/store/local-store.hh>
 #include <nix/store/store-open.hh>
 #include <nix/util/archive.hh>
-#include <nix/util/config-global.hh>
 #include <nix/util/progress.hh>
 #include <nix/util/serialise.hh>
 #include <nix/util/source-accessor.hh>
@@ -38,12 +37,8 @@ try {
 		return 1;
 	}
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
-
-	/* we never build derivations, and under a fake-root userns the
-	   root default "nixbld" doesn't exist */
-	globalConfig.set("build-users-group", "");
 
 	auto store = openStore(std::filesystem::absolute(argv[1]));
 	auto local = store.dynamic_pointer_cast<LocalStore>();
@@ -57,9 +52,9 @@ try {
 	   store as root or offline (GRUB), so close it to everyone
 	   else. Runs on every import: heals stores created before this
 	   gate existed. */
-	if (::chmod(local->config->realStoreDir.get().c_str(), 0700) == -1) {
+	if (::chmod(local->config->realStoreDir.c_str(), 0700) == -1) {
 		fprintf(stderr, "import-dir: chmod 0700 %s: %s\n",
-			local->config->realStoreDir.get().c_str(), strerror(errno));
+			local->config->realStoreDir.c_str(), strerror(errno));
 		return 1;
 	}
 
@@ -102,7 +97,7 @@ try {
 	/* the generation is now db-visible as alive, not just a name in
 	   entries.cfg; deletion goes through rm-path, which unroots first */
 	local->addPermRoot(path,
-		local->config->stateDir.get().path() / "gcroots"
+		local->config->stateDir / "gcroots"
 			/ std::string(path.to_string()));
 
 	OptimiseStats stats;

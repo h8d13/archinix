@@ -302,20 +302,6 @@ public:
 
     CanonPath operator/(std::string_view c) const;
 
-    /**
-     * Check whether access to this path is allowed, which is the case
-     * if 1) `this` is within any of the `allowed` paths; or 2) any of
-     * the `allowed` paths are within `this`. (The latter condition
-     * ensures access to the parents of allowed paths.)
-     */
-    bool isAllowed(const std::set<CanonPath> & allowed) const;
-
-    /**
-     * Return a representation `x` of `path` relative to `this`, i.e.
-     * `CanonPath(this.makeRelative(x), this) == path`.
-     */
-    std::string makeRelative(const CanonPath & path) const;
-
     friend std::size_t hash_value(const CanonPath &);
 };
 

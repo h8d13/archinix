@@ -37,16 +37,6 @@ enum struct FileSerialisationMethod : uint8_t {
 };
 
 /**
- * Parse a `FileSerialisationMethod` by name. Choice of:
- *
- *  - `flat`: `FileSerialisationMethod::Flat`
- *  - `nar`: `FileSerialisationMethod::NixArchive`
- *
- * Opposite of `renderFileSerialisationMethod`.
- */
-FileSerialisationMethod parseFileSerialisationMethod(std::string_view input);
-
-/**
  * Render a `FileSerialisationMethod` by name.
  *
  * Opposite of `parseFileSerialisationMethod`.

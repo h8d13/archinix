@@ -1,7 +1,7 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/signals.hh"
-#include "nix/util/socket.hh"
+#include "nix/util/file-descriptor.hh"
 #include "nix/util/util.hh"
 
 #include <cstring>
@@ -159,13 +159,6 @@ void Source::drainInto(Sink & sink, uint64_t len)
     }
 }
 
-std::string Source::drain()
-{
-    StringSink s;
-    drainInto(s);
-    return std::move(s.s);
-}
-
 void Source::skip(size_t len)
 {
     std::array<char, 8192> buf;
@@ -193,56 +186,6 @@ size_t BufferedSource::read(char * data, size_t len)
     return n;
 }
 
-std::string BufferedSource::readLine(bool eofOk, char terminator)
-{
-    if (!buffer)
-        buffer = std::make_unique_for_overwrite<char[]>(bufSize);
-
-    std::string line;
-    while (true) {
-        if (bufPosOut < bufPosIn) {
-            auto * start = buffer.get() + bufPosOut;
-            auto * end = buffer.get() + bufPosIn;
-            if (auto * newline = static_cast<char *>(memchr(start, terminator, end - start))) {
-                line.append(start, newline - start);
-                bufPosOut = (newline - buffer.get()) + 1;
-                if (bufPosOut == bufPosIn)
-                    bufPosOut = bufPosIn = 0;
-                return line;
-            }
-
-            line.append(start, end - start);
-            bufPosOut = bufPosIn = 0;
-        }
-
-        auto handleEof = [&]() -> std::string {
-            bufPosOut = bufPosIn = 0;
-            if (eofOk)
-                return line;
-            throw EndOfFile("unexpected EOF reading a line");
-        };
-
-        size_t n = 0;
-        try {
-            n = readUnbuffered(buffer.get(), bufSize);
-        } catch (EndOfFile & e) {
-            return handleEof();
-        }
-
-        if (n == 0) {
-            return handleEof();
-        }
-
-        bufPosIn = n;
-        bufPosOut = 0;
-    }
-}
-
-bool BufferedSource::hasData()
-{
-    return bufPosOut < bufPosIn;
-}
-
 size_t FdSource::readUnbuffered(char * data, size_t len)
 {
     auto n = nix::read(fd, {reinterpret_cast<std::byte *>(data), len});
@@ -257,27 +200,6 @@ size_t FdSource::readUnbuffered(char * data, size_t len)
 bool FdSource::good()
 {
     return _good;
-}
-
-bool FdSource::hasData()
-{
-    if (BufferedSource::hasData())
-        return true;
-
-    while (true) {
-        struct pollfd pfd;
-        pfd.fd = fd;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-
-        auto n = poll(&pfd, 1, 0);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            throw SysError("polling file descriptor");
-        }
-        return n > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
-    }
 }
 
 void FdSource::restart()
@@ -612,31 +534,6 @@ T readStrings(Source & source)
 
 template Strings readStrings(Source & source);
 template StringSet readStrings(Source & source);
-
-Error readError(Source & source)
-{
-    auto type = readString(source);
-    if (type != "Error")
-        throw SerialisationError("unexpected error type '%s'", type);
-    auto level = (Verbosity) readInt(source);
-    [[maybe_unused]] auto name = readString(source); // removed
-    auto msg = readString(source);
-    ErrorInfo info{
-        .level = level,
-        .msg = HintFmt(msg),
-    };
-    auto havePos = readNum<size_t>(source);
-    if (havePos != 0)
-        throw SerialisationError("deserializing error positions is not supported");
-    auto nrTraces = readNum<size_t>(source);
-    for (size_t i = 0; i < nrTraces; ++i) {
-        havePos = readNum<size_t>(source);
-        if (havePos != 0)
-            throw SerialisationError("deserializing error positions is not supported");
-        info.traces.push_back(Trace{.hint = HintFmt(readString(source))});
-    }
-    return Error(std::move(info));
-}
 
 void StringSink::operator()(std::string_view data)
 {

@@ -1,11 +1,9 @@
 #pragma once
 ///@file
 
-#include "nix/util/configuration.hh"
 #include "nix/util/types.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/file-system.hh"
-#include "nix/util/json-impls.hh"
 
 namespace nix {
 
@@ -71,21 +69,6 @@ struct Hash
     explicit Hash(HashAlgorithm algo);
 
     /**
-     * Parse the hash from a string representation in the format
-     * "[<type>:]<base16|base32|base64>" or "<type>-<base64>" (a
-     * Subresource Integrity hash expression). If the 'type' argument
-     * is not present, then the hash algorithm must be specified in the
-     * string.
-     */
-    static Hash parseAny(std::string_view s, std::optional<HashAlgorithm> optAlgo);
-
-    /**
-     * Like `parseAny`, but also returns the format the hash was parsed from.
-     */
-    static std::pair<Hash, HashFormat>
-    parseAnyReturningFormat(std::string_view s, std::optional<HashAlgorithm> optAlgo);
-
-    /**
      * Parse a hash from a string representation like the above, except the
      * type prefix is mandatory is there is no separate argument.
      */
@@ -146,11 +129,6 @@ public:
 };
 
 /**
- * Helper that defaults empty hashes to the 0 hash.
- */
-Hash newHashAllowEmpty(std::string_view hashStr, std::optional<HashAlgorithm> ha);
-
-/**
  * Compute the hash of the given string.
  */
 Hash hashString(HashAlgorithm ha, std::string_view s);
@@ -160,7 +138,6 @@ Hash hashString(HashAlgorithm ha, std::string_view s);
  *
  * (Metadata, such as the executable permission bit, is ignored.)
  */
-Hash hashFile(HashAlgorithm ha, const std::filesystem::path & path);
 
 /**
  * The final hash and the number of bytes digested.
@@ -176,21 +153,6 @@ struct HashResult
  * XORing bytes together.
  */
 Hash compressHash(const Hash & hash, unsigned int newSize);
-
-/**
- * Parse a string representing a hash format.
- */
-HashFormat parseHashFormat(std::string_view hashFormatName);
-
-/**
- * std::optional version of parseHashFormat that doesn't throw error.
- */
-std::optional<HashFormat> parseHashFormatOpt(std::string_view hashFormatName);
-
-/**
- * The reverse of parseHashFormat.
- */
-std::string_view printHashFormat(HashFormat hashFormat);
 
 /**
  * Parse a string representing a hash algorithm.
@@ -235,10 +197,6 @@ public:
     HashResult currentHash();
 };
 
-template<>
-struct json_avoids_null<Hash> : std::true_type
-{};
-
 } // namespace nix
 
 template<>
@@ -259,5 +217,3 @@ inline std::size_t hash_value(const Hash & hash)
 }
 
 } // namespace nix
-
-JSON_IMPL(Hash)

@@ -134,7 +134,6 @@ public:
          */
         std::optional<uint64_t> narOffset;
 
-        bool isNotNARSerialisable();
         std::string typeString();
     };
 
@@ -251,11 +250,6 @@ public:
 };
 
 /**
- * Return a source accessor that contains only an empty root directory.
- */
-ref<SourceAccessor> makeEmptySourceAccessor();
-
-/**
  * Exception thrown when accessing a filtered path (see
  * `FilteringSourceAccessor`).
  */
@@ -281,11 +275,6 @@ public:
     {
     }
 };
-
-/**
- * Return an accessor for the root filesystem.
- */
-ref<SourceAccessor> getFSSourceAccessor();
 
 /**
  * Construct an accessor for the filesystem rooted at `root`. Note

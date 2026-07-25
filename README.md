@@ -8,17 +8,16 @@ libnixstore) from [NixOS/nix](https://github.com/NixOS/nix)
 
 > [!NOTE]
 > Remote stores (s3/http/ssh/daemon), the `.drv` realisation machinery (arguably, what an overlay already is; in kernel)
-> are cut: stores hold imported trees only; and the shell glue for retrieval/integration with userland.
-> Also removes any support for other platforms than `unix` and `linux`, from build targets.
+> are cut: stores hold imported trees only. [`arch/`](arch/) is the shell/C++ glue that retrieves and integrates them 
+> with userland. Also removes any support for other platforms than `unix` and `linux`, from build targets.
 
 Build depends on: `meson`, `ninja`, C++23 compiler:
 
-Arch package names (`boost` is headers only; the compiled `context`
-and `iostreams` libs live in `boost-libs`.)
+Pkg-split (`boost` is headers only; the compiled `context` lib lives in `boost-libs`.)
 
 ```
 pacman -S --needed meson ninja gcc pkgconf boost boost-libs openssl \
-	libblake3 nlohmann-json sqlite
+	libblake3 sqlite
 ```
 
 API reference:
@@ -29,7 +28,7 @@ C++ headers install to `include/nix/{util,store}/` ([internal API docs](https://
 
 ## [Arch Linux generations](arch/)
 
-Immutable `x86-efi` generations on the Nixstore.
+Immutable `x86-efi` generations on the Nixstore. In roughly ~2k LoC (excluding tests).
 
 ### From releases: [ISO](https://github.com/h8d13/archinix/releases)
 
@@ -61,4 +60,4 @@ Then, in the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
 
 ## [Example scripts](https://github.com/h8d13/nixarch.cfg/)
 
-This aims to document/illustrate examples of configurations that can shape a system.
+This aims to document/illustrate examples of configurations that can shape a system, for you to make your own.

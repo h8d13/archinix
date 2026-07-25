@@ -19,13 +19,6 @@ namespace nix {
 
 void initLibUtil();
 
-/**
- * Convert a list of strings to a null-terminated vector of `char
- * *`s. The result must not be accessed beyond the lifetime of the
- * list of strings.
- */
-std::vector<char *> stringsToCharPtrs(const Strings & ss);
-
 MakeError(FormatError, Error);
 
 template<class... Parts>
@@ -73,11 +66,6 @@ inline Strings quoteFSPaths(const std::set<std::filesystem::path> & paths, char 
  * \todo return std::string_view.
  */
 std::string chomp(std::string_view s);
-
-/**
- * Remove whitespace from the start and end of a string.
- */
-std::string trim(std::string_view s, std::string_view whitespace = " \n\r\t");
 
 /**
  * Replace all occurrences of a string inside another string.
@@ -152,12 +140,6 @@ constexpr inline auto sizeUnits = std::to_array<SizeUnit>({
 
 SizeUnit getSizeUnit(int64_t value);
 
-/**
- * Returns the unit if all values would be rendered using the same unit
- * otherwise returns `std::nullopt`.
- */
-std::optional<SizeUnit> getCommonSizeUnit(std::initializer_list<int64_t> values);
-
 std::string renderSizeWithoutUnit(int64_t value, SizeUnit unit, bool align = false);
 
 char getSizeUnitSuffix(SizeUnit unit);
@@ -210,25 +192,6 @@ T readLittleEndian(unsigned char * p)
  */
 bool hasPrefix(std::string_view s, std::string_view prefix);
 
-/**
- * @return true iff `s` ends in `suffix`.
- */
-bool hasSuffix(std::string_view s, std::string_view suffix);
-
-/**
- * Convert a string to lower case.
- */
-std::string toLower(std::string s);
-
-/**
- * Escape a string as a shell word.
- *
- * This always adds single quotes, even if escaping is not strictly necessary.
- * So both
- * - `"hello world"` -> `"'hello world'"`, which needs escaping because of the space
- * - `"echo"` -> `"'echo'"`, which doesn't need escaping
- */
-std::string escapeShellArgAlways(const std::string_view s);
 
 /**
  * Exception handling in destructors: print an error message, then
@@ -265,13 +228,6 @@ constexpr char treeNull[] = "    ";
  * then we remove 3 spaces from the start of every line.
  */
 std::string stripIndentation(std::string_view s);
-
-/**
- * Get the prefix of 's' up to and excluding the next line break (LF
- * optionally preceded by CR), and the remainder following the line
- * break.
- */
-std::pair<std::string_view, std::string_view> getLine(std::string_view s);
 
 /**
  * Get a pointer to the contents of a `std::optional` if it is set, or a

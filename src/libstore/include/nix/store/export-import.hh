@@ -15,10 +15,4 @@ const uint32_t exportMagic = 0x4558494e;
  */
 void exportPaths(Store & store, const StorePathSet & paths, Sink & sink);
 
-/**
- * Import a sequence of NAR dumps created by `exportPaths()` into the
- * Nix store.
- */
-StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs = CheckSigs);
-
 } // namespace nix

@@ -2,14 +2,12 @@
 ///@file
 
 #include "nix/util/error.hh"
-#include "nix/util/configuration.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/fun.hh"
 
 #include <filesystem>
 
-#include <nlohmann/json_fwd.hpp>
 
 namespace nix {
 
@@ -44,31 +42,12 @@ typedef enum {
 
 typedef uint64_t ActivityId;
 
-class LoggerSettings : public Config
+struct LoggerSettings
 {
-    void anchor() override;
-
-public:
-    Setting<bool> showTrace{
-        this,
-        false,
-        "show-trace",
-        R"(
-          Whether Nix should print out a stack trace in case of Nix
-          expression evaluation errors.
-        )"};
-
-    Setting<std::optional<AbsolutePath>> jsonLogPath{
-        this,
-        {},
-        "json-log-path",
-        R"(
-          A file or unix socket to which JSON records of Nix's log output are
-          written, in the same format as `--log-format internal-json`
-          (without the `@nix ` prefixes on each line).
-          Concurrent writes to the same file by multiple Nix processes are not supported and
-          may result in interleaved or corrupted log records.
-        )"};
+    /**
+     * Whether to print a stack trace on error.
+     */
+    bool showTrace = false;
 };
 
 extern LoggerSettings loggerSettings;
@@ -112,18 +91,7 @@ public:
 
     virtual void stop() {};
 
-    /**
-     * Guard object to resume the logger when done.
-     */
-    struct Suspension
-    {
-        Finally<fun<void()>> _finalize;
-    };
-
-    Suspension suspend();
-
-    std::optional<Suspension> suspendIf(bool cond);
-
+    
     virtual void pause() {};
     virtual void resume() {};
 
@@ -261,45 +229,6 @@ struct PushActivity
 extern Logger * logger;
 
 std::unique_ptr<Logger> makeSimpleLogger(bool printBuildLogs = true);
-
-/**
- * Create a logger that sends log messages to `mainLogger` and the
- * list of loggers in `extraLoggers`. Only `mainLogger` is used for
- * writing to stdout and getting user input.
- */
-std::unique_ptr<Logger>
-makeTeeLogger(std::unique_ptr<Logger> mainLogger, std::vector<std::unique_ptr<Logger>> && extraLoggers);
-
-std::unique_ptr<Logger> makeJSONLogger(Descriptor fd, bool includeNixPrefix = true);
-
-std::unique_ptr<Logger> makeJSONLogger(const std::filesystem::path & path, bool includeNixPrefix = true);
-
-void applyJSONLogger();
-
-/**
- * @param source A noun phrase describing the source of the message, e.g. "the builder".
- */
-std::optional<nlohmann::json> parseJSONMessage(const std::string & msg, std::string_view source);
-
-/**
- * @param source A noun phrase describing the source of the message, e.g. "the builder".
- */
-bool handleJSONLogMessage(
-    nlohmann::json & json,
-    const Activity & act,
-    std::map<ActivityId, Activity> & activities,
-    std::string_view source,
-    bool trusted);
-
-/**
- * @param source A noun phrase describing the source of the message, e.g. "the builder".
- */
-bool handleJSONLogMessage(
-    const std::string & msg,
-    const Activity & act,
-    std::map<ActivityId, Activity> & activities,
-    std::string_view source,
-    bool trusted);
 
 /**
  * suppress msgs > this

@@ -44,6 +44,15 @@ COMMANDS
               Delete committed generations (GC codepath, refuses the
               running one) + prune their GRUB entries.
 
+       nixgen-verify [--content]
+              Check the store disk against its db: registration
+              consistency, and with --content re-hash every path and
+              .links entry against the hash recorded at import. The
+              store is the root filesystem here, so corruption is a
+              boot failure. Detect only: a vanished path is reported,
+              never unregistered, so you see what a GRUB entry still
+              points at; prune it with rm-path. Exit 2 on problems.
+
        nixgen-listid
               Generations visible to the box: short hash id, source
               (disk/iso), added-at (dd/mm/yyyy hh:mm local, from the
@@ -62,13 +71,16 @@ COMMANDS
        Box-to-box shipping rides the installed primitives.
        export-path re-hashes against the db so local corruption cannot
        spread; import-path refuses content that does not hash back to
-       its claimed store path and dedups on arrival:
+       its claimed store path, or that claims references (generations
+       are independent trees, sharing is the .links farm), and dedups
+       on arrival:
               export-path /nixstoredev <basename>... > bundle
               import-path /nixstoredev < bundle
 
-       nixgen-adopt <store-path-basename> [store-root]
+       nixgen-adopt <name|id|basename> [store-root]
               Give a received generation its GRUB entry (same stanza
-              nixgen-commit appends). Refuses paths without a
+              nixgen-commit appends). Takes a bare name or a -listid id
+              like -remove/-switch/-diffid. Refuses paths without a
               kernel+initramfs and duplicate entries.
 
        nixgen-data <partition> [--fs <type>]
@@ -108,8 +120,10 @@ COMMANDS
 INTERNALS
        nixgen-savemeta <root>
               Capture what the store import canonicalises away (modes,
-              ownership incl. symlinks, capabilities, POSIX ACLs) into
-              etc/nixgen/{perms,caps,acls}; runs before every import.
+              ownership incl. symlinks, capabilities, POSIX ACLs,
+              user/trusted xattrs, chattr flags) into
+              etc/nixgen/{perms,caps,acls,xattrs,attrs}; runs before
+              every import.
 
        nixgen-restmeta [root]
               Replay that manifest; runs at boot (nixgen-perms.service)
@@ -125,6 +139,22 @@ INTERNALS
        nixgen-help
               This page.
 
+       store-resolve <store-root> <token>
+              Resolve a full basename, a hash prefix (a -listid id) or
+              a bare name to the generation's basename, from the db.
+              What -remove, -switch and -diffid use instead of globbing
+              the store dir, which also matches .links and half-written
+              imports. Exit 2 no match, 3 ambiguous.
+
+       verify-store <store-root> [--content]
+              What nixgen-verify runs.
+
+       store-paths <store-root>
+              Valid paths in a store, "<basename> <registrationTime>"
+              per line, from its db. What nixgen-listid reads: the db
+              is the store's source of truth, while the directory also
+              carries the .links dedup farm and half-written imports.
+
        Off the command surface (/usr/local/lib): nixgen-entry writes
        entries.cfg atomically and GC-roots the entry's generation
        (shared by commit/update/adopt); nixgen-seedstate first-time
@@ -138,7 +168,8 @@ FILES
        /nixstoredev/entries.cfg      GRUB menu of committed generations
        /run/nixgen-active            live generation after a soft switch
        /run/nixdata                  data partition (nixdata= boots)
-       etc/nixgen/{perms,caps,acls}  metadata manifests, per generation
+       etc/nixgen/{perms,caps,acls,xattrs,attrs}
+                                     metadata manifests, per generation
        etc/nixgen/state              paths that ride the data partition
 
 NIXGEN(7)                  nixstore generations                  NIXGEN(7)

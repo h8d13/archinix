@@ -6,6 +6,7 @@
 #include "nix/store/pathlocks.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/local-fs-store.hh"
+#include "nix/store/local-settings.hh"
 #include "nix/util/sync.hh"
 
 #include <chrono>
@@ -39,127 +40,53 @@ struct OptimiseStats
     uint64_t filesVisited = 0;
 };
 
-struct LocalSettings;
-
 struct LocalBuildStoreConfig : virtual LocalFSStoreConfig
 {
 private:
     void anchor() override;
 
-    /**
-      Input for computing the build directory. See `getBuildDir()`.
-     */
-    Setting<std::optional<AbsolutePath>> buildDir{
-        this,
-        std::nullopt,
-        "build-dir",
-        R"(
-            The directory on the host, in which derivations' temporary build directories are created.
-
-            If not set, Nix will use the `builds` subdirectory of its configured state directory.
-
-            Note that builds are often performed by the Nix daemon, so its `build-dir` applies.
-
-            Nix will create this directory automatically with suitable permissions if it does not exist.
-            Otherwise its permissions must allow all users to traverse the directory (i.e. it must have `o+x` set, in unix parlance) for non-sandboxed builds to work correctly.
-
-            This is also the location where [`--keep-failed`](@docroot@/command-ref/opt-common.md#opt-keep-failed) leaves its files.
-
-            If Nix runs without sandbox, or if the platform does not support sandboxing with bind mounts (e.g. macOS), then the [`builder`](@docroot@/language/derivations.md#attr-builder)'s environment will contain this directory, instead of the virtual location [`sandbox-build-dir`](@docroot@/command-ref/conf-file.md#conf-sandbox-build-dir).
-
-            > **Warning**
-            >
-            > `build-dir` must not be set to a world-writable directory.
-            > Placing temporary build directories in a world-writable place allows other users to access or modify build data that is currently in use.
-            > This alone is merely an impurity, but combined with another factor this has allowed malicious derivations to escape the build sandbox.
-
-            See also the global [`build-dir`](@docroot@/command-ref/conf-file.md#conf-build-dir) setting.
-        )"};
 public:
     /**
-     * For now, this just grabs the global local settings, but by having this method we get ready for these being
-     * per-store settings instead.
+     * Per-store knobs. These used to be read off a global `settings`
+     * singleton fed by nix.conf; they are now genuinely per-store,
+     * which is what the old code said it wanted.
      */
-    const LocalSettings & getLocalSettings() const;
+    LocalSettings localSettings;
 
-    std::filesystem::path getBuildDir() const;
+    const LocalSettings & getLocalSettings() const
+    {
+        return localSettings;
+    }
 };
 
 struct LocalStoreConfig : std::enable_shared_from_this<LocalStoreConfig>,
                           virtual LocalFSStoreConfig,
                           virtual LocalBuildStoreConfig
 {
-    LocalStoreConfig(const Params & params)
-        : StoreConfig(params, FilePathType::Native)
-        , LocalFSStoreConfig(params)
-    {
-    }
-
-    LocalStoreConfig(const std::filesystem::path & path, const Params & params);
+    LocalStoreConfig(const std::filesystem::path & path);
 
 private:
     void anchor() override;
 
 public:
-    Setting<bool> readOnly{
-        this,
-        false,
-        "read-only",
-        R"(
-          Allow this store to be opened when its [database](@docroot@/glossary.md#gloss-nix-database) is on a read-only filesystem.
+    /**
+     * Open the store even though its database is on a read-only
+     * filesystem: no locking, and SQLite opened `immutable`.
+     */
+    bool readOnly = false;
 
-          Normally Nix attempts to open the store database in read-write mode, even for querying (when write access is not needed), causing it to fail if the database is on a read-only filesystem.
-
-          Enable read-only mode to disable locking and open the SQLite database with the [`immutable` parameter](https://www.sqlite.org/c3ref/open.html) set.
-
-          > **Warning**
-          > Do not use this unless the filesystem is read-only.
-          >
-          > Using it when the filesystem is writable can cause incorrect query results or corruption errors if the database is changed by another process.
-          > While the filesystem the database resides on might appear to be read-only, consider whether another user or system might have write access to it.
-        )"};
-
-    bool getReadOnly() const override;
-
-    Setting<bool> ignoreGcDeleteFailure{
-        this,
-        false,
-        "ignore-gc-delete-failure",
-        R"(
-          Whether to ignore failures when deleting items with the garbage collector.
-
-          Normally the garbage collector will fail with an error if the nix daemon cannot delete a file, with this setting such errors will only be printed as warnings.
-        )",
-    };
-
-    Setting<bool> useRootsDaemon{
-        this,
-        false,
-        "use-roots-daemon",
-        R"(
-          Whether to request garbage collector roots from an external daemon.
-
-          When enabled, the garbage collector connects to a Unix domain socket
-          at [`<state-dir>`](@docroot@/store/types/local-store.md#store-local-store-state)`/gc-roots-socket/socket` to discover additional roots
-          that should not be collected. This is useful when the Nix daemon runs
-          without root privileges and cannot scan `/proc` for runtime roots.
-
-          The daemon can be started with [`nix store roots-daemon`](@docroot@/command-ref/new-cli/nix3-store-roots-daemon.md).
-        )",
-    };
-
-    std::filesystem::path getRootsSocketPath() const;
+    /**
+     * Warn rather than fail when the garbage collector cannot delete a
+     * file.
+     */
+    bool ignoreGcDeleteFailure = false;
 
     static const std::string name()
     {
         return "Local Store";
     }
 
-    static std::string doc();
-
     ref<Store> openStore() const override;
-
-    std::string getHumanReadableURI() const override;
 };
 
 MakeError(PathInUse, Error);
@@ -191,28 +118,6 @@ private:
         struct Stmts;
         std::unique_ptr<Stmts> stmts;
 
-        /**
-         * The last time we checked whether to do an auto-GC, or an
-         * auto-GC finished.
-         */
-        std::chrono::time_point<std::chrono::steady_clock> lastGCCheck;
-
-        /**
-         * Whether auto-GC is running. If so, get gcFuture to wait for
-         * the GC to finish.
-         */
-        bool gcRunning = false;
-        std::shared_future<void> gcFuture;
-        std::thread gcThread;
-
-        /**
-         * How much disk space was available after the previous
-         * auto-GC. If the current available disk space is below
-         * minFree but not much below availAfterGC, then there is no
-         * point in starting a new GC.
-         */
-        uint64_t availAfterGC = std::numeric_limits<uint64_t>::max();
-
     };
 
     /**
@@ -227,8 +132,6 @@ public:
     const std::filesystem::path linksDir;
     const std::filesystem::path reservedPath;
     const std::filesystem::path schemaPath;
-    const std::filesystem::path tempRootsDir;
-    const std::filesystem::path fnTempRoots;
 
 private:
 
@@ -254,18 +157,26 @@ public:
     bool isValidPathUncached(const StorePath & path) override;
 
 
+    /**
+     * Every valid path whose hash part starts with `hashPrefix`. The
+     * prefix may be shorter than the full 32 base-32 characters, which
+     * is what makes the short ids `nixgen-listid` prints usable as
+     * arguments. Returning the whole set rather than the first match
+     * lets the caller distinguish "unique" from "ambiguous".
+     *
+     * The db is the source of truth: a directory listing also shows
+     * `.links` and half-written `tmp-*` imports, which is exactly what
+     * callers must not match against.
+     */
+    StorePathSet queryPathsByHashPrefix(const std::string & hashPrefix);
+
     StorePathSet queryAllValidPaths() override;
 
-    void queryPathInfoUncached(
-        const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
+    std::shared_ptr<const ValidPathInfo> queryPathInfoUncached(const StorePath & path) override;
 
     void queryReferrers(const StorePath & path, StorePathSet & referrers) override;
 
-    StorePathSet queryValidDerivers(const StorePath & path) override;
-
-    std::optional<StorePath> queryPathFromHashPart(const std::string & hashPart) override;
-
-    void addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override;
+    void addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair) override;
 
     StorePath addToStoreFromDump(
         Source & dump,
@@ -317,26 +228,10 @@ public:
         RepairFlag repair,
         ImportFileHashes * fileHashes);
 
-    void addTempRoot(const StorePath & path) override;
-
-private:
-
-    void createTempRootsFile();
-
-    /**
-     * The file to which we write our temporary roots.
-     */
-    Sync<AutoCloseFD> _fdTempRoots;
-
     /**
      * The global GC lock.
      */
     Sync<AutoCloseFD> _fdGCLock;
-
-    /**
-     * Connection to the garbage collector.
-     */
-    Sync<AutoCloseFD> _fdRootsSocket;
 
 public:
 
@@ -352,13 +247,9 @@ private:
 
     void makeSymlink(const std::filesystem::path & link, const std::filesystem::path & target);
 
-    void findTempRoots(Roots & roots, bool censor);
-
     AutoCloseFD openGCLock();
 
 public:
-
-    Roots findRoots(bool censor) override;
 
     void collectGarbage(const GCOptions & options, GCResults & results) override;
 
@@ -389,8 +280,6 @@ public:
      * files with the same contents.
      */
     void optimiseStore(OptimiseStats & stats);
-
-    void optimiseStore() override;
 
     /**
      * Optimise a single store path. Optionally, test the encountered
@@ -446,15 +335,6 @@ public:
 
     virtual void registerValidPaths(const ValidPathInfos & infos);
 
-    std::optional<TrustedFlag> isTrustedClient() override;
-
-    void vacuumDB();
-
-    /**
-     * If free disk space in /nix/store if below minFree, delete
-     * garbage until it exceeds maxFree.
-     */
-    void autoGC(bool sync = true);
 
 
     std::optional<std::string> getVersion() override;
@@ -486,7 +366,7 @@ private:
      */
     bool upgradeDBSchema(State & state, bool dryRun);
 
-    void makeStoreWritable();
+    void requireWritableStore();
 
     uint64_t queryValidPathId(State & state, const StorePath & path);
 
@@ -505,9 +385,8 @@ private:
 
     void findRoots(const std::filesystem::path & path, std::filesystem::file_type type, Roots & roots);
 
-    void findRootsNoTemp(Roots & roots, bool censor);
+    void findRootsNoTemp(Roots & roots);
 
-    void findRuntimeRoots(Roots & roots, bool censor);
 
     std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
 

@@ -3,7 +3,6 @@
 #include "nix/store/common-protocol-impl.hh"
 #include "nix/store/store-dir-config.hh"
 
-#include <nlohmann/json.hpp>
 
 namespace nix {
 

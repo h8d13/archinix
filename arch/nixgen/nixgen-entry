@@ -1,11 +1,11 @@
 #!/bin/sh -e
 # Single owner of entries.cfg writes: the menuentry stanza that commit,
 # update and adopt used to carry as three copies, appended atomically
-# (GRUB sources this file; a torn append is a broken menu), plus the
-# rooting invariant: an entry implies a GC root, so a menu line can
-# never point at a collectable path. One direction only: import-path'd
-# generations without entries keep their import root until
-# nixgen-remove, which prunes entry and root together.
+# (GRUB sources this file; a torn append is a broken menu).
+# An entry can never point at a collectable path because the root is
+# already there: import-dir and import-path both register one as the
+# content lands, so a generation is live from arrival, entry or not.
+# nixgen-remove prunes entry and root together.
 # The entry inherits the running cmdline minus the generation selector
 # and GRUB bookkeeping; nixdata= and friends ride along on purpose.
 # usage: nixgen-entry <store-root> <gen-basename> <tag>
@@ -34,10 +34,3 @@ menuentry "nixarch: $GEN ($TAG)" {
 }
 EOF
 mv "$TMP" "$CFG"
-
-# logical target, matching import-dir's addPermRoot symlinks. -L, not
-# -e: the target is dangling from the box's view (no /nix/store here),
-# and -e follows the link
-ROOTS=$STORE/nix/var/nix/gcroots
-mkdir -p "$ROOTS"
-[ -L "$ROOTS/$GEN" ] || ln -s "/nix/store/$GEN" "$ROOTS/$GEN"

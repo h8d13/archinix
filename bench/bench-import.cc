@@ -43,7 +43,7 @@ int main(int argc, char ** argv)
 	}
 	std::string root = argv[1];
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
 
 	ref<SourceAccessor> acc = [&]() -> ref<SourceAccessor> {

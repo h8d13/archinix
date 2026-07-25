@@ -111,8 +111,6 @@ deps_other += boost
 # curl (filetransfer) and seccomp (build sandbox) served only the
 # remote stores and .drv realisation machinery, both cut from this
 # extraction: local store + import/export/GC/optimise only
-nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
-deps_public += nlohmann_json
 
 sqlite = dependency('sqlite3', 'sqlite', version : '>=3.6.19')
 deps_private += sqlite
@@ -199,7 +197,6 @@ sources = files(
   'gc.cc',
   'globals.cc',
   'local-fs-store.cc',
-  'local-gc.cc',
   'local-store.cc',
   'misc.cc',
   'optimise-store.cc',

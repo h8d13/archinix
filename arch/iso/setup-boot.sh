@@ -81,6 +81,9 @@ install -m755 "$I/payload/import-dir" /usr/local/bin/import-dir
 install -m755 "$I/payload/rm-path" /usr/local/bin/rm-path
 install -m755 "$I/payload/export-path" /usr/local/bin/export-path
 install -m755 "$I/payload/import-path" /usr/local/bin/import-path
+install -m755 "$I/payload/store-paths" /usr/local/bin/store-paths
+install -m755 "$I/payload/store-resolve" /usr/local/bin/store-resolve
+install -m755 "$I/payload/verify-store" /usr/local/bin/verify-store
 cp -P "$I"/payload/libnix*.so* /usr/local/lib/
 # libnixstore lives outside the stock linker path; register it or the
 # documented bare export-path/import-path flow dies at link time
@@ -91,6 +94,7 @@ install -m755 "$I/nixgen-remove" /usr/local/bin/nixgen-remove
 install -m755 "$I/nixgen-update" /usr/local/bin/nixgen-update
 install -m755 "$I/nixgen-switch" /usr/local/bin/nixgen-switch
 install -m755 "$I/nixgen-listid" /usr/local/bin/nixgen-listid
+install -m755 "$I/nixgen-verify" /usr/local/bin/nixgen-verify
 install -m755 "$I/nixgen-diffid" /usr/local/bin/nixgen-diffid
 install -m755 "$I/nixgen-setup" /usr/local/bin/nixgen-setup
 install -m755 "$I/nixgen-adopt" /usr/local/bin/nixgen-adopt

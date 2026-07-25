@@ -53,14 +53,6 @@ size_t write(Descriptor fd, std::span<const std::byte> buffer, bool allowInterru
     return static_cast<size_t>(n);
 }
 
-AutoCloseFD dupDescriptor(Descriptor fd)
-{
-    int newFd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
-    if (newFd == -1)
-        throw SysError("duplicating file descriptor");
-    return AutoCloseFD{newFd};
-}
-
 //////////////////////////////////////////////////////////////////////
 
 void Pipe::create(bool nonBlocking)
@@ -84,49 +76,6 @@ void Pipe::create(bool nonBlocking)
 
 //////////////////////////////////////////////////////////////////////
 
-static int unix_close_range(unsigned int first, unsigned int last, int flags)
-{
-#  if !HAVE_CLOSE_RANGE
-    return syscall(SYS_close_range, first, last, (unsigned int) flags);
-#  else
-    return close_range(first, last, flags);
-#  endif
-}
-
-void unix::closeExtraFDs()
-{
-    constexpr int MAX_KEPT_FD = 2;
-    static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == MAX_KEPT_FD);
-
-    // first try to close_range everything we don't care about. if this
-    // returns an error with these parameters we're running on a kernel
-    // that does not implement close_range (i.e. pre 5.9) and fall back
-    // to the old method. we should remove that though, in some future.
-    if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0) {
-        return;
-    }
-
-    try {
-        for (auto & s : DirectoryIterator{"/proc/self/fd"}) {
-            checkInterrupt();
-            auto fd = std::stoi(s.path().filename());
-            if (fd > MAX_KEPT_FD) {
-                debug("closing leaked FD %d", fd);
-                close(fd);
-            }
-        }
-        return;
-    } catch (SysError &) {
-    }
-
-    int maxFD = 0;
-#if HAVE_SYSCONF
-    maxFD = sysconf(_SC_OPEN_MAX);
-#endif
-    for (int fd = MAX_KEPT_FD + 1; fd < maxFD; ++fd)
-        close(fd); /* ignore result */
-}
-
 void unix::closeOnExec(int fd)
 {
     int prev;
@@ -141,39 +90,6 @@ void syncDescriptor(Descriptor fd)
         ;
     if (result == -1)
         throw NativeSysError("fsync file descriptor %1%", fd);
-}
-
-void unix::SelfPipe::create()
-{
-    pipe.create(/*nonBlocking=*/true);
-}
-
-void unix::SelfPipe::notify()
-{
-    /* Write to the self-pipe. If we get EAGAIN that means the notify pipe is full
-       and we don't need to do anything. */
-    ssize_t res;
-    do {
-        res = ::write(pipe.writeSide.get(), "x", 1);
-    } while (res == -1 && errno == EINTR);
-    if (res == -1 && errno != EAGAIN)
-        throw SysError("writing to the self-pipe");
-}
-
-void unix::SelfPipe::drain()
-{
-    /* Drain the self-pipe. */
-    std::array<char, 128> buf;
-    while (true) {
-        if (::read(pipe.readSide.get(), buf.data(), buf.size()) == -1) {
-            if (errno == EAGAIN)
-                break;
-            else if (errno == EINTR)
-                continue;
-            else
-                throw SysError("reading from self-pipe");
-        }
-    }
 }
 
 } // namespace nix

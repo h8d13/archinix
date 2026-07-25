@@ -29,12 +29,6 @@ std::optional<OsString> getEnvOs(const OsString & key);
 OsStringMap getEnvOs();
 
 /**
- * @return a non empty environment variable. Returns nullopt if the env
- * variable is set to ""
- */
-std::optional<std::string> getEnvNonEmpty(const std::string & key);
-
-/**
  * Like `getEnvNonEmpty`, but using `OsString` to avoid coercions.
  * Returns nullopt if the env variable is not set or set to "".
  */
@@ -45,33 +39,5 @@ std::optional<OsString> getEnvOsNonEmpty(const OsString & key);
  */
 StringMap getEnv();
 
-
-/**
- * Like POSIX `setenv`, but always overrides.
- *
- * We don't need the non-overriding version, and this is easier to
- * reimplement on Windows.
- */
-int setEnv(const char * name, const char * value);
-
-/**
- * Like `setEnv`, but using `OsString` to avoid coercions.
- */
-int setEnvOs(const OsString & name, const OsString & value);
-
-/**
- * Like `unsetenv`, but using `OsChar` to avoid coercions.
- */
-int unsetEnvOs(const OsChar * name);
-
-/**
- * Clear the environment.
- */
-void clearEnv();
-
-/**
- * Replace the entire environment with the given one.
- */
-void replaceEnv(const StringMap & newEnv);
 
 } // namespace nix

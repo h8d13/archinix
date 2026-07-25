@@ -35,7 +35,7 @@ int main(int argc, char ** argv)
 	unsigned nfiles = std::stoul(argv[3]);
 	unsigned pool = std::stoul(argv[4]);
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::path(root));

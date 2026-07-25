@@ -3,7 +3,6 @@
 #include "nix/util/error.hh"
 #include "nix/util/fun.hh"
 #include "nix/util/sync.hh"
-#include "nix/util/terminal.hh"
 
 #include <thread>
 
@@ -67,10 +66,6 @@ static void signalHandlerThread(sigset_t set)
 
         if (signal == SIGINT || signal == SIGTERM || signal == SIGHUP)
             triggerInterrupt();
-
-        else if (signal == SIGWINCH) {
-            updateWindowSize();
-        }
     }
 }
 
@@ -101,54 +96,18 @@ void unix::triggerInterrupt()
     }
 }
 
-static sigset_t savedSignalMask;
-static bool savedSignalMaskIsSet = false;
-
-void unix::saveSignalMask()
-{
-    if (sigprocmask(SIG_BLOCK, nullptr, &savedSignalMask))
-        throw SysError("querying signal mask");
-
-    savedSignalMaskIsSet = true;
-}
-
 void unix::startSignalHandlerThread()
 {
-    updateWindowSize();
-
-    saveSignalMask();
-
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGINT);
     sigaddset(&set, SIGTERM);
     sigaddset(&set, SIGHUP);
     sigaddset(&set, SIGPIPE);
-    sigaddset(&set, SIGWINCH);
     if (pthread_sigmask(SIG_BLOCK, &set, nullptr))
         throw SysError("blocking signals");
 
     std::thread(signalHandlerThread, set).detach();
-}
-
-void unix::restoreSignals()
-{
-    // If startSignalHandlerThread wasn't called, that means we're not running
-    // in a proper libmain process, but a process that presumably manages its
-    // own signal handlers. Such a process should call either
-    //  - initNix(), to be a proper libmain process
-    //  - startSignalHandlerThread(), to resemble libmain regarding signal
-    //    handling only
-    //  - saveSignalMask(), for processes that define their own signal handling
-    //    thread
-    // TODO: Warn about this? Have a default signal mask? The latter depends on
-    //       whether we should generally inherit signal masks from the caller.
-    //       I don't know what the larger unix ecosystem expects from us here.
-    if (!savedSignalMaskIsSet)
-        return;
-
-    if (sigprocmask(SIG_SETMASK, &savedSignalMask, nullptr))
-        throw SysError("restoring signals");
 }
 
 namespace {

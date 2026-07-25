@@ -9,11 +9,6 @@ StorePath StoreDirConfig::parseStorePath(std::string_view path) const
 {
     if (path.empty())
         throw BadStorePath("empty path is not a valid store path");
-    // On Windows, `/nix/store` is not a canonical path. More broadly it
-    // is unclear whether this function should be using the native
-    // notion of a canonical path at all. For example, it makes to
-    // support remote stores whose store dir is a non-native path (e.g.
-    // Windows <-> Unix ssh-ing).
     auto p =
         canonPath(std::string(path))
         ;
@@ -31,30 +26,9 @@ std::optional<StorePath> StoreDirConfig::maybeParseStorePath(std::string_view pa
     }
 }
 
-bool StoreDirConfig::isStorePath(std::string_view path) const
-{
-    return (bool) maybeParseStorePath(path);
-}
-
-StorePathSet StoreDirConfig::parseStorePathSet(const StringSet & paths) const
-{
-    StorePathSet res;
-    for (auto & i : paths)
-        res.insert(parseStorePath(i));
-    return res;
-}
-
 std::string StoreDirConfig::printStorePath(const StorePath & path) const
 {
     return (storeDir + "/").append(path.to_string());
-}
-
-StringSet StoreDirConfig::printStorePathSet(const StorePathSet & paths) const
-{
-    StringSet res;
-    for (auto & i : paths)
-        res.insert(printStorePath(i));
-    return res;
 }
 
 /*
@@ -133,31 +107,6 @@ StoreDirConfig::makeFixedOutputPathFromCA(std::string_view name, const ContentAd
             },
             [&](const FixedOutputInfo & foi) { return makeFixedOutputPath(name, foi); }},
         ca.raw);
-}
-
-std::pair<StorePath, Hash> StoreDirConfig::computeStorePath(
-    std::string_view name,
-    const SourcePath & path,
-    ContentAddressMethod method,
-    HashAlgorithm hashAlgo,
-    const StorePathSet & references,
-    PathFilter & filter) const
-{
-    auto [h, size] = hashPath(path, method.getFileIngestionMethod(), hashAlgo, filter);
-    if (settings.warnLargePathThreshold && size && *size >= settings.warnLargePathThreshold)
-        warn("hashed large path '%s' (%s)", path, renderSize(*size));
-    return {
-        makeFixedOutputPathFromCA(
-            name,
-            ContentAddressWithReferences::fromParts(
-                method,
-                h,
-                {
-                    .others = references,
-                    .self = false,
-                })),
-        h,
-    };
 }
 
 } // namespace nix

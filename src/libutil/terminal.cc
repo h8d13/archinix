@@ -1,65 +1,9 @@
 #include "nix/util/terminal.hh"
 #include "nix/util/environment-variables.hh"
-#include "nix/util/sync.hh"
-#include "nix/util/error.hh"
 
-#  include <sys/ioctl.h>
 #include <unistd.h>
-#include <widechar_width.h>
-#include <cstdlib> // for ptsname and ptsname_r
-
-namespace {
-
-inline std::pair<int, size_t> charWidthUTF8Helper(std::string_view s)
-{
-    size_t bytes = 1;
-    uint32_t ch = s[0];
-    uint32_t max = 1U << 7;
-    if ((ch & 0x80U) == 0U) {
-    } else if ((ch & 0xe0U) == 0xc0U) {
-        ch &= 0x1fU;
-        bytes = 2;
-        max = 1U << 11;
-    } else if ((ch & 0xf0U) == 0xe0U) {
-        ch &= 0x0fU;
-        bytes = 3;
-        max = 1U << 16;
-    } else if ((ch & 0xf8U) == 0xf0U) {
-        ch &= 0x07U;
-        bytes = 4;
-        max = 0x110000U;
-    } else {
-        return {bytes, bytes}; // invalid UTF-8 start byte
-    }
-    for (size_t i = 1; i < bytes; i++) {
-        if (i < s.size() && (s[i] & 0xc0) == 0x80) {
-            ch = (ch << 6) | (s[i] & 0x3f);
-        } else {
-            return {i, i}; // invalid UTF-8 encoding; assume one character per byte
-        }
-    }
-    int width = bytes; // in case of overlong encoding
-    if (ch < max) {
-        width = widechar_wcwidth(ch);
-        if (width == widechar_ambiguous) {
-            width = 1; // just a guess...
-        } else if (width == widechar_widened_in_9) {
-            width = 2;
-        } else if (width < 0) {
-            width = 0;
-        }
-    }
-    return {width, bytes};
-}
-
-} // namespace
 
 namespace nix {
-
-bool isTTY(Descriptor fd)
-{
-    return isatty(fd);
-}
 
 bool isTTY()
 {
@@ -69,10 +13,10 @@ bool isTTY()
     return tty;
 }
 
-std::string filterANSIEscapes(std::string_view s, bool filterAll, unsigned int width)
+std::string filterANSIEscapes(std::string_view s, bool filterAll)
 {
     std::string t;
-    size_t w = 0;
+    size_t w = 0; /* printable characters, for tab stops */
     auto i = s.begin();
 
     while (i != s.end()) {
@@ -98,7 +42,7 @@ std::string filterANSIEscapes(std::string_view s, bool filterAll, unsigned int w
                 e += *i++;
                 // https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda defines
                 // two forms of a URI separator:
-                // 1. ESC '\' (standard)
+                // 1. ESC '\\' (standard)
                 // 2. BEL ('\a') (xterm-style, used by gcc)
 
                 // eat ESC or BEL
@@ -121,9 +65,9 @@ std::string filterANSIEscapes(std::string_view s, bool filterAll, unsigned int w
         }
 
         else if (*i == '\t') {
+            // expand to the next 8-column tab stop
             do {
-                if (++w > (size_t) width)
-                    return t;
+                ++w;
                 t += ' ';
             } while (w % 8);
             i++;
@@ -134,51 +78,15 @@ std::string filterANSIEscapes(std::string_view s, bool filterAll, unsigned int w
             i++;
 
         else {
-            auto [chWidth, bytes] = charWidthUTF8Helper({i, s.end()});
-            w += chWidth;
-            if (w > (size_t) width) {
-                break;
-            }
-            t += {i, i + bytes};
-            i += bytes;
+            /* count characters rather than bytes so tab stops still
+               line up in UTF-8 text; display width (CJK/emoji double
+               width) is not tracked, nothing truncates any more */
+            if ((*i & 0xc0) != 0x80)
+                ++w;
+            t += *i++;
         }
     }
     return t;
-}
-
-//////////////////////////////////////////////////////////////////////
-
-// Note: this object intentionally leaks to avoid a destructor ordering issue (specifically, ~ProgressBar() calling
-// getWindowSize() after windowSize has been destroyed).
-static auto * const windowSize = new Sync<std::pair<unsigned short, unsigned short>>{{0, 0}};
-
-void updateWindowSize()
-{
-    struct winsize ws;
-    if (ioctl(2, TIOCGWINSZ, &ws) == 0) {
-        auto windowSize_(windowSize->lock());
-        windowSize_->first = ws.ws_row;
-        windowSize_->second = ws.ws_col;
-    }
-}
-
-std::pair<unsigned short, unsigned short> getWindowSize()
-{
-    return *windowSize->lock();
-}
-
-std::string getPtsName(int fd)
-{
-    // Use thread-safe ptsname_r on platforms that support it
-    // PTY names are typically short:
-    // - Linux: /dev/pts/N (where N is usually < 1000)
-    // - FreeBSD: /dev/pts/N
-    // 64 bytes is more than sufficient for any Unix PTY name
-    char buf[64];
-    if (ptsname_r(fd, buf, sizeof(buf)) != 0) {
-        throw SysError("getting pseudoterminal slave name");
-    }
-    return buf;
 }
 
 } // namespace nix

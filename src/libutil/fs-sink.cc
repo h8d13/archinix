@@ -2,7 +2,6 @@
 #include <sys/stat.h>
 
 #include "nix/util/error.hh"
-#include "nix/util/config-global.hh"
 #include "nix/util/file-system-at.hh"
 #include "nix/util/fs-sink.hh"
 
@@ -65,15 +64,15 @@ void copyRecursive(SourceAccessor & accessor, const CanonPath & from, FileSystem
 
 namespace {
 
-struct RestoreSinkSettings : Config
+struct RestoreSinkSettings
 {
-    Setting<bool> preallocateContents{
-        this, false, "preallocate-contents", "Whether to preallocate files when writing objects with known size."};
+    /**
+     * Preallocate files when writing objects of known size.
+     */
+    bool preallocateContents = false;
 };
 
 static RestoreSinkSettings restoreSinkSettings;
-
-static GlobalConfig::Register r1(&restoreSinkSettings);
 
 } // namespace
 
@@ -303,8 +302,6 @@ void RestoreRegularFile::isExecutable()
             throw SysError("fchmod");
         return;
     }
-    // Windows doesn't have a notion of executable file permissions we
-    // care about here, right?
     auto st = nix::fstat(fd.get());
     if (fchmod(fd.get(), st.st_mode | (S_IXUSR | S_IXGRP | S_IXOTH)) == -1)
         throw SysError("fchmod");

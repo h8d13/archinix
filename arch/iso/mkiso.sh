@@ -16,7 +16,7 @@ SDIR=$STORE/nix/store
 LABEL=NIXISO
 
 P=$REPO/build/prefix
-for t in rm-path import-dir export-path import-path; do
+for t in rm-path import-dir export-path import-path store-paths store-resolve verify-store; do
 	# -nt: also recompile when the source is newer than the binary
 	[ "$REPO/build/$t" -nt "arch/$t.cc" ] || g++ -std=c++23 -O2 \
 		"arch/$t.cc" -o "build/$t" \
@@ -62,6 +62,8 @@ done
 	mkdir "$TMP/inject/payload"
 	cp "$REPO/build/import-dir" "$REPO/build/rm-path" \
 		"$REPO/build/export-path" "$REPO/build/import-path" \
+		"$REPO/build/store-paths" "$REPO/build/store-resolve" \
+		"$REPO/build/verify-store" \
 		"$P/lib"/libnixstore.so* \
 		"$P/lib"/libnixutil.so* "$TMP/inject/payload/"
 	# sh -e: run via interpreter ignores the shebang's -e; without it a

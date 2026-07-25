@@ -1,6 +1,5 @@
 #include "nix/store/content-address.hh"
 #include "nix/util/split.hh"
-#include "nix/util/json-utils.hh"
 
 namespace nix {
 
@@ -59,29 +58,6 @@ ContentAddressMethod ContentAddressMethod::parse(std::string_view m)
         return fileIngestionMethodToContentAddressMethod(parseFileIngestionMethod(m));
 }
 
-std::string_view ContentAddressMethod::renderPrefix() const
-{
-    switch (raw) {
-    case ContentAddressMethod::Raw::Text:
-        return "text:";
-    case ContentAddressMethod::Raw::Flat:
-    case ContentAddressMethod::Raw::NixArchive:
-        return makeFileIngestionPrefix(getFileIngestionMethod());
-    default:
-        assert(false);
-    }
-}
-
-ContentAddressMethod ContentAddressMethod::parsePrefix(std::string_view & m)
-{
-    if (splitPrefix(m, "r:")) {
-        return ContentAddressMethod::Raw::NixArchive;
-    } else if (splitPrefix(m, "text:")) {
-        return ContentAddressMethod::Raw::Text;
-    }
-    return ContentAddressMethod::Raw::Flat;
-}
-
 /**
  * This is slightly more mindful of forward compat in that it uses `fixed:`
  * rather than just doing a raw empty prefix or `r:`, which doesn't "save room"
@@ -98,11 +74,6 @@ static std::string renderPrefixModern(const ContentAddressMethod & ca)
     default:
         assert(false);
     }
-}
-
-std::string ContentAddressMethod::renderWithAlgo(HashAlgorithm ha) const
-{
-    return renderPrefixModern(*this) + printHashAlgo(ha);
 }
 
 FileIngestionMethod ContentAddressMethod::getFileIngestionMethod() const
@@ -182,14 +153,6 @@ ContentAddress ContentAddress::parse(std::string_view rawCa)
     };
 }
 
-std::pair<ContentAddressMethod, HashAlgorithm> ContentAddressMethod::parseWithAlgo(std::string_view caMethod)
-{
-    std::string asPrefix = std::string{caMethod} + ":";
-    // parseContentAddressMethodPrefix takes its argument by reference
-    std::string_view asPrefixView = asPrefix;
-    return parseContentAddressMethodPrefix(asPrefixView);
-}
-
 std::optional<ContentAddress> ContentAddress::parseOpt(std::string_view rawCaOpt)
 {
     return rawCaOpt == "" ? std::nullopt : std::optional{ContentAddress::parse(rawCaOpt)};
@@ -198,11 +161,6 @@ std::optional<ContentAddress> ContentAddress::parseOpt(std::string_view rawCaOpt
 std::string renderContentAddress(std::optional<ContentAddress> ca)
 {
     return ca ? ca->render() : "";
-}
-
-std::string ContentAddress::printMethodAlgo() const
-{
-    return std::string{method.renderPrefix()} + printHashAlgo(hash.algo);
 }
 
 bool StoreReferences::empty() const
@@ -282,35 +240,3 @@ Hash ContentAddressWithReferences::getHash() const
 
 } // namespace nix
 
-namespace nlohmann {
-
-using namespace nix;
-
-ContentAddressMethod adl_serializer<ContentAddressMethod>::from_json(const json & json)
-{
-    return ContentAddressMethod::parse(getString(json));
-}
-
-void adl_serializer<ContentAddressMethod>::to_json(json & json, const ContentAddressMethod & m)
-{
-    json = m.render();
-}
-
-ContentAddress adl_serializer<ContentAddress>::from_json(const json & json)
-{
-    auto obj = getObject(json);
-    return {
-        .method = adl_serializer<ContentAddressMethod>::from_json(valueAt(obj, "method")),
-        .hash = valueAt(obj, "hash"),
-    };
-}
-
-void adl_serializer<ContentAddress>::to_json(json & json, const ContentAddress & ca)
-{
-    json = {
-        {"method", ca.method},
-        {"hash", ca.hash},
-    };
-}
-
-} // namespace nlohmann

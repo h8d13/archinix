@@ -69,11 +69,6 @@ struct SQLite
         return db;
     }
 
-    /**
-     * Disable synchronous mode, set truncate journal mode.
-     */
-    void isCache();
-
     void exec(const std::string & stmt);
 
     uint64_t getLastInsertedRowId();
@@ -141,7 +136,6 @@ struct SQLiteStmt
 
         std::string getStr(int col);
         int64_t getInt(int col);
-        bool isNull(int col);
     };
 
     Use use()

@@ -1,12 +1,16 @@
 #!/bin/sh -e
-# List generations with a short id, from inside the box. Every store
-# path is a generation here (import-dir is the only writer). Source:
+# List generations with a short id, from inside the box. Source:
 # disk = the writable NIXSTORE store, iso = the boot medium squashfs;
 # on a disk boot /nixstore aliases the disk store, listed once.
 # Short id = first 8 hash chars, for eyeballing; nixgen-remove/-switch
 # take the plain name (when unique) or the full basename.
-# Added-at is dd/mm/yyyy hh:mm local time.
+# Added-at is dd/mm/yyyy hh:mm local time, from the store db by way of
+# store-paths. The ISO store has no db to ask, so its rows show "-".
 # usage: nixgen-listid
+# the store is 0700 root:root: bail here rather than deep in a read
+# that surfaces as "generation not found" when the real problem is
+# that the store was never readable
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 
 # after a nixgen-switch the cmdline names the boot-time generation; the
 # marker (written by switch, absent on a real boot) is the live one
@@ -16,59 +20,55 @@ else
 	RUNNING=$(sed -n 's/.*nixgen=\([^ ]*\).*/\1/p' /proc/cmdline)
 fi
 
-# the store db's registrationTime is the only real "added at": the
-# import canonicalises every store path's mtime to 1, and ctime tracks
-# later link-farm churn (optimise) rather than the commit. Queried once
-# per store, not once per generation. A squashfs store has no db beside
-# it (mkiso squashes the store dir alone), so iso rows have no time
-regtimes() {
-	db=${1%/store}/var/nix/db/db.sqlite
-	[ -r "$db" ]
-	# -readonly: the store disk is mounted rw, and listing must never
-	# contend for the write lock an import may be holding
-	sqlite3 -readonly -noheader -list -separator '	' "$db" \
-		'select path, registrationTime from ValidPaths'
-}
-
-added() {
-	t=$(printf '%s\n' "$TIMES" | awk -F'	' -v p="/nix/store/$1" \
-		'$1 == p { print $2; exit }')
-	if [ -n "$t" ]; then
-		date -d "@$t" '+%d/%m/%Y %H:%M'
-	else
-		echo '-'
-	fi
-}
-
-list() {
-	TIMES=$(regtimes "$1")
-	# sort on the name before formatting: the added-at column holds a
-	# space, so a post-format sort key would land on a different field
-	# for dated and undated rows
-	for p in "$1"/*; do
-		[ -d "$p" ] || continue
-		g=${p##*/}
-		case $g in .links|tmp-*) continue ;; esac
+# rows in on stdin as <basename><TAB><epoch>, source tag in $1.
+# Sorted on the generation name, which is what an operator scans for:
+# store-paths sorts by basename, so hash first, and a directory listing
+# comes out in readdir order.
+emit() {
+	src=$1
+	while IFS='	' read -r g t; do
+		printf '%s\t%s\t%s\n' "${g#*-}" "$g" "$t"
+	done | sort | while IFS='	' read -r name g t; do
+		case $t in
+		'' | 0) when='-' ;;
+		*) when=$(date -d "@$t" '+%d/%m/%Y %H:%M') ;;
+		esac
 		mark=
 		if [ "$g" = "$RUNNING" ]; then
 			mark=" (running)"
 		fi
-		printf '%s\t%s\t%s\n' "${g#*-}" "$g" "$mark"
-	done | sort | while IFS='	' read -r name g mark; do
 		printf '%.8s  %-4s  %-16s  %s%s\n' \
-			"$g" "$2" "$(added "$g")" "$name" "$mark"
+			"$g" "$src" "$when" "$name" "$mark"
 	done
 }
 
-DISK=/nixstoredev/nix/store
+# mkiso squashes the store directory alone, without nix/var beside it,
+# so the ISO store has no db: its paths can only be read off the
+# directory, which means filtering out libnixstore's own entries (the
+# .links dedup farm, half-written tmp-* imports) by hand. The disk
+# store is asked properly, through store-paths.
+list_iso() {
+	for p in "$1"/*; do
+		[ -d "$p" ] || continue
+		g=${p##*/}
+		case $g in .links | tmp-*) continue ;; esac
+		printf '%s\t0\n' "$g"
+	done
+}
+
+# the store dir spelled out only to compare mounts: on a disk boot the
+# initramfs bind-mounts the disk store onto /nixstore, and the same
+# store listed twice is worse than the one extra path here
+ROOT=/nixstoredev
+DISK=$ROOT/nix/store
 if [ -d "$DISK" ] && [ -d /nixstore ] \
 		&& [ "$(stat -c %d /nixstore)" = "$(stat -c %d "$DISK")" ]; then
-	list "$DISK" disk
+	/usr/local/bin/store-paths "$ROOT" | emit disk
 else
 	if [ -d /nixstore ]; then
-		list /nixstore iso
+		list_iso /nixstore | emit iso
 	fi
 	if [ -d "$DISK" ]; then
-		list "$DISK" disk
+		/usr/local/bin/store-paths "$ROOT" | emit disk
 	fi
 fi

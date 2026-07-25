@@ -6,7 +6,9 @@
 # deviating path; symlink rows are ownership-only), etc/nixgen/caps
 # (getcap text: raw capability xattrs are userns-encoded, they must
 # round-trip through setcap to normalise), etc/nixgen/acls (getfacl
-# numeric dump). Being content, the manifests are hashed and deduped
+# numeric dump), etc/nixgen/xattrs (user/trusted xattrs) and
+# etc/nixgen/attrs (chattr flags). Being content, the manifests are
+# hashed and deduped
 # with the generation and roll back with it. nixgen-restmeta replays
 # them at boot and in build sandboxes.
 # Plain-file mode diffs (644 vs canonical 444) are skipped on purpose
@@ -14,6 +16,10 @@
 # would copy-up every file instead of a few dozen paths. /etc is
 # captured whole: small, and it is where humans cp defaults from.
 # usage: nixgen-savemeta <root>
+# the store is 0700 root:root and the work below mounts, imports or
+# writes it: bail here rather than at whichever privileged call
+# happens to fail first, which reads as a missing file
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 R=$1
 [ -d "$R" ] || { echo "usage: $0 <root>" >&2; exit 1; }
 cd "$R"
@@ -82,3 +88,43 @@ find . -mindepth 1 -xdev ! -path "*${TAB}*" ! -path "*${NL}*" \
 find . -mindepth 1 -xdev -path ./var/log/journal -prune \
 	-o ! -path "*${TAB}*" ! -path "*${NL}*" \( -type f -o -type d \) -print0 \
 	| LC_ALL=C sort -z | xargs -0 -r getfacl -sPp --numeric > etc/nixgen/acls
+
+# Both probes below ask the underlying filesystem for something it may
+# not implement: squashfs (the ISO's whole lower) has no xattr or flag
+# ioctl, so EOPNOTSUPP arrives once per path. Expected and voluminous,
+# so it is filtered and anything else still reaches stderr. Neither
+# walk may abort the capture: this runs inside every nixgen-commit.
+ERR=$(mktemp)
+trap 'rm -f "$ERR"' EXIT
+
+# user.*/trusted.* xattrs: security.capability rides the caps manifest
+# (raw values are userns-encoded and must round-trip through setcap)
+# and system.posix_acl_* rides acls, so both are excluded here rather
+# than captured twice and replayed raw over each other.
+# -h: never dereference, a symlink's xattrs are its own
+find . -mindepth 1 -xdev ! -path "*${TAB}*" ! -path "*${NL}*" \
+	\( -type f -o -type d \) -print0 | LC_ALL=C sort -z \
+	| xargs -0 -r getfattr -h -d -m '^(user|trusted)\.' 2> "$ERR" \
+	> etc/nixgen/xattrs || :
+grep -v 'Operation not supported' "$ERR" >&2 || :
+
+# chattr flags: NAR carries no notion of them, so +i/+a set by an
+# operator vanish into the store like any other metadata. Only the
+# settable ones are captured; filesystem-internal flags (e extents,
+# I htree index) are not chattr-able and would fail every replay.
+# lsattr prints "<flags> <path>": the path can hold spaces, so strip
+# exactly the first field rather than splitting the line
+find . -mindepth 1 -xdev ! -path "*${TAB}*" ! -path "*${NL}*" \
+	\( -type f -o -type d \) -print0 | LC_ALL=C sort -z \
+	| xargs -0 -r lsattr -d 2> "$ERR" \
+	| awk -v OFS='\t' '{
+		f = ""
+		n = split("i a A d j c m s S t u D", w, " ")
+		for (k = 1; k <= n; k++)
+			if (index($1, w[k])) f = f w[k]
+		if (f == "") next
+		p = $0
+		sub(/^[^ ]+ /, "", p)
+		print f, p
+	}' > etc/nixgen/attrs || :
+grep -v 'Operation not supported' "$ERR" >&2 || :

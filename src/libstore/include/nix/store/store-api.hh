@@ -5,15 +5,12 @@
 #include "nix/util/hash.hh"
 #include "nix/store/content-address.hh"
 #include "nix/util/serialise.hh"
-#include "nix/util/lru-cache.hh"
 #include "nix/util/sync.hh"
-#include "nix/util/configuration.hh"
 #include "nix/store/path-info.hh"
 #include "nix/util/repair-flag.hh"
 #include "nix/store/store-dir-config.hh"
 #include "nix/util/source-path.hh"
 
-#include <nlohmann/json_fwd.hpp>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -33,9 +30,6 @@ class Store;
 
 typedef std::map<std::string, StorePath> OutputPathMap;
 
-enum CheckSigsFlag : bool { NoCheckSigs = false, CheckSigs = true };
-
-
 enum BuildMode : uint8_t { bmNormal, bmRepair, bmCheck };
 
 enum TrustedFlag : bool { NotTrusted = false, Trusted = true };
@@ -43,252 +37,39 @@ enum TrustedFlag : bool { NotTrusted = false, Trusted = true };
 typedef std::map<StorePath, std::optional<ContentAddress>> StorePathCAMap;
 
 /**
- * Need to make this a separate class so I can get the right
- * initialization order in the constructor for `StoreConfig`.
+ * Exactly one store type exists (the local store). A store consists of
+ * a config struct holding plain fields, and a `Store` subclass holding
+ * the implementation; the config's `openStore()` builds the latter.
  */
-struct StoreConfigBase : Config
+struct StoreConfig : public StoreDirConfig
 {
 private:
-    void anchor() override;
-
-protected:
-
-    /**
-     * This data type is only used for `StoreConfigBase` constructor's
-     * `pathType` parameter. This documentation will describe what it means in
-     * that one context.
-     *
-     * This enum determines how the default (logical) store path for the store
-     * is chosen, if no explicit setting was given. There are two different ways
-     * to default this setting. `Native` is appropriate for any store which is a
-     * `LocalFSStore`, and `Unix` is appropriate for any store which is *not* a
-     * `LocalFSStore`.
-     *
-     * Because this information is needed when constructing `StoreConfigBase`,
-     * we cannot use a virtual method in a directed class (like `LocalFSStore`)
-     * so instead we add this argument to `StoreConfigBase` in order to make the
-     * choice in a non-vtable/inheritance-based way.
-     */
-    enum struct FilePathType {
-        /**
-         * Unix-style path (e.g., `/nix/store`)
-         *
-         * Unix paths use forward slashes, and do not have any root "drive" or
-         * other such notion.
-         *
-         * When the store dir is defaulted this way, we do not care what OS we
-         * are on. The default path is canonicalized, removing any `..`
-         * lexically.
-         *
-         * This is used for store implementations that do not use the host file
-         * system, like `DummyStore` which is entirely in-memory and portable,
-         * or remote stores which refer to some *other* computer's file system.
-         *
-         * The default store path used in this case is morally a `CanonPath`.
-         *
-         * The default store path in this case is a hard-coded constant,
-         * `NIX_STORE_DIR`, which is probably `/nix/store`.
-         *
-         * @todo At some point we will have to adjust this further, to support
-         * the case of Unix SSHing to Windows.
-         */
-        Unix,
-
-        /**
-         * Native path for the current platform. On Unix this is a Unix Path,
-         * and on Windows, it is a Windows path.
-         *
-         * This is used for store implementations that do use the local file
-         * system as part of their interface (not just as an implementation
-         * detail). Concretely, that is all stores that inherit from
-         * `LocalFSStore`.
-         *
-         * Those stores advertise that the store objects are on disk, and the
-         * logical store directory path (at least after one enters the
-         * appropriate chroot / other similar mechanism) is the literal
-         * directory those store objects are contained with. As such, the store
-         * directory path must be something that is supported by the OS's native
-         * file system (or inside the chroot / other similar mechanism, if
-         * needed).
-         *
-         * The default store path used in this case is morally a
-         * `std::filesystem::path`.
-         *
-         * The default store path in this case depends on the platform:
-         *
-         * - On Unix, is based on a hard-coded constant, `NIX_STORE_DIR`, which
-         * is probably `/nix/store`.
-         *
-         * - On Windows, it is based on `%PROGRAMDATA%\nix\store`.
-         *
-         * In both cases, the default path is canonicalized, removing any `..`
-         * lexically.
-         */
-        Native,
-    };
+    /* VTable anchor: avoids a weak vtable, which breaks dynamic_cast
+       across shared libraries. Root of the config hierarchy now that
+       the Config base is gone. */
+    virtual void anchor();
 
 public:
-
     /**
-     * A setting for the Nix store directory. Automatically canonicalises the
-     * path and rejects the empty string. Stored as `std::string` because
-     * store directory are valid file paths on *some* OS, but not neccessarily the OS of this build of Nix.
-     *
-     * (For example, consider `SSHStore` from Linux to Windows, or vice versa, the foreign path will not be a valid
-     * `std::filesystem::path`.)
+     * The logical store directory (`/nix/store`). Baked in: the
+     * initramfs and GRUB entries spell it out, so it cannot move.
      */
-    class StoreDirSetting : public BaseSetting<std::string>
-    {
-        friend StoreConfigBase;
+    static const std::string & logicalStoreDir();
 
-        FilePathType pathType;
-
-        /**
-         * Compute the default Nix store directory from environment variables
-         * (`NIX_STORE_DIR`, `NIX_STORE`) or the compile-time default.
-         *
-         * @param pathType Whether to return a Unix-style or native path. Different
-         * stores will use different types for the default store path.
-         */
-        StoreDirSetting(Config * options, FilePathType pathType);
-
-        std::string parse(const std::string & str) const override;
-
-        void operator=(const std::string & v)
-        {
-            this->assign(v);
-        }
-    };
-
-    StoreDirSetting storeDir_;
-
-    /**
-     * @pathType see FilePathType
-     */
-    StoreConfigBase(const StringMap & params, FilePathType pathType);
-};
-
-/**
- * About the class hierarchy of the store types:
- *
- * Each store type `Foo` consists of two classes:
- *
- * 1. A class `FooConfig : virtual StoreConfig` that contains the configuration
- *   for the store
- *
- *   It should only contain members of type `Setting<T>` (or subclasses
- *   of it) and inherit the constructors of `StoreConfig`
- *   (`using StoreConfig::StoreConfig`).
- *
- * 2. A class `Foo : virtual Store` that contains the
- *   implementation of the store.
- *
- *   This class is expected to have:
- *
- *   1. an alias `using Config = FooConfig;`
- *
- *   2. a constructor `Foo(ref<const Config> params)`.
- *
- * You can then register the new store using:
- *
- * ```
- * cpp static RegisterStoreImplementation<FooConfig> regStore;
- * ```
- *
- * @note The order of `StoreConfigBase` and then `StorerConfig` is
- * very important. This ensures that `StoreConfigBase::storeDir_`
- * is initialized before we have our one chance (because references are
- * immutable) to initialize `StoreConfig::storeDir`.
- */
-struct StoreConfig : public StoreConfigBase, public StoreDirConfig
-{
-private:
-    void anchor() override;
-
-public:
-    using Params = StringMap;
-
-    StoreConfig(const Params & params, FilePathType pathType);
-
-    StoreConfig() = delete;
+    StoreConfig();
 
     virtual ~StoreConfig() {}
 
     /**
-     * Documentation for this type of store.
+     * Warn when adding a path larger than this many bytes (by NAR
+     * size). 0 disables the warning.
      */
-    static std::string doc()
-    {
-        return "";
-    }
-
-    /**
-     * Get overridden store reference query parameters.
-     */
-    StringMap getQueryParams() const
-    {
-        auto queryParams = std::map<std::string, AbstractConfig::SettingInfo>{};
-        getSettings(queryParams, /*overriddenOnly=*/true);
-        StringMap res;
-        for (const auto & [name, info] : queryParams)
-            res.insert({name, info.value});
-        return res;
-    }
-
-    Setting<int> pathInfoCacheSize{
-        this, 65536, "path-info-cache-size", "Size of the in-memory store path metadata cache."};
-
-    Setting<bool> isTrusted{
-        this,
-        false,
-        "trusted",
-        R"(
-          Whether paths from this store can be used as substitutes
-          even if they are not signed by a key listed in the
-          [`trusted-public-keys`](@docroot@/command-ref/conf-file.md#conf-trusted-public-keys)
-          setting.
-        )"};
-
-    Setting<int> priority{
-        this,
-        0,
-        "priority",
-        R"(
-          Priority of this store when used as a [substituter](@docroot@/command-ref/conf-file.md#conf-substituters).
-          A lower value means a higher priority.
-        )"};
-
-    Setting<bool> wantMassQuery{
-        this,
-        false,
-        "want-mass-query",
-        R"(
-          Whether this store can be queried efficiently for path validity when used as a [substituter](@docroot@/command-ref/conf-file.md#conf-substituters).
-        )"};
-
-    /**
-     * Whether we're allowed to write to this store, also takes into account
-     * global `readOnly`'s mode setting, not just any per-store settings.
-     */
-    virtual bool getReadOnly() const;
+    uint64_t warnLargePathThreshold = 0;
 
     /**
      * @return The state directory for this store.
-     *
-     * By default, returns the global `settings.nixStateDir`. Subclasses
-     * like `LocalFSStoreConfig` may override to return a store-specific
-     * state directory.
      */
-    virtual const std::filesystem::path & getStateDir() const;
-
-    /**
-     * @return The log directory for this store.
-     *
-     * By default, returns the global log directory. Subclasses
-     * like `LocalFSStoreConfig` may override to return a store-specific
-     * log directory.
-     */
-    virtual const std::filesystem::path & getLogDir() const;
+    virtual const std::filesystem::path & getStateDir() const = 0;
 
     /**
      * Open a store of the type corresponding to this configuration
@@ -342,38 +123,6 @@ public:
 
 protected:
 
-    struct PathInfoCacheValue
-    {
-
-        /**
-         * Time of cache entry creation or update
-         */
-        /**
-         * Null if missing
-         */
-        std::shared_ptr<const ValidPathInfo> value;
-
-        /**
-         * Whether the value is valid as a cache entry. The path may not
-         * exist.
-         */
-        bool isKnownNow();
-
-        /**
-         * Past tense, because a path can only be assumed to exists when
-         * isKnownNow() && didExist()
-         */
-        inline bool didExist()
-        {
-            return value != nullptr;
-        }
-    };
-
-    void invalidatePathInfoCacheFor(const StorePath & path);
-
-    // Note: this is a `ref` to avoid false sharing with immutable
-    // bits of `Store`.
-    ref<SharedSync<LRUCache<StorePath, PathInfoCacheValue>>> pathInfoCache;
 
 
     Store(const Store::Config & config);
@@ -386,17 +135,6 @@ public:
     virtual void init() {};
 
     virtual ~Store() {}
-
-    /**
-     * Follow symlinks until we end up with a path in the Nix store.
-     */
-    std::filesystem::path followLinksToStore(std::string_view path) const;
-
-    /**
-     * Same as followLinksToStore(), but apply toStorePath() to the
-     * result.
-     */
-    StorePath followLinksToStorePath(std::string_view path) const;
 
     /**
      * Check whether a path is valid.
@@ -437,28 +175,12 @@ public:
      */
     ref<const ValidPathInfo> queryPathInfo(const StorePath & path);
 
-    /**
-     * Asynchronous version of queryPathInfo().
-     */
-    void queryPathInfo(const StorePath & path, Callback<ref<const ValidPathInfo>> callback) noexcept;
-
-    /**
-     * Version of queryPathInfo() that only queries the local narinfo cache and not
-     * the actual store.
-     *
-     * @return `std::nullopt` if nothing is known about the path in the local narinfo cache.
-     * @return `std::make_optional(nullptr)` if the path is known to not exist.
-     * @return `std::make_optional(validPathInfo)` if the path is known to exist.
-     */
-    std::optional<std::shared_ptr<const ValidPathInfo>> queryPathInfoFromClientCache(const StorePath & path);
-
-
-
-
 protected:
 
-    virtual void
-    queryPathInfoUncached(const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept = 0;
+    /**
+     * @return null if the path is not valid in this store.
+     */
+    virtual std::shared_ptr<const ValidPathInfo> queryPathInfoUncached(const StorePath & path) = 0;
 
 public:
 
@@ -471,29 +193,8 @@ public:
         unsupported("queryReferrers");
     }
 
-    /**
-     * @return all currently valid derivations that have `path` as an
-     * output.
-     *
-     * (Note that the result of `queryDeriver()` is the derivation that
-     * was actually used to produce `path`, which may not exist
-     * anymore.)
-     */
-    virtual StorePathSet queryValidDerivers(const StorePath & path)
-    {
-        return {};
-    };
 
 
-
-
-
-
-    /**
-     * Query the full store path given the hash part of a valid store
-     * path, or empty if the path doesn't exist.
-     */
-    virtual std::optional<StorePath> queryPathFromHashPart(const std::string & hashPart) = 0;
 
 
 
@@ -501,11 +202,7 @@ public:
      * Import a path into the store. Note that the entire NAR may not be read from `narSource`, e.g. if the path is
      * already valid.
      */
-    virtual void addToStore(
-        const ValidPathInfo & info,
-        Source & narSource,
-        RepairFlag repair = NoRepair,
-        CheckSigsFlag checkSigs = CheckSigs) = 0;
+    virtual void addToStore(const ValidPathInfo & info, Source & narSource, RepairFlag repair = NoRepair) = 0;
 
 
     /**
@@ -524,19 +221,6 @@ public:
         const StorePathSet & references = StorePathSet(),
         PathFilter & filter = defaultPathFilter,
         RepairFlag repair = NoRepair);
-
-    /**
-     * Copy the contents of a path to the store and register the
-     * validity the resulting path, using a constant amount of
-     * memory.
-     */
-    ValidPathInfo addToStoreSlow(
-        std::string_view name,
-        const SourcePath & path,
-        ContentAddressMethod method = ContentAddressMethod::Raw::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = StorePathSet(),
-        std::optional<Hash> expectedCAHash = {});
 
     /**
      * Like addToStore(), but the contents of the path are contained
@@ -575,68 +259,6 @@ public:
 
 
 
-    /**
-     * Add a store path as a temporary root of the garbage collector.
-     * The root disappears as soon as we exit.
-     * Before exiting, if you want to avoid the path being GC'ed, you either have to make it a permanent root using
-     * `LocalFSStore::addPermRoot()`, or make sure it's reachable from a permanent root (e.g. by adding it as a
-     * reference of a reachable path).
-     *
-     * To avoid races, you should call either this function or `LocalFSStore::addPermRoot()` *before* creating and using
-     * a store path, e.g.
-     *
-     * ```c++
-     * auto path = store.computeStorePath(...);
-     * store->addTempRoot(path);
-     * if (!store->isValidPath(path))
-     *     store->addToStore(...);
-     * ```
-     *
-     * By contrast, registering a root just before *using* a path is not sufficient to prevent GC races. For
-     * instance, don't do this:
-     *
-     * ```c++
-     * store->addTempRoot(path);
-     * auto drv = store->readDerivation(path);
-     * ```
-     *
-     * since the path may be GC'ed just before the call to `addTempRoot()`.
-     *
-     * Note that `addToStore()` implicitly calls `addTempRoot()`, so you don't need to call it yourself if you're
-     * calling `addToStore()` unconditionally.
-     *
-     * It is generally the responsibility of the caller of Nix APIs and CLI tools to ensure that paths are reachable by
-     * the garbage collector. For example, `buildPath(drvPath)` does not need to register *drvPath* as a GC root, since
-     * that's the responsibility of the caller, and it would be too late for `buildPath()` to do so anyway. Thus, this
-     * can race:
-     * ```console
-     * drv=$(nix-instantiate foo.nix)
-     * nix-store -r $drv
-     * ```
-     * whereas this is safe:
-     * ```console
-     * nix-instantiate foo.nix --add-root ./drv
-     * nix-store -r ./drv
-     * ```
-     *
-     */
-    virtual void addTempRoot(const StorePath & path)
-    {
-        debug("not creating temporary root, store doesn't support GC");
-    }
-
-    /**
-     * @return a string representing information about the path that
-     * can be loaded into the database using `nix-store --load-db` or
-     * `nix-store --register-validity`.
-     */
-    std::string makeValidityRegistration(const StorePathSet & paths, bool showDerivers, bool showHash);
-
-    /**
-     * Optimise the disk space usage of the Nix store by hard-linking files
-     * with the same contents.
-     */
-    virtual void optimiseStore() {};
 
     /**
      * Check the integrity of the Nix store.
@@ -686,30 +308,6 @@ public:
     /* Utility functions. */
 
 
-    /**
-     * @param [out] out Place in here the set of all store paths in the
-     * file system closure of `storePath`; that is, all paths than can
-     * be directly or indirectly reached from it. `out` is not cleared.
-     *
-     * @param flipDirection If true, the set of paths that can reach
-     * `storePath` is returned; that is, the closures under the
-     * `referrers` relation instead of the `references` relation is
-     * returned.
-     */
-    virtual void computeFSClosure(
-        const StorePathSet & paths,
-        StorePathSet & out,
-        bool flipDirection = false,
-        bool includeOutputs = false,
-        bool includeDerivers = false);
-
-    void computeFSClosure(
-        const StorePath & path,
-        StorePathSet & out,
-        bool flipDirection = false,
-        bool includeOutputs = false,
-        bool includeDerivers = false);
-
 
     /**
      * Sort a set of paths topologically under the references
@@ -718,40 +316,6 @@ public:
      */
     virtual StorePaths topoSortPaths(const StorePathSet & paths);
 
-    struct Stats
-    {
-        std::atomic<uint64_t> narInfoRead{0};
-        std::atomic<uint64_t> narInfoReadAverted{0};
-        std::atomic<uint64_t> narInfoMissing{0};
-        std::atomic<uint64_t> narInfoWrite{0};
-        std::atomic<uint64_t> pathInfoCacheSize{0};
-        std::atomic<uint64_t> narRead{0};
-        std::atomic<uint64_t> narReadBytes{0};
-        std::atomic<uint64_t> narReadCompressedBytes{0};
-        std::atomic<uint64_t> narWrite{0};
-        std::atomic<uint64_t> narWriteAverted{0};
-        std::atomic<uint64_t> narWriteBytes{0};
-        std::atomic<uint64_t> narWriteCompressedBytes{0};
-        std::atomic<uint64_t> narWriteCompressionTimeMs{0};
-    };
-
-    const Stats & getStats();
-
-    /**
-     * Computes the full closure of of a set of store-paths for e.g.
-     * derivations that need this information for `exportReferencesGraph`.
-     */
-    StorePathSet exportReferences(const StorePathSet & storePaths, const StorePathSet & inputPaths);
-
-
-    /**
-     * Hack to allow long-running processes like hydra-queue-runner to
-     * occasionally flush their path info cache.
-     */
-    void clearPathInfoCache()
-    {
-        pathInfoCache->lock()->clear();
-    }
 
     /**
      * Establish a connection to the store, for store types that have
@@ -775,8 +339,6 @@ public:
      * @note This is the opposite of the StoreConfig::isTrusted
      * store setting. That is about whether *we* trust the store.
      */
-    virtual std::optional<TrustedFlag> isTrustedClient() = 0;
-
     /**
      * Synchronises the options of the client with those of the daemon
      * (a no-op when there’s no daemon)
@@ -789,8 +351,6 @@ public:
     }
 
 protected:
-
-    Stats stats;
 
     /**
      * Helper for methods that are not unsupported: this is used for
@@ -806,18 +366,6 @@ protected:
 };
 
 
-/**
- * Remove the temporary roots file for this process.  Any temporary
- * root becomes garbage after this point unless it has been registered
- * as a (permanent) root.
- */
-void removeTempRoots();
 
-
-template<>
-struct json_avoids_null<TrustedFlag> : std::true_type
-{};
 
 } // namespace nix
-
-JSON_IMPL(nix::TrustedFlag)

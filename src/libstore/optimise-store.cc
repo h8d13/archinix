@@ -1,8 +1,8 @@
 #include "nix/store/local-store.hh"
+#include "nix/util/thread-pool.hh"
 #include "nix/store/local-settings.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
-#include "nix/util/thread-pool.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/file-system.hh"
@@ -289,7 +289,7 @@ void LocalStore::optimisePath_(
         }
     } else {
         const auto dirOfPath = path.parent_path();
-        if (dirOfPath != config->realStoreDir.get()) {
+        if (dirOfPath != config->realStoreDir) {
             makeWritable(dirOfPath);
             /* When we're done, make the directory read-only again and
                reset its timestamp back to 0. */
@@ -302,7 +302,7 @@ void LocalStore::optimisePath_(
        build the name directly instead. */
     static std::atomic<uint32_t> tmpCounter(std::random_device{}());
     std::filesystem::path tempLink{
-        config->realStoreDir.get().path().native() + "/.tmp-link-" + std::to_string(getpid()) + "-"
+        config->realStoreDir.native() + "/.tmp-link-" + std::to_string(getpid()) + "-"
         + std::to_string(tmpCounter.fetch_add(1, std::memory_order_relaxed))};
 
     try {
@@ -375,14 +375,13 @@ void LocalStore::optimiseStore(OptimiseStats & stats)
     ThreadPool pool;
 
     for (auto & i : paths) {
-        addTempRoot(i);
         if (!isValidPath(i))
             continue; /* path was GC'ed, probably */
         pool.enqueue([&, i] {
             OptimiseStats pathStats;
             {
                 Activity act(*logger, lvlTalkative, actUnknown, fmt("optimising path '%s'", printStorePath(i)));
-                optimisePath_(&act, pathStats, config->realStoreDir.get() / i.to_string(), inodeHash, NoRepair);
+                optimisePath_(&act, pathStats, config->realStoreDir / i.to_string(), inodeHash, NoRepair);
             }
             {
                 std::lock_guard<std::mutex> lock(statsMutex);
@@ -394,15 +393,6 @@ void LocalStore::optimiseStore(OptimiseStats & stats)
     }
 
     pool.process();
-}
-
-void LocalStore::optimiseStore()
-{
-    OptimiseStats stats;
-
-    optimiseStore(stats);
-
-    printInfo("%s freed by hard-linking %d files", renderSize(stats.bytesFreed), stats.filesLinked);
 }
 
 void LocalStore::optimisePath(const std::filesystem::path & path, RepairFlag repair)
@@ -418,12 +408,11 @@ void LocalStore::optimisePath(const StorePath & path, OptimiseStats & stats, con
 {
     std::lock_guard<std::mutex> runLock(optimiseStoreLock);
 
-    addTempRoot(path);
     if (!isValidPath(path))
         return; /* path was GC'ed, probably */
 
     InodeHash inodeHash = loadInodeHash();
-    std::filesystem::path realPath = config->realStoreDir.get() / path.to_string();
+    std::filesystem::path realPath = config->realStoreDir / path.to_string();
     optimisePath_(nullptr, stats, realPath, inodeHash, NoRepair, nullptr, fileHashes, realPath.native().size());
 }
 

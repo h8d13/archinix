@@ -19,6 +19,10 @@
 #        installed entry: the single-disk persistent-state flow
 #        -u creates a login user before the commit, the only point where
 #        the account and its home end up in the same generation
+# the store is 0700 root:root and the work below mounts, imports or
+# writes it: bail here rather than at whichever privileged call
+# happens to fail first, which reads as a missing file
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 . /usr/local/lib/nixgen-fs
 
 DEV= NAME= FS=ext4 DATA= NEWUSER=

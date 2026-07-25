@@ -8,6 +8,10 @@
 # (the pacman live-update mismatch cannot happen). Reboot to switch,
 # older entry = rollback.
 # usage: nixgen-update <name> [cmd]   (cmd default: pacman -Syu --noconfirm)
+# the store is 0700 root:root and the work below mounts, imports or
+# writes it: bail here rather than at whichever privileged call
+# happens to fail first, which reads as a missing file
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 NAME=$1
 [ -n "$NAME" ] || { echo "usage: $0 <name> [cmd]" >&2; exit 1; }
 shift

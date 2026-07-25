@@ -6,7 +6,6 @@ create table if not exists ValidPaths (
     deriver          text,
     narSize          integer,
     ultimate         integer, -- null implies "false"
-    sigs             text, -- space-separated
     ca               text -- if not null, an assertion that the path is content-addressed; see ValidPathInfo
 );
 
@@ -29,13 +28,3 @@ create trigger if not exists DeleteSelfRefs before delete on ValidPaths
   begin
     delete from Refs where referrer = old.id and reference = old.id;
   end;
-
-create table if not exists DerivationOutputs (
-    drv  integer not null,
-    id   text not null, -- symbolic output id, usually "out"
-    path text not null,
-    primary key (drv, id),
-    foreign key (drv) references ValidPaths(id) on delete cascade
-);
-
-create index if not exists IndexDerivationOutputs on DerivationOutputs(path);

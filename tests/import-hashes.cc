@@ -63,7 +63,7 @@ int main(int argc, char ** argv)
 		return 1;
 	}
 
-	initLibStore(false);
+	initLibStore();
 	verbosity = lvlError;
 
 	auto store = openStore(fs::absolute(argv[1]));

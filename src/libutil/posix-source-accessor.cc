@@ -583,12 +583,6 @@ try {
 
 } // namespace
 
-ref<SourceAccessor> getFSSourceAccessor()
-{
-    static auto rootFS = makeFSSourceAccessor("/", /*trackLastModified=*/false);
-    return rootFS;
-}
-
 ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root, bool trackLastModified, FinalSymlink finalSymlink)
 {
     assert(root.is_absolute());

@@ -3,4 +3,3 @@
 #include "nix/store/local-store.hh"
 #include "nix/util/util.hh"
 
-#include <nlohmann/json.hpp>

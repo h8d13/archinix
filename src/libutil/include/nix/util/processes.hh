@@ -50,10 +50,6 @@ public:
     int kill(bool allowInterrupts = true);
     int wait(bool allowInterrupts = true);
 
-    // TODO: Implement for Windows
-    void setSeparatePG(bool separatePG);
-    void setKillSignal(int signal);
-    void setKillTimeout(std::chrono::milliseconds duration);
     pid_t release();
 
     friend void swap(Pid & lhs, Pid & rhs) noexcept
@@ -65,11 +61,6 @@ public:
     }
 };
 
-/**
- * Kill all processes running under the specified uid by sending them
- * a SIGKILL.
- */
-void killUser(uid_t uid);
 
 /**
  * Fork a process that runs the given function, and return the child
@@ -87,58 +78,5 @@ struct ProcessOptions
     int cloneFlags = 0;
 };
 
-pid_t startProcess(fun<void()> processMain, const ProcessOptions & options = ProcessOptions());
-
-/**
- * Run a program and return its stdout in a string (i.e., like the
- * shell backtick operator).
- */
-std::string runProgram(
-    std::filesystem::path program,
-    bool lookupPath = false,
-    const OsStrings & args = OsStrings(),
-    bool isInteractive = false);
-
-struct RunOptions
-{
-    std::filesystem::path program;
-    bool lookupPath = true;
-    OsStrings args;
-    std::optional<uid_t> uid;
-    std::optional<uid_t> gid;
-    std::optional<std::filesystem::path> chdir;
-    std::optional<OsStringMap> environment;
-    Sink * standardOut = nullptr;
-    bool mergeStderrToStdout = false;
-    bool isInteractive = false;
-};
-
-// Output = error code + "standard out" output stream
-std::pair<int, std::string> runProgram(RunOptions && options);
-
-void runProgram2(const RunOptions & options);
-
-class ExecError final : public CloneableError<ExecError, Error>
-{
-    void anchor() override;
-
-public:
-    int status;
-
-    template<typename... Args>
-    ExecError(int status, const Args &... args)
-        : CloneableError(args...)
-        , status(status)
-    {
-    }
-};
-
-/**
- * Convert the exit status of a child as returned by wait() into an
- * error string.
- */
-std::string statusToString(int status);
-
-bool statusOk(int status);
 
 } // namespace nix

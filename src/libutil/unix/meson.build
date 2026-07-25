@@ -55,17 +55,13 @@ config_unix_priv_h = configure_file(
 sources += config_unix_priv_h
 
 sources += files(
-  'current-process.cc',
   'environment-variables.cc',
   'file-descriptor.cc',
-  'file-path.cc',
   'file-system-at.cc',
   'file-system.cc',
-  'muxable-pipe.cc',
   'processes.cc',
   'signals.cc',
   'users.cc',
-  'xdg-dirs.cc',
 )
 
 subdir('include/nix/util')

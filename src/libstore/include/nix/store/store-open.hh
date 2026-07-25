@@ -14,9 +14,12 @@ namespace nix {
 /**
  * Open the local store rooted at `root`: the store lives at
  * <root>/nix/store with state under <root>/nix/var. `root` must be
- * absolute. Extra config settings go in `params` (same keys the old
- * `local?root=...&k=v` URI accepted).
+ * absolute.
+ *
+ * A path and nothing else. There is deliberately no settings channel:
+ * arch/ is the operator surface, and store knobs are plain defaults in
+ * `LocalSettings` that you change by editing and recompiling.
  */
-ref<Store> openStore(const std::filesystem::path & root, Store::Config::Params params = {});
+ref<Store> openStore(const std::filesystem::path & root);
 
 } // namespace nix

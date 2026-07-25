@@ -4,8 +4,6 @@
 #include <string_view>
 
 #include "nix/util/types.hh"
-#include "nix/util/json-impls.hh"
-#include "nix/util/json-non-null.hh"
 
 namespace nix {
 
@@ -55,16 +53,6 @@ public:
     bool operator==(const StorePath & other) const noexcept = default;
     auto operator<=>(const StorePath & other) const noexcept = default;
 
-    /**
-     * Check whether a file name ends with the extension for derivations.
-     */
-    bool isDerivation() const noexcept;
-
-    /**
-     * Throw an exception if `isDerivation` is false.
-     */
-    void requireDerivation() const;
-
     std::string_view name() const
     {
         return std::string_view(baseName).substr(HashLen + 1);
@@ -81,16 +69,6 @@ public:
 
 typedef std::set<StorePath> StorePathSet;
 typedef std::vector<StorePath> StorePaths;
-
-/**
- * The file extension of \ref nix::Derivation derivations when serialized
- * into store objects.
- */
-constexpr std::string_view drvExtension = ".drv";
-
-template<>
-struct json_avoids_null<StorePath> : std::true_type
-{};
 
 } // namespace nix
 
@@ -115,5 +93,3 @@ inline std::size_t hash_value(const StorePath & path)
 }
 
 } // namespace nix
-
-JSON_IMPL(nix::StorePath)

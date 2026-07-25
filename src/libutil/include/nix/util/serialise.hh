@@ -131,8 +131,6 @@ public:
      */
     virtual void drainInto(Sink & sink, uint64_t len);
 
-    std::string drain();
-
     virtual void skip(size_t len);
 };
 
@@ -157,13 +155,6 @@ public:
     }
 
     size_t read(char * data, size_t len) override;
-
-    std::string readLine(bool eofOk = false, char terminator = '\n');
-
-    /**
-     * Return true if the buffer is not empty.
-     */
-    bool hasData();
 
 protected:
     /**
@@ -261,12 +252,6 @@ public:
 
     bool good() override;
     void restart() override;
-
-    /**
-     * Return true if the buffer is not empty after a non-blocking
-     * read.
-     */
-    bool hasData();
 
     void skip(size_t len) override;
 
@@ -643,8 +628,6 @@ Source & operator>>(Source & in, bool & b)
     b = readNum<uint64_t>(in);
     return in;
 }
-
-Error readError(Source & source);
 
 /**
  * A source that reads a distinct format of concatenated chunks back into its

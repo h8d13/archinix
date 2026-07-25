@@ -57,7 +57,6 @@ boost = dependency(
   'boost',
   modules : [
     'context',
-    'iostreams',
   ],
   include_type : 'system',
   version : '>=1.87.0',
@@ -73,8 +72,6 @@ openssl = dependency(
 )
 deps_private += openssl
 
-nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
-deps_public += nlohmann_json
 
 cxx = meson.get_compiler('cpp')
 
@@ -90,44 +87,29 @@ sources = [ config_priv_h ] + files(
   'base-n.cc',
   'base-nix-32.cc',
   'canon-path.cc',
-  'config-global.cc',
-  'configuration.cc',
-  'current-process.cc',
   'environment-variables.cc',
   'error.cc',
-  'executable-path.cc',
-  'exit.cc',
   'file-content-address.cc',
   'file-descriptor.cc',
   'file-system.cc',
   'fs-sink.cc',
   'hash.cc',
-  'json-utils.cc',
   'logging.cc',
   'memory-source-accessor.cc',
   'posix-source-accessor.cc',
   'processes.cc',
   'progress.cc',
   'serialise.cc',
-  'signature.cc',
   'source-accessor.cc',
   'source-path.cc',
   'strings.cc',
-  'tee-logger.cc',
   'terminal.cc',
   'thread-pool.cc',
-  'unix-domain-socket.cc',
   'url.cc',
-  'users.cc',
   'util.cc',
 )
 
 subdir('include/nix/util')
-
-if not cxx.has_header('widechar_width.h', required : false)
-  # use vendored widechar_width.h
-  include_dirs += include_directories('./widecharwidth')
-endif
 
 subdir('linux')
 subdir('unix')

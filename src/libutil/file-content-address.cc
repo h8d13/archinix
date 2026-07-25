@@ -15,15 +15,6 @@ static std::optional<FileSerialisationMethod> parseFileSerialisationMethodOpt(st
     }
 }
 
-FileSerialisationMethod parseFileSerialisationMethod(std::string_view input)
-{
-    auto ret = parseFileSerialisationMethodOpt(input);
-    if (ret)
-        return *ret;
-    else
-        throw UsageError("Unknown file serialiation method '%s', expect `flat` or `nar`", input);
-}
-
 FileIngestionMethod parseFileIngestionMethod(std::string_view input)
 {
     auto ret = parseFileSerialisationMethodOpt(input);

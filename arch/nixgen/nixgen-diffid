@@ -8,6 +8,10 @@
 # etc/nixgen/perms; package delta is the /var/lib/pacman/local lines
 # (or pacman --dbpath <gen>/var/lib/pacman -Q on either tree).
 # usage: nixgen-diffid <name|id> <name|id> [subpath]
+# the store is 0700 root:root: bail here rather than deep in a read
+# that surfaces as "generation not found" when the real problem is
+# that the store was never readable
+[ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 [ -n "$2" ] || {
 	echo "usage: $0 <name|id> <name|id> [subpath]" >&2
 	exit 1
@@ -23,6 +27,16 @@ resolve() {
 			echo "$S/$1"
 			return 0
 		fi
+		# store disk: ask the db rather than globbing (see
+		# nixgen-switch for why)
+		if [ "$S" = /nixstoredev/nix/store ]; then
+			if b=$(store-resolve /nixstoredev "$1"); then
+				echo "$S/$b"
+				return 0
+			fi
+			continue
+		fi
+		# ISO store: squashfs with no db beside it
 		n=0 hit=
 		for m in "$S"/*-"$1"; do
 			[ -d "$m" ] || continue
