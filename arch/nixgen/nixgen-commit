@@ -54,4 +54,4 @@ NEW=$(/usr/local/bin/import-dir \
 GEN=$(basename "$NEW")
 
 /usr/local/lib/nixgen-entry "$TARGET" "$GEN" committed
-echo "committed: $GEN (GRUB entry added, visible next boot)"
+echo "committed: $GEN"

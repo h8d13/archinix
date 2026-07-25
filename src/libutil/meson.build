@@ -107,6 +107,7 @@ sources = [ config_priv_h ] + files(
   'memory-source-accessor.cc',
   'posix-source-accessor.cc',
   'processes.cc',
+  'progress.cc',
   'serialise.cc',
   'signature.cc',
   'source-accessor.cc',

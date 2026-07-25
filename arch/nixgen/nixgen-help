@@ -46,7 +46,9 @@ COMMANDS
 
        nixgen-listid
               Generations visible to the box: short hash id, source
-              (disk/iso), running marker. Ids are accepted by -switch,
+              (disk/iso), added-at (dd/mm/yyyy hh:mm local, from the
+              store db; iso rows show "-", a squashfs store carries no
+              db), running marker. Ids are accepted by -switch,
               -remove and -diffid as unique hash prefixes: reference a
               generation by id when names collide.
 
@@ -82,6 +84,7 @@ COMMANDS
               running cmdline. --fs as in nixgen-setup (ext4 default).
 
        nixgen-setup <device> [name] [--fs <type>] [--data <size>]
+                    [-u <user>]
               Install onto a disk from inside the box: GPT (ESP +
               NIXSTORE), standalone GRUB, fresh store seeded with a
               commit of the running root. --fs picks the store filesystem (ext4 default,
@@ -89,7 +92,13 @@ COMMANDS
               them. --data carves a NIXDATA partition of <size> on the
               same disk (same fs), seeds it and stamps nixdata=NIXDATA
               into the installed entry: single-disk persistent state
-              without a separate nixgen-data run. GRUB has to read the store to load a generation's
+              without a separate nixgen-data run. -u useradd -m's a
+              user before the commit, so the account lands in the
+              generation. Do it here: /etc rides the generation while
+              /home rides the data partition, so a useradd on the
+              installed box lives in the RAM upper, is gone at reboot,
+              and strands the home for the next uid to inherit. Its
+              password is a write like root's: set it, commit it. GRUB has to read the store to load a generation's
               kernel, which is what limits the choice. Deps (grub,
               dosfstools, the filesystem's own progs) install on demand
               into the ephemeral upper: needs network, gone at reboot.

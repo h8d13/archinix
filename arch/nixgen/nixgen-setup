@@ -10,21 +10,27 @@
 # the installer medium is itself a NIXSTORE disk (flashed stick),
 # unplug it before first boot.
 # usage: nixgen-setup <device> [name] [--fs <type>] [--data <size>]
+#                     [-u <user>]
 #        name default nixarch-install, fs default ext4 (nixgen-fs holds
 #        the filesystem table; GRUB has to be able to read the store, so
 #        the choice is between the journalling/CoW ones, not FAT).
 #        --data carves a NIXDATA partition of <size> (same fs), seeds
 #        it from the running root and stamps nixdata=NIXDATA into the
 #        installed entry: the single-disk persistent-state flow
+#        -u creates a login user before the commit, the only point where
+#        the account and its home end up in the same generation
 . /usr/local/lib/nixgen-fs
 
-DEV= NAME= FS=ext4 DATA=
+DEV= NAME= FS=ext4 DATA= NEWUSER=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--fs) FS=$2; shift 2 ;;
 	--fs=*) FS=${1#--fs=}; shift ;;
 	--data) DATA=$2; shift 2 ;;
 	--data=*) DATA=${1#--data=}; shift ;;
+	-u|--user) NEWUSER=$2; shift 2 ;;
+	-u=*) NEWUSER=${1#-u=}; shift ;;
+	--user=*) NEWUSER=${1#--user=}; shift ;;
 	-*) echo "unknown option: $1" >&2; exit 1 ;;
 	*)
 		if [ -z "$DEV" ]; then DEV=$1; else NAME=$1; fi
@@ -39,7 +45,8 @@ is_supported_fs "$FS" || exit 1
 [ -b "$DEV" ] || {
 	# the list comes from the table, so a filesystem added there shows
 	# up here without touching this script
-	echo "usage: $0 <device> [name] [--fs <type>] [--data <size>]" >&2
+	echo "usage: $0 <device> [name] [--fs <type>]" \
+		"[--data <size>] [-u <user>]" >&2
 	echo "  <type>: $(echo "$NIXGEN_FS_ALL" | tr ' ' '|') (default ext4)" >&2
 	for f in $NIXGEN_FS_ALL; do
 		printf '  %-6s mkfs from %s\n' "$f" "$(fs_pkg "$f")" >&2
@@ -65,6 +72,17 @@ lsblk -dn -o NAME,SIZE,MODEL,TRAN "$DEV"
 printf 'everything on %s will be lost. type the device path to continue: ' "$DEV"
 read -r reply
 [ "$reply" = "$DEV" ] || { echo "aborted"; exit 1; }
+
+# Minted here rather than on the installed box, and before anything is
+# written to the disk (a taken name aborts with the target intact):
+# /etc rides in the generation while /home can ride the data partition,
+# so a useradd after the install lands in the RAM upper, is gone at the
+# next reboot, and strands the home directory for the next uid to
+# inherit. The password is a write like any other: set it and
+# nixgen-commit, same rule as root's (nixgen-getty).
+if [ -n "$NEWUSER" ]; then
+	useradd -m "$NEWUSER"
+fi
 
 # install is rare: its deps stay out of the generations and land in
 # the ephemeral upper on demand (gone at reboot unless committed).
@@ -148,4 +166,5 @@ if [ -n "$DATA" ]; then
 fi
 umount "$T/store"
 
+[ -z "$NEWUSER" ] || echo "user: $NEWUSER (committed with the generation)"
 echo "installed: $NAME on $DEV (unplug the installer medium, reboot)"

@@ -18,4 +18,4 @@ DIR=$TARGET/nix/store/$GEN
 # nixgen-entry refuses duplicates and roots the path: an adopted
 # (import-path'd) generation may predate its root
 /usr/local/lib/nixgen-entry "$TARGET" "$GEN" adopted
-echo "adopted: $GEN (GRUB entry added, visible next boot)"
+echo "adopted: $GEN"

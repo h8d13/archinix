@@ -6,6 +6,7 @@
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/progress.hh"
 
 #include <atomic>
 #include <cstdlib>
@@ -140,6 +141,22 @@ void LocalStore::optimisePath_(
 #endif
     )
         return;
+
+    /* Everything past the gate above is a node this pass considers,
+       symlinks included: they are most of a store tree and most of
+       what gets linked, so counting only regular files would track a
+       fraction of the work. Files the import already hard-linked
+       never arrive (readDirectoryIgnoringInodes drops them by inode),
+       which is what makes this pass cheap after a mostly-unchanged
+       import, so the total nets those out. */
+    uint64_t total = 0;
+    if (fileHashes) {
+        total = fileHashes->files.size() - fileHashes->dedupedFiles;
+#if CAN_LINK_SYMLINK
+        total += fileHashes->symlinks;
+#endif
+    }
+    progressTick("optimising", ++stats.filesVisited, total);
 
     /* Sometimes SNAFUs can cause files in the Nix store to be
        modified, in particular when running programs as root under

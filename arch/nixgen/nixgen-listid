@@ -5,6 +5,7 @@
 # on a disk boot /nixstore aliases the disk store, listed once.
 # Short id = first 8 hash chars, for eyeballing; nixgen-remove/-switch
 # take the plain name (when unique) or the full basename.
+# Added-at is dd/mm/yyyy hh:mm local time.
 # usage: nixgen-listid
 
 # after a nixgen-switch the cmdline names the boot-time generation; the
@@ -15,7 +16,35 @@ else
 	RUNNING=$(sed -n 's/.*nixgen=\([^ ]*\).*/\1/p' /proc/cmdline)
 fi
 
+# the store db's registrationTime is the only real "added at": the
+# import canonicalises every store path's mtime to 1, and ctime tracks
+# later link-farm churn (optimise) rather than the commit. Queried once
+# per store, not once per generation. A squashfs store has no db beside
+# it (mkiso squashes the store dir alone), so iso rows have no time
+regtimes() {
+	db=${1%/store}/var/nix/db/db.sqlite
+	[ -r "$db" ]
+	# -readonly: the store disk is mounted rw, and listing must never
+	# contend for the write lock an import may be holding
+	sqlite3 -readonly -noheader -list -separator '	' "$db" \
+		'select path, registrationTime from ValidPaths'
+}
+
+added() {
+	t=$(printf '%s\n' "$TIMES" | awk -F'	' -v p="/nix/store/$1" \
+		'$1 == p { print $2; exit }')
+	if [ -n "$t" ]; then
+		date -d "@$t" '+%d/%m/%Y %H:%M'
+	else
+		echo '-'
+	fi
+}
+
 list() {
+	TIMES=$(regtimes "$1")
+	# sort on the name before formatting: the added-at column holds a
+	# space, so a post-format sort key would land on a different field
+	# for dated and undated rows
 	for p in "$1"/*; do
 		[ -d "$p" ] || continue
 		g=${p##*/}
@@ -24,8 +53,11 @@ list() {
 		if [ "$g" = "$RUNNING" ]; then
 			mark=" (running)"
 		fi
-		printf '%.8s  %-4s  %s%s\n' "$g" "$2" "${g#*-}" "$mark"
-	done | sort -k3
+		printf '%s\t%s\t%s\n' "${g#*-}" "$g" "$mark"
+	done | sort | while IFS='	' read -r name g mark; do
+		printf '%.8s  %-4s  %-16s  %s%s\n' \
+			"$g" "$2" "$(added "$g")" "$name" "$mark"
+	done
 }
 
 DISK=/nixstoredev/nix/store

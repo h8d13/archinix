@@ -38,10 +38,13 @@ generation offline, rollback is booting an older GRUB entry.
 
 `nixgen-setup /dev/disk --fs xfs` installs current running generation to a hard disk.
 
+> Optional: pass `--data 100G` for a separate `/home` persistent part. And `--user myuser` to create a user's home directly.
+
 > [!IMPORTANT]
 > The ISO is read-only, and so is a running system: writes land in a
 > `tmpfs` overlay upper (capped at 75% of RAM, allocated only as
 > written) and vanish on reboot unless you `nixgen-commit mychange`.
+
 
 Then, in the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
 

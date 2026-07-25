@@ -30,6 +30,13 @@ struct OptimiseStats
 {
     unsigned long filesLinked = 0;
     uint64_t bytesFreed = 0;
+    /**
+     * Link candidates walked (files and, where linkable, symlinks),
+     * linked or not. Only the progress counter reads it: a node can
+     * be skipped here for several reasons, and counting just the
+     * links would stall at a fraction of the walk.
+     */
+    uint64_t filesVisited = 0;
 };
 
 struct LocalSettings;
@@ -289,6 +296,15 @@ public:
          */
         uint64_t dedupedFiles = 0;
         uint64_t dedupedBytes = 0;
+
+        /**
+         * Symlinks restored. They carry no content to hash, so they
+         * are absent from `files`, but optimisePath() hard-links them
+         * like any other node where the platform allows it (and a
+         * store tree is symlink-heavy), so a progress total built
+         * from `files` alone would miss most of that pass.
+         */
+        uint64_t symlinks = 0;
     };
 
     StorePath addToStoreFromDump(

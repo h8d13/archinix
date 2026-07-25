@@ -25,6 +25,7 @@
 #include <nix/store/store-open.hh>
 #include <nix/util/archive.hh>
 #include <nix/util/config-global.hh>
+#include <nix/util/progress.hh>
 #include <nix/util/serialise.hh>
 #include <nix/util/source-accessor.hh>
 
@@ -85,6 +86,7 @@ try {
 	}
 	auto path = *imported;
 	auto t1 = std::chrono::steady_clock::now();
+	progressEnd();
 	fprintf(stderr, "imported: %s (%.1f s)\n", store->printStorePath(path).c_str(),
 		std::chrono::duration<double>(t1 - t0).count());
 
@@ -107,6 +109,7 @@ try {
 	auto t2 = std::chrono::steady_clock::now();
 	local->optimisePath(path, stats, &fileHashes);
 	auto t3 = std::chrono::steady_clock::now();
+	progressEnd();
 	fprintf(stderr, "optimise: linked %lu files, freed %.1f MiB (%.1f s)\n",
 		stats.filesLinked, stats.bytesFreed / (1024.0 * 1024.0),
 		std::chrono::duration<double>(t3 - t2).count());

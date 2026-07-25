@@ -163,4 +163,4 @@ NEWGEN=$(basename "$NEW")
 # new entry boots the new generation's own kernel+initramfs (a kernel
 # upgrade regenerates them in the overlay via the mkinitcpio ALPM hook)
 /usr/local/lib/nixgen-entry /nixstoredev "$NEWGEN" committed
-echo "updated: $NEWGEN (GRUB entry added, reboot to switch)"
+echo "updated: $NEWGEN"

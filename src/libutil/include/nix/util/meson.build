@@ -55,6 +55,7 @@ headers = [ config_pub_h ] + files(
   'pool.hh',
   'pos-idx.hh',
   'processes.hh',
+  'progress.hh',
   'ref.hh',
   'regex-combinators.hh',
   'repair-flag.hh',

@@ -11,6 +11,7 @@
 #include "nix/util/source-accessor.hh"
 #include "nix/util/fs-sink.hh"
 #include "nix/util/users.hh"
+#include "nix/util/progress.hh"
 #include "nix/store/store-open.hh"
 #include "nix/util/url.hh"
 
@@ -1132,6 +1133,9 @@ class AsyncFileHasher
         tryDedup(h);
         out.files.insert_or_assign(std::move(key), h);
         hash.reset();
+        /* the NAR is a stream with no length known up front, so this
+           is a bare count; the caller's summary has the totals */
+        progressTick("importing", out.files.size());
     }
 
     /* The file just restored is complete and NAR restores are
@@ -1231,6 +1235,15 @@ public:
     {
         if (threaded)
             worker = std::thread([this] { run(); });
+    }
+
+    /* Symlinks carry no content, so they never enter the event queue,
+       but optimisePath() links them and its progress total counts
+       them. Called from the restore thread, which is the only writer
+       of this member. */
+    void countSymlink()
+    {
+        out.symlinks++;
     }
 
     void fileBegin(std::string k)
@@ -1336,6 +1349,7 @@ struct FileHashingSink : FileSystemObjectSink
 
     void createSymlink(const CanonPath & path, const std::string & target) override
     {
+        hasher.countSymlink();
         inner.createSymlink(path, target);
     }
 
