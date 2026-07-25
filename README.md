@@ -47,12 +47,11 @@ And `--user myuser` to create a user's home directly.
 > The ISO is read-only, and so is a running system: writes land in a
 > `tmpfs` overlay upper (capped at 75% of RAM, allocated only as
 > written) and vanish on reboot unless you `nixgen-commit mychange`.
-> You can also setup swap on [zram](https://wiki.archlinux.org/title/Zram#Using_zram-generator) for this purpose.
 
 On a box with limited RAM; for large downloads you'll need to use:
 
 `nixgen-update kde "pacman -S plasma"` if no cmd is provided `pacman -Syu --noconfirm` is the default.
-This builds it with the overlay upper on the store disk. 
+This builds it with the overlay upper on the store disk. You can also setup swap on [zram](https://wiki.archlinux.org/title/Zram#Using_zram-generator) for this purpose.
 
 Then, in the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
 
