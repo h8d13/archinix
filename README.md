@@ -45,20 +45,13 @@ generation offline, rollback is booting an older GRUB entry.
 > `tmpfs` overlay upper (capped at 75% of RAM, allocated only as
 > written) and vanish on reboot unless you `nixgen-commit mychange`.
 
+On a box with limited RAM; for large downloads you'll need to use:
+
+`nixgen-update kde "pacman -S plasma"` if no cmd is provided `pacman -Syu --noconfirm` is the default.
+This builds it with the overlay upper on the store disk
 
 Then, in the box: `nixgen-{commit,update,switch,remove,listid,diffid,setup}`;
 
 `nixgen-help` is the full [reference](https://github.com/h8d13/archinix/blob/main/arch/nixgen/nixgen-help).
-
-### From source:
-
-```
-./build.sh                                       # store libs into build/prefix
-arch/bootstrap.sh build/archstore                # base generation (prints <base>)
-arch/iso/mkiso.sh build/archstore <base>         # bootable ISO
-arch/uefi-vm.sh                                  # QEMU (UEFI): ISO + one blank disk
-#   in the box: nixgen-setup /dev/vda my-install [--fs btrfs]
-arch/uefi-vm.sh boot                             # boot what you installed
-```
 
 Examples of post scripts: https://github.com/h8d13/nixarch.cfg

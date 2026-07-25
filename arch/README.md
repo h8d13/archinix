@@ -123,3 +123,16 @@ thing, and `arch/uefi-vm.sh boot` starts the result alone afterwards.
 The store disk is never attached on that path: an installed target has
 its own NIXSTORE partition, and two of them makes GRUB's label search
 ambiguous.
+
+### From source:
+
+From the repo root.
+
+```shell
+./build.sh                                       # store libs into build/prefix
+arch/bootstrap.sh build/archstore                # base generation (prints <base>)
+arch/iso/mkiso.sh build/archstore <base>         # bootable ISO
+arch/uefi-vm.sh                                  # QEMU (UEFI): ISO + one blank disk
+#   in the box: nixgen-setup /dev/vda my-install [--fs btrfs]
+arch/uefi-vm.sh boot                             # boot what you installed
+```
