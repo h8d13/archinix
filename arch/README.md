@@ -85,12 +85,25 @@ opt-in: no flag or no disk means volatile as before, per entry.
 `/var/lib/pacman` stays committed on purpose: the package db describes
 the static tree.
 
+### Motivations
+
 Scope note: this is the nix *store* layer (interference-free, deduped,
 GC-rooted, atomic rollback), not the nix *language* layer. Generations
 are content-addressed snapshots, not reproducible builds from
 derivations. **It is not meant to be used with `nix` pkg-manager or env.**
+
 The idea is that simplicity in arch packaging and philosophy already ship;
 a minimalist enough base, if you follow a little the stuff you use...
+
+An arch package in it's original shape is a derivation of a [Pkgfile](https://crux.nu/doc/handbook.html#Pkgfile)
+Some 20+ years later this system is still what allows people to patch, port, create.
+Similar to [APKBUILD](https://wiki.alpinelinux.org/wiki/APKBUILD_Reference). With generated meta-data files.
+In essence, just the package definition is a shell script you can read, **not a manifest in a DSL.**
+What was missing from this flow is reproducibility; or an `undo` button in this case.
+Failed states are essentially free to throw away. That doesn't guarantee forward churn...
+The forward state is not guaranteed, immutable is in my opinion even more valuable on rolling for this exact reason.
+
+### Login
 
 Autologin only while root is passwordless (stock state,
 what the headless tests ride on). `passwd root` restores login prompts,
