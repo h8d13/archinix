@@ -26,8 +26,7 @@ install to `include/nix/{util,store}/`; upstream's
 [internal API docs](https://hydra.nixos.org/job/nix/master/internal-api-docs/latest/download-by-type/doc/internal-api-docs)
 still describe the parts kept verbatim.
 
-[`Dockerfile`](Dockerfile) builds the libs alone on stock Debian, for
-poking at the store layer without Arch or a VM.
+[`Dockerfile`](Dockerfile) builds the libs alone on stock Debian.
 
 ---
 
