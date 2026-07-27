@@ -10,13 +10,12 @@ network:
 
 ## What is left
 
-Cut: derivations and the build machinery, substituters and binary
-caches, remote stores (s3/http/ssh), the daemon protocol, signing, the
-Nix language. One store type remains, the local one.
+One store type remains, the local one.
 
 So this store never *produces* a path. It ingests a directory tree you
 built elsewhere and gives it a content-addressed name, a sqlite
 registration, GC roots and file-level sharing with every other path.
+
 It mounts nothing: an object store for trees, plus a garbage collector.
 
 ## On-disk layout
@@ -34,15 +33,19 @@ Everything derives from one absolute root path:
 
 Hash is base-32 (160 bits) over the SHA-256 of the path's NAR
 serialisation; `StorePath::HashLen == 32`, whole basename capped at 211
-chars. Schema is 30 lines, in [`libstore/schema.sql`](libstore/schema.sql):
+chars.
+
+Schema is 30 lines, in [`libstore/schema.sql`](libstore/schema.sql):
 `ValidPaths(path, hash, registrationTime, narSize, ca, ...)` and
 `Refs(referrer, reference)`.
 
 Two consequences before you write against this:
 
-- **A directory listing is not the store.** It also shows `.links` and
-  half-written `tmp-*` imports, and can show a path that was never
-  registered. Query the db.
+- **A directory listing is not the store.** `.links` sits in it
+  permanently, and nothing stops two valid paths ending in the same
+  `-name`, so a glob is ambiguous by design. (`tmp-*` staging dirs are
+  also visible, but only while an import runs or after one was killed;
+  the next GC sweep takes them.) The db says what is valid.
 - **mtimes are canonicalised to 1** on import, so "newest" is
   meaningless on disk. `registrationTime` from the db is the only
   "added at" a store path has.
@@ -63,9 +66,10 @@ g++ -std=c++23 -O2 mytool.cc -o mytool \
 ```
 
 With the default prefix, add `PKG_CONFIG_PATH=$PWD/build/prefix/lib/pkgconfig`
-to compile and `LD_LIBRARY_PATH=$PWD/build/prefix/lib` to run. The
-[`Dockerfile`](../Dockerfile) is the same build on Debian, headers and
-libs installed, nothing else.
+to compile and `LD_LIBRARY_PATH=$PWD/build/prefix/lib` to run.
+
+The [`Dockerfile`](../Dockerfile) is the same build on Debian, headers and
+libs installed, as illustrative example to build anywhere.
 
 ## API, in call order
 
@@ -88,7 +92,9 @@ as plain defaults you edit and recompile (`fsyncMetadata`,
 
 Opening **creates the whole skeleton** if missing, so a typo or an
 unattached mountpoint would otherwise read as an empty store and
-succeed. Readers pass `mustExist = true`; writers leave it false so a
+succeed.
+
+Readers pass `mustExist = true`; writers leave it false so a
 blank disk gets its store on first import.
 
 Downcast for the concrete surfaces:
@@ -116,8 +122,9 @@ void addToStore(const ValidPathInfo & info, Source & narSource,
 Produce the NAR with `SourcePath{...}.dumpPath(sink)`
 (`util/source-accessor.hh`). Sockets and fifos are skipped by the dumper
 itself: NAR cannot represent them, so live trees import without a
-destructive pre-clean. Import strips ACLs, canonicalises mtimes to 1,
-makes the result read-only.
+destructive pre-clean.
+
+Import strips ACLs, canonicalises mtimes to 1, makes the result read-only.
 
 `ImportFileHashes` is an out-param: per-file hashes captured while the
 NAR streams, handed to `optimisePath` so dedup does not re-read what was
@@ -161,7 +168,9 @@ void optimiseStore(OptimiseStats &);
 
 Hash each regular file, hardlink it to `.links/<hash>` when the content
 is already there. `OptimiseStats` reports `filesLinked` and
-`bytesFreed`. Optimise the fresh path only: older ones are already
+`bytesFreed`.
+
+Optimise the fresh path only: older ones are already
 linked, which is what makes the next near-identical tree cost its diff.
 
 ### Delete
@@ -198,8 +207,9 @@ unsigned, so the receiving side has to re-read the stream itself,
 recompute the path with `makeFixedOutputPathFromCA`
 (`store-dir-config.hh`) and reject anything that does not hash back to
 the name it claims; upstream's `importPaths` accepted framing-valid
-corruption under the claimed name. The loop is ~50 lines over
-`parseDump` + `addToStore`.
+corruption under the claimed name.
+
+The loop is ~50 lines over `parseDump` + `addToStore`.
 
 ### Verify
 
@@ -210,7 +220,9 @@ bool verifyStore(bool checkContents, RepairFlag repair);   // true == problems
 Default level checks registrations are consistent (db paths exist,
 referrers resolve). `checkContents` re-hashes every store path and every
 `.links` entry against the recorded NAR hash: slow, and the one that
-catches bitrot. Detect only, never heal: repair belonged to the
+catches bitrot.
+
+Detect only, never heal: repair belonged to the
 substituter machinery this extraction dropped, and a verify that
 silently dropped registrations would destroy the record you ran it to
 find.
