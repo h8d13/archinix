@@ -20,9 +20,14 @@ pacman -S --needed meson ninja gcc pkgconf boost boost-libs openssl \
 	libblake3 sqlite
 ```
 
-API reference:
+API reference: [`src/README.md`](src/) covers the store layer as it
+stands here (layout, calls in order, a working consumer). Headers
+install to `include/nix/{util,store}/`; upstream's
+[internal API docs](https://hydra.nixos.org/job/nix/master/internal-api-docs/latest/download-by-type/doc/internal-api-docs)
+still describe the parts kept verbatim.
 
-C++ headers install to `include/nix/{util,store}/` ([internal API docs](https://hydra.nixos.org/job/nix/master/internal-api-docs/latest/download-by-type/doc/internal-api-docs)).
+[`Dockerfile`](Dockerfile) builds the libs alone on stock Debian, for
+poking at the store layer without Arch or a VM.
 
 ---
 

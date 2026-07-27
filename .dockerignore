@@ -1,0 +1,5 @@
+build/
+.git/
+.codegraph/
+*.log
+__pycache__
