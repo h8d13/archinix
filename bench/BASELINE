@@ -2,8 +2,19 @@
 # (rerun the exact commands below, replace numbers, note the machine).
 # Regressions are judged against this file, not against memory.
 
-machine: i5-14600KF (20 threads), ext4, linux 7.1.4-arch1-1
-date: 2026-07-21
+machine: i5-14600KF (20 threads), ext4, linux 7.1.5-arch1-1
+date: 2026-07-27
+
+"interleaved" below = alternate two built prefixes run by run through
+one bench binary (LD_LIBRARY_PATH picks the library, as bench-ab.cc
+does), min of 8 pairs. Use it for anything under ~15%: noise bursts
+here land on whole runs, and measuring A then B charges the burst to
+whichever side it hit. A plain 5-run median called one change
+anywhere from 3% to 25%.
+
+Host numbers cannot see the source medium (see bench/vm-commit.sh):
+they dump a page-cache-warm tree, a box reads compressed squashfs.
+That difference reversed one verdict below.
 
 ## bench/run.sh 400 2000 5000 1   (800k files, 194 MiB dedupable)
 
@@ -34,11 +45,16 @@ tests/import-hashes.cc).
 
 ## bench/run-real.sh   (arch-base: 582 MiB, 33k entries, NVMe ext4)
 
-capture off/on (cold farm)  import 0.638 / 0.676 s
-                            optimise 0.579 / 0.2 s   linked 9731
-fresh install (import-dir)  wall 0.9 s
-update, 1-file variant      wall 0.9 s   streamed dedup 545.4 MiB
-package update (+400 MiB)   wall 1.1 s
+capture off/on (cold farm)  import 0.579 / 0.607 s   (interleaved min)
+                            optimise 0.225 / 0.154 s   linked 9731
+fresh install (import-dir)  wall 1.1 s
+update, 1-file variant      wall 0.7 s   streamed dedup 545.4 MiB
+package update (+400 MiB)   wall 0.9 s
+
+The optimise numbers are the parallel single-path walk (see PROMOTED
+below); they were 0.567 / 0.228 s serial on the same box and tree.
+Import is unchanged: nothing in that pass got faster, and the one
+attempt at it is recorded under DISCARDED.
 
 First run after a build is noise: capture-on optimise measured 0.931 s
 cold and 0.227 s on every run after. Take the second number.
@@ -69,11 +85,15 @@ the source and the store db/farm metadata.
 
 ## bench/run.sh (defaults: 200 500 5000, quick smoke)
 
-populate (addToStore)     1.087 s
-optimise pass1 (cold)     0.934 s   linked 94800
+populate (addToStore)     0.889 s
+optimise pass1 (cold)     0.935 s   linked 94800
 optimise pass2 (warm)     0.003 s
-import (capture off/on)   0.102 / 0.116 s
-optimise (capture off/on) 0.127 / 0.044 s   linked 2847 both
+import (capture off/on)   0.094 / 0.106 s
+optimise (capture off/on) 0.037 / 0.029 s   linked 2847 both
+
+Passes 1 and 2 are optimiseStore (already parallel per store path, and
+unchanged); the import-side optimise is the single-path walk, which is
+where 0.127 / 0.044 became 0.037 / 0.029.
 
 ## syscall profile   (import-dir of arch-base, strace -c -f / perf stat)
 
@@ -83,14 +103,15 @@ AsyncFileHasher (per-file digests, streaming dedup), each on its own
 thread behind a 64-slot queue. Roughly half the CPU is kernel time, so
 syscall counts are the thing to watch, not just wall clock.
 
-                    original   buffered+filter   +canonical restore
-futex                939,993      415,188            ~436,000
-newfstatat           188,153      155,072             121,991
-llistxattr            33,082       33,082                   1
-chmod (path)          25,416       25,416               1,811
-geteuid               33,085       33,085                   3
-task-clock            2116 ms     ~1580 ms            ~1570 ms
-wall                  1.31 s      ~1.02 s              0.97 s
+                    original   buffered+filter   +canonical restore   +edge wake
+futex                939,993      415,188            ~436,000            385,384
+newfstatat           188,153      155,072             121,991            121,995
+llistxattr            33,082       33,082                   1                  1
+chmod (path)          25,416       25,416               1,811              1,811
+geteuid               33,085       33,085                   3                  3
+getpid                     -            -               9,738                  0
+task-clock            2116 ms     ~1580 ms            ~1570 ms           ~1570 ms
+wall                  1.31 s      ~1.02 s              0.97 s             0.97 s
 
 sourceToSink was unbuffered while its mirror image sinkToSource has
 always wrapped its side in a 32 KiB CoroBufferedSink, with a comment
@@ -176,6 +197,66 @@ Follow-ups tried, with verdicts (measure, then promote or discard):
   boots. If a CPU floor is ever wanted, -march=x86-64-v3 is the
   shippable form of the same idea; expect the same nothing.
 
+- PROMOTED: parallel single-path optimise. optimiseStore fans out one
+  task per store path, so a commit -- which optimises exactly the path
+  it just imported -- had one task and ran the whole walk serially.
+  optimisePath_ now takes the pool and gives each child directory its
+  own task; the writable-toggle stays single-writer by construction,
+  since a frame's own file children never leave it and only subtrees
+  fork. A directory's restore need not wait on those tasks: a file
+  needs its immediate parent writable, nothing above. d_type off
+  readdir picks dir-vs-file free (DT_UNKNOWN recurses inline, the old
+  path). Stats are atomics on a shared context, not per-task structs
+  merged under a mutex. Interleaved: optimise 0.567 -> 0.225 s capture
+  off, 0.228 -> 0.154 s on, link counts identical. Scaling 0.235 /
+  0.204 / 0.170 / 0.156 s at 1 / 2 / 4 / 8 CPUs, flat past 8: the
+  floor is the journal. Four assertions added to parallel-optimise.cc
+  on the single-path API, plus the canonical-mode sweep now covers it.
+
+- PROMOTED: wake the async hash queues only on the empty -> non-empty
+  edge (producer only when a pop clears a full ring). Both are SPSC and
+  the consumer only sleeps after seeing an empty queue under the mutex,
+  so a notify per push was a futex wake with nobody listening. futex
+  420,093 -> 385,384, import 1.02x. Only 8% because the elided wakes
+  were never most of them: the hashers keep up, so the queue is empty
+  at push time and the edge fires anyway. What remains is real
+  blocking. Retires "batching those events is the one real cut left".
+
+- PROMOTED (free): hoist getpid() out of the temp-link name. glibc
+  dropped its pid cache in 2.25, so it was a syscall per linked file,
+  9,738 of them. Not wall-visible; just had no reason to be in a loop.
+
+- DISCARDED: temp link in the target file's own directory rather than
+  the store root, on the theory that parallel threads contend on the
+  one directory. Measured 0.163-0.171 s against 0.152-0.174 s: nothing,
+  which also says the post-8-CPU plateau is the journal, not that
+  directory. It would also turn a crash between link and rename from
+  inert junk in the store root into a .tmp-link-* inside a store path,
+  breaking that path's hash.
+
+- PROMOTED, after first being discarded on host numbers: replace
+  sourceToSink's coroutine with a real thread (bounded ring of recycled
+  buffers). A coroutine is not a thread -- producer and consumer share
+  one stack -- so source reads and destination writes never overlap.
+  On the host that measured 1.12x and was discarded. In the box it is
+  1.50x on the import phase (2.7 -> 1.8 s) and 1.33x on a whole commit
+  (3990 -> 3009 ms), three runs each, no overlap between the two sets.
+  The host was wrong about the *source medium*: it dumps a tree sitting
+  in page cache, where reads are memcpy and the producer is 18% of the
+  spine. A box reads its root off compressed squashfs, where reads cost
+  real CPU, and serialising that decompression against the writes is
+  most of what the coroutine was costing. Any host bench that warms the
+  source tree first will understate this permanently.
+
 Still open, measured: ~75k target-store stats remain (optimise walk +
-farm probes); optimise with capture is 0.2 s and parallel, so the
-remaining spend is known and cheap. The import side is done.
+farm probes); optimise with capture is 0.15 s and parallel, so the
+remaining spend is known and cheap.
+
+Import on the host is near its floor: dumpPath alone is 0.106 s of a
+0.58 s import, the whole-NAR SHA-256 is 0.231 s already on its own
+thread, and a plain `cp -a` of the tree costs 0.33 s -- about 1.8x a
+raw copy while also computing two SHA-256 digests over 552 MiB and
+canonicalising every file. It scales 1.14 -> 0.63 s from 1 to 2 CPUs
+and is flat past 4. Beating it means less I/O or less hashing, not
+more threads. What the host cannot see is the source medium, which is
+what the in-box numbers above turned on.

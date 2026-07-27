@@ -9,6 +9,7 @@
 #include "nix/store/local-settings.hh"
 #include "nix/util/sync.hh"
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <mutex>
@@ -16,6 +17,8 @@
 #include <boost/unordered/concurrent_flat_set.hpp>
 
 namespace nix {
+
+class ThreadPool;
 
 /**
  * Nix store and database schema version.
@@ -397,17 +400,57 @@ private:
        one run at a time per process (workers parallelise inside). */
     std::mutex optimiseStoreLock;
 
+    /**
+     * Everything one optimise run shares across its threads. The
+     * counters are atomic rather than per-task-and-merged: a subtree
+     * fan-out has no single merge point the way a path-at-a-time loop
+     * did, and three relaxed increments per file are free next to the
+     * two journaled metadata writes a link costs. `total` is a
+     * constant of the run that optimisePath_ used to recompute from
+     * `fileHashes` once per file.
+     */
+    struct OptimiseCtx
+    {
+        InodeHash & inodeHash;
+        const ImportFileHashes * fileHashes = nullptr;
+        size_t fileHashesBase = 0;
+        uint64_t total = 0;
+        std::atomic<uint64_t> visited{0};
+        std::atomic<unsigned long> filesLinked{0};
+        std::atomic<uint64_t> bytesFreed{0};
+
+        OptimiseCtx(InodeHash & inodeHash)
+            : inodeHash(inodeHash)
+        {
+        }
+
+        void into(OptimiseStats & stats) const
+        {
+            stats.filesLinked += filesLinked;
+            stats.bytesFreed += bytesFreed;
+            stats.filesVisited += visited;
+        }
+    };
+
+    /* name plus "is it a directory", so the parallel walk can tell
+       subtrees (a task each) from files (the parent's own work)
+       without an extra lstat; d_type is free from readdir. */
+    struct OptimiseEnt
+    {
+        std::string name;
+        bool isDir;
+    };
+
     InodeHash loadInodeHash();
-    Strings readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
+    std::vector<OptimiseEnt>
+    readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
     void optimisePath_(
         Activity * act,
-        OptimiseStats & stats,
+        OptimiseCtx & ctx,
         const std::filesystem::path & path,
-        InodeHash & inodeHash,
         RepairFlag repair,
         bool * parentToggled = nullptr,
-        const ImportFileHashes * fileHashes = nullptr,
-        size_t fileHashesBase = 0);
+        ThreadPool * pool = nullptr);
 
     // Internal versions that are not wrapped in retry_sqlite.
     bool isValidPath_(State & state, const StorePath & path);

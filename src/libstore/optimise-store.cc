@@ -72,9 +72,10 @@ LocalStore::InodeHash LocalStore::loadInodeHash()
     return inodeHash;
 }
 
-Strings LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash)
+std::vector<LocalStore::OptimiseEnt>
+LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash)
 {
-    Strings names;
+    std::vector<OptimiseEnt> names;
 
     AutoCloseDir dir(opendir(path.string().c_str()));
     if (!dir)
@@ -92,7 +93,11 @@ Strings LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & pa
         std::string name = dirent->d_name;
         if (name == "." || name == "..")
             continue;
-        names.push_back(name);
+        /* DT_UNKNOWN (some filesystems never fill d_type in) falls
+           through as "not a directory": the walk then recurses inline
+           instead of forking a task, which is the old behaviour and
+           still correct, just not parallel. */
+        names.emplace_back(std::move(name), dirent->d_type == DT_DIR);
     }
     if (errno)
         throw SysError("reading directory %s", PathFmt(path));
@@ -102,23 +107,25 @@ Strings LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & pa
 
 void LocalStore::optimisePath_(
     Activity * act,
-    OptimiseStats & stats,
+    OptimiseCtx & ctx,
     const std::filesystem::path & path,
-    InodeHash & inodeHash,
     RepairFlag repair,
     bool * parentToggled,
-    const ImportFileHashes * fileHashes,
-    size_t fileHashesBase)
+    ThreadPool * pool)
 {
     checkInterrupt();
 
     auto st = lstat(path);
 
     if (S_ISDIR(st.st_mode)) {
-        Strings names = readDirectoryIgnoringInodes(path, inodeHash);
+        auto names = readDirectoryIgnoringInodes(path, ctx.inodeHash);
 
         /* The first child that relinks makes this directory writable;
-           restore it once after all children instead of per file. */
+           restore it once after all children instead of per file.
+           Only this frame's own file children touch the flag: child
+           directories are walked by their own frame (or their own
+           task), each with a flag of its own, so the toggle stays
+           single-writer however the walk is scheduled. */
         bool toggled = false;
         Finally restore([&]() {
             if (toggled) {
@@ -129,8 +136,19 @@ void LocalStore::optimisePath_(
                 }
             }
         });
-        for (auto & i : names)
-            optimisePath_(act, stats, path / i, inodeHash, repair, &toggled, fileHashes, fileHashesBase);
+        for (auto & i : names) {
+            /* Subtrees are disjoint, so each is a task. Restoring this
+               directory's mode does not have to wait for them: a file
+               only ever needs its own immediate parent writable, and
+               that parent is inside the subtree the task owns. */
+            if (pool && i.isDir) {
+                auto child = path / i.name;
+                pool->enqueue([this, act, &ctx, child, repair, pool] {
+                    optimisePath_(act, ctx, child, repair, nullptr, pool);
+                });
+            } else
+                optimisePath_(act, ctx, path / i.name, repair, &toggled, pool);
+        }
         return;
     }
 
@@ -149,14 +167,7 @@ void LocalStore::optimisePath_(
        never arrive (readDirectoryIgnoringInodes drops them by inode),
        which is what makes this pass cheap after a mostly-unchanged
        import, so the total nets those out. */
-    uint64_t total = 0;
-    if (fileHashes) {
-        total = fileHashes->files.size() - fileHashes->dedupedFiles;
-#if CAN_LINK_SYMLINK
-        total += fileHashes->symlinks;
-#endif
-    }
-    progressTick("optimising", ++stats.filesVisited, total);
+    progressTick("optimising", ctx.visited.fetch_add(1, std::memory_order_relaxed) + 1, ctx.total);
 
     /* Sometimes SNAFUs can cause files in the Nix store to be
        modified, in particular when running programs as root under
@@ -176,7 +187,7 @@ void LocalStore::optimisePath_(
         return;
 
     /* This can still happen on top-level files. */
-    if (st.st_nlink > 1 && inodeHash.contains(st.st_ino)) {
+    if (st.st_nlink > 1 && ctx.inodeHash.contains(st.st_ino)) {
         debug("%s is already linked, with %d other file(s)", PathFmt(path), st.st_nlink - 2);
         return;
     }
@@ -195,11 +206,11 @@ void LocalStore::optimisePath_(
        the content re-read; anything not in the map (concurrent
        changes, symlinks) falls back to hashing from disk. */
     Hash hash = [&] {
-        if (fileHashes && S_ISREG(st.st_mode)) {
-            auto rel = path.native().substr(fileHashesBase);
+        if (ctx.fileHashes && S_ISREG(st.st_mode)) {
+            auto rel = path.native().substr(ctx.fileHashesBase);
             if (rel.empty())
                 rel = "/";
-            if (auto it = fileHashes->files.find(rel); it != fileHashes->files.end())
+            if (auto it = ctx.fileHashes->files.find(rel); it != ctx.fileHashes->files.end())
                 return it->second;
         }
         return hashPath(makeFSSourceAccessor(path), FileSerialisationMethod::NixArchive, HashAlgorithm::SHA256).hash;
@@ -235,7 +246,7 @@ void LocalStore::optimisePath_(
         /* Nope, create a hard link in the links directory. */
         try {
             std::filesystem::create_hard_link(path, linkPath);
-            inodeHash.insert(st.st_ino);
+            ctx.inodeHash.insert(st.st_ino);
             /* Our file is now the canonical copy in the links
                directory; nothing left to replace. */
             return;
@@ -301,8 +312,12 @@ void LocalStore::optimisePath_(
        symlink resolution and run boost::format, once per linked file;
        build the name directly instead. */
     static std::atomic<uint32_t> tmpCounter(std::random_device{}());
+    /* getpid() is a real syscall (glibc dropped the cache in 2.25) and
+       the pid cannot change under us here, so resolve it once per
+       process rather than once per linked file. */
+    static const std::string pidPart = "/.tmp-link-" + std::to_string(getpid()) + "-";
     std::filesystem::path tempLink{
-        config->realStoreDir.native() + "/.tmp-link-" + std::to_string(getpid()) + "-"
+        config->realStoreDir.native() + pidPart
         + std::to_string(tmpCounter.fetch_add(1, std::memory_order_relaxed))};
 
     try {
@@ -349,8 +364,8 @@ void LocalStore::optimisePath_(
         throw SystemError(e.code(), "renaming %1% to %2%", PathFmt(tempLink), PathFmt(path));
     }
 
-    stats.filesLinked++;
-    stats.bytesFreed += st.st_size;
+    ctx.filesLinked.fetch_add(1, std::memory_order_relaxed);
+    ctx.bytesFreed.fetch_add(st.st_size, std::memory_order_relaxed);
 
     if (act)
         act->result(resFileLinked, st.st_size, st.st_blocks);
@@ -369,39 +384,37 @@ void LocalStore::optimiseStore(OptimiseStats & stats)
 
     /* Store paths are disjoint subtrees, so they can be deduplicated
        independently; the link farm races (create/unlink) are already
-       handled for concurrent processes, which covers threads too. */
+       handled for concurrent processes, which covers threads too.
+       One task per path: the pool is already saturated at this
+       granularity, so the per-path walks stay serial (no `pool`
+       argument below) rather than fanning out a second time. */
     std::atomic<uint64_t> done{0};
-    std::mutex statsMutex;
+    OptimiseCtx ctx(inodeHash);
     ThreadPool pool;
 
     for (auto & i : paths) {
         if (!isValidPath(i))
             continue; /* path was GC'ed, probably */
         pool.enqueue([&, i] {
-            OptimiseStats pathStats;
             {
                 Activity act(*logger, lvlTalkative, actUnknown, fmt("optimising path '%s'", printStorePath(i)));
-                optimisePath_(&act, pathStats, config->realStoreDir / i.to_string(), inodeHash, NoRepair);
-            }
-            {
-                std::lock_guard<std::mutex> lock(statsMutex);
-                stats.filesLinked += pathStats.filesLinked;
-                stats.bytesFreed += pathStats.bytesFreed;
+                optimisePath_(&act, ctx, config->realStoreDir / i.to_string(), NoRepair);
             }
             act.progress(++done, paths.size());
         });
     }
 
     pool.process();
+    ctx.into(stats);
 }
 
 void LocalStore::optimisePath(const std::filesystem::path & path, RepairFlag repair)
 {
-    OptimiseStats stats;
     InodeHash inodeHash;
+    OptimiseCtx ctx(inodeHash);
 
     if (config->getLocalSettings().autoOptimiseStore)
-        optimisePath_(nullptr, stats, path, inodeHash, repair);
+        optimisePath_(nullptr, ctx, path, repair);
 }
 
 void LocalStore::optimisePath(const StorePath & path, OptimiseStats & stats, const ImportFileHashes * fileHashes)
@@ -413,7 +426,27 @@ void LocalStore::optimisePath(const StorePath & path, OptimiseStats & stats, con
 
     InodeHash inodeHash = loadInodeHash();
     std::filesystem::path realPath = config->realStoreDir / path.to_string();
-    optimisePath_(nullptr, stats, realPath, inodeHash, NoRepair, nullptr, fileHashes, realPath.native().size());
+
+    OptimiseCtx ctx(inodeHash);
+    ctx.fileHashes = fileHashes;
+    ctx.fileHashesBase = realPath.native().size();
+    if (fileHashes) {
+        ctx.total = fileHashes->files.size() - fileHashes->dedupedFiles;
+#if CAN_LINK_SYMLINK
+        ctx.total += fileHashes->symlinks;
+#endif
+    }
+
+    /* A commit optimises exactly one path, so the whole pass used to
+       run on one thread while the box has all its others idle. The
+       subtrees under this root are disjoint, so they fan out the same
+       way whole-store paths do; the root's own file children stay on
+       this thread, which is then the only writer of the root's
+       writable-toggle. */
+    ThreadPool pool;
+    optimisePath_(nullptr, ctx, realPath, NoRepair, nullptr, &pool);
+    pool.process();
+    ctx.into(stats);
 }
 
 } // namespace nix

@@ -195,6 +195,65 @@ int main(int argc, char ** argv)
 	ok(zeroLinks == 0, "link farm holds no empty entries",
 		fmt("%d zero-size entries", zeroLinks));
 
+	/* Single-path optimise, which fans out one task per child
+	   directory. This is the shape a commit runs (nixgen-commit
+	   optimises exactly the path it just imported), and unlike
+	   optimiseStore above the concurrency is *inside* one path: sibling
+	   subtrees toggle their own directories' modes while racing each
+	   other for the same farm entries. Wide and deep on purpose, so the
+	   walk actually forks instead of running one task.
+	   The canonical-mode sweep below covers this path too. */
+	{
+		auto acc = make_ref<MemorySourceAccessor>();
+		for (unsigned d = 0; d < 24; d++)
+			for (unsigned f = 0; f < 20; f++)
+				acc->addFile(CanonPath(fmt("sub%02d/deep/f%02d", d, f)),
+					std::string(pool[(d * 20 + f) % pool.size()]));
+		// a file directly under the root: its parent is the one
+		// directory the fan-out does not hand to a task
+		acc->addFile(CanonPath("rootfile"), "wide-root-content");
+		auto wide = store->addToStore("wide", {acc, CanonPath::root});
+		auto wideDir = storeDir / wide.to_string();
+
+		std::map<std::string, std::string> wideBefore;
+		for (auto & f : fs::recursive_directory_iterator(wideDir))
+			if (f.is_regular_file())
+				wideBefore[f.path().string()] = readFileStr(f.path());
+
+		OptimiseStats w1, w2;
+		local->optimisePath(wide, w1);
+		local->optimisePath(wide, w2);
+
+		ok(w1.filesLinked > 0, "single-path optimise links",
+			fmt("linked %d", w1.filesLinked));
+		ok(w2.filesLinked == 0, "single-path optimise converges",
+			fmt("second pass linked %d", w2.filesLinked));
+
+		std::map<std::string, std::string> wideAfter;
+		for (auto & f : fs::recursive_directory_iterator(wideDir))
+			if (f.is_regular_file())
+				wideAfter[f.path().string()] = readFileStr(f.path());
+		ok(wideAfter == wideBefore, "single-path contents intact",
+			fmt("%d files before, %d after",
+				wideBefore.size(), wideAfter.size()));
+
+		/* Every distinct content in the path must end on one inode:
+		   subtrees racing for the same farm entry must not each keep
+		   their own copy. */
+		std::map<std::string, std::set<ino_t>> wideGroups;
+		for (auto & [p, content] : wideAfter) {
+			struct stat st;
+			if (::lstat(p.c_str(), &st) == 0)
+				wideGroups[content].insert(st.st_ino);
+		}
+		unsigned wideMulti = 0;
+		for (auto & [content, inos] : wideGroups)
+			if (inos.size() > 1)
+				wideMulti++;
+		ok(wideMulti == 0, "single-path dedup: one inode per content",
+			fmt("%d groups with >1 inode", wideMulti));
+	}
+
 	/* Permissions restored. optimisePath_ chmods a directory +w to swap
 	   a file in and leans on ~MakeReadOnly to put the mode back, so a
 	   leak here is a real hazard. Assert the canonical mode itself

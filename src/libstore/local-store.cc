@@ -853,8 +853,14 @@ public:
                     return;
                 auto chunk = std::move(chunks.front());
                 chunks.pop_front();
+                /* Only a pop off a *full* queue can release the
+                   producer, and there is exactly one producer (the
+                   restore thread). Notifying on every pop is a futex
+                   wake per chunk with nobody waiting on it. */
+                bool wake = chunks.size() == maxQueued - 1;
                 lk.unlock();
-                cvPop.notify_one();
+                if (wake)
+                    cvPop.notify_one();
                 /* on failure keep draining so the producer never
                    blocks on a full queue; rethrow at finish() */
                 if (!failure) {
@@ -878,8 +884,13 @@ public:
         std::unique_lock lk(mtx);
         cvPop.wait(lk, [&] { return chunks.size() < maxQueued; });
         chunks.emplace_back(data);
+        /* The worker only ever waits after observing an empty queue
+           under this mutex, so a push that leaves the queue non-empty
+           by more than itself cannot have raced one to sleep. */
+        bool wake = chunks.size() == 1;
         lk.unlock();
-        cvPush.notify_one();
+        if (wake)
+            cvPush.notify_one();
     }
 
     void close()
@@ -1035,8 +1046,13 @@ class AsyncFileHasher
         std::unique_lock lk(mtx);
         cvPop.wait(lk, [&] { return events.size() < maxQueued; });
         events.push_back(std::move(ev));
+        /* See AsyncHashSink: wake only on the empty -> non-empty edge.
+           This queue carries ~4 metadata events per file on top of the
+           data chunks, so the elided wakes are most of them. */
+        bool wake = events.size() == 1;
         lk.unlock();
-        cvPush.notify_one();
+        if (wake)
+            cvPush.notify_one();
     }
 
     void run()
@@ -1048,8 +1064,10 @@ class AsyncFileHasher
                 return;
             auto ev = std::move(events.front());
             events.pop_front();
+            bool wake = events.size() == maxQueued - 1;
             lk.unlock();
-            cvPop.notify_one();
+            if (wake)
+                cvPop.notify_one();
             /* on failure keep draining so the producer never blocks
                on a full queue; rethrow at finish() */
             if (!failure) {

@@ -38,6 +38,10 @@
 #                       here). Ctrl-A c toggles console/monitor, Ctrl-A x
 #                       quits. GRUB menu stays on the (absent) VGA:
 #                       default entry boots after the timeout
+#   CACHE, IOPS, BPS    writable-disk tuning for measurement, see
+#                       bench/vm-commit.sh. CACHE=none takes the host
+#                       page cache out of the path; IOPS/BPS throttle
+#                       the disk to model slower media (0 = unthrottled)
 
 
 set -euo pipefail
@@ -49,7 +53,7 @@ TARGET="$REPO/build/vm/vm-target.qcow2"
 VARS="$REPO/build/vm/ovmf-vars.fd"
 DISK_SIZE="${DISK_SIZE:-30G}"
 RAM="${RAM:-4G}"
-CPUS="${CPUS:-2}"
+CPUS="${CPUS:-6}"
 DISPLAY_BACKEND="${DISPLAY_BACKEND:-gtk,zoom-to-fit=off}"
 VGA="${VGA:-std}"
 GL="${GL:-off}"
@@ -57,6 +61,9 @@ GL="${GL:-off}"
 # a qemu-audio-* package to start
 AUDIO_BACKEND="${AUDIO_BACKEND:-none}"
 SERIAL="${SERIAL:-off}"
+CACHE="${CACHE:-writeback}"
+IOPS="${IOPS:-0}"
+BPS="${BPS:-0}"
 ARG="${1:-fresh}"
 mkdir -p "$REPO/build/vm"
 
@@ -153,6 +160,38 @@ fi
 ACCEL=()
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 
+# Extra -drive options, writable disks only (the ISO is read-only and
+# never the thing under measurement).
+#
+# qemu's default cache=writeback lets the guest's writes land in the
+# *host* page cache, so a commit inside the box can report the host's
+# RAM speed instead of the disk it is nominally writing to. That is
+# fine for interactive use and useless for measuring: it is the same
+# trap that made a 9.3 GiB host benchmark spread 16-31 s for identical
+# work. CACHE=none takes the host cache out of the path.
+#
+# Throttling models media the host does not have. The store this ships
+# on is as likely to be a USB stick (~1-5k IOPS, tens of MB/s) as an
+# NVMe (~1M IOPS, GB/s), and which one it is decides whether
+# overlapping reads with writes buys anything at all -- on one queue
+# they just contend. Sweeping IOPS/BPS answers that without buying
+# hardware, and reproducibly.
+DRIVE_OPTS=""
+if [ "$CACHE" != writeback ]; then
+	DRIVE_OPTS="$DRIVE_OPTS,cache=$CACHE"
+	# aio=native wants O_DIRECT; pairing it with a cached drive is
+	# rejected outright by qemu
+	if [ "$CACHE" = none ]; then
+		DRIVE_OPTS="$DRIVE_OPTS,aio=native"
+	fi
+fi
+if [ "$IOPS" != 0 ]; then
+	DRIVE_OPTS="$DRIVE_OPTS,throttling.iops-total=$IOPS"
+fi
+if [ "$BPS" != 0 ]; then
+	DRIVE_OPTS="$DRIVE_OPTS,throttling.bps-total=$BPS"
+fi
+
 # stdio carries either the monitor (default) or the muxed serial
 # console (SERIAL=on): both on stdio would collide
 MON_ARGS=(-monitor stdio)
@@ -196,12 +235,12 @@ fi
 # partition, and GRUB picks the store by label, so two of them is an
 # ambiguity nobody wants to debug. STORE=none skips it entirely
 if [ "$ATTACH_STORE" = true ] && [ "$STORE" != none ] && [ -f "$STORE" ]; then
-	QEMU_ARGS+=(-drive "file=$STORE,format=raw,if=virtio")
+	QEMU_ARGS+=(-drive "file=$STORE,format=raw,if=virtio$DRIVE_OPTS")
 fi
 # blank install target for nixgen-setup; after installing, '$0 boot'
 # starts it alone, which is what a real machine does
 if [ "$ATTACH_TARGET" = true ]; then
-	QEMU_ARGS+=(-drive "file=$TARGET,format=qcow2,if=virtio")
+	QEMU_ARGS+=(-drive "file=$TARGET,format=qcow2,if=virtio$DRIVE_OPTS")
 fi
 
 # monitor on stdio can leave the terminal raw on abnormal exit

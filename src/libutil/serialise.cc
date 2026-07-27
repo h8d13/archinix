@@ -4,10 +4,14 @@
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/util.hh"
 
+#include <condition_variable>
 #include <cstring>
 #include <cerrno>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include <boost/coroutine2/coroutine.hpp>
 #include <boost/coroutine2/protected_fixedsize_stack.hpp>
@@ -271,6 +275,12 @@ void StringSource::skip(size_t len)
    which requires much more stack space. */
 static constexpr size_t defaultCoroutineStackSize = 512 * 1024;
 
+/* Chunks in flight between sourceToSink's two threads. At the 32 KiB
+   BufferedSink chunk this is ~2 MiB of slack, enough to ride out a
+   slow read or a slow write without either side idling, and bounded so
+   a fast producer cannot balloon memory. */
+static constexpr size_t sourceToSinkQueued = 64;
+
 std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
 {
     /* Buffered for the same reason sinkToSource buffers its side:
@@ -281,65 +291,157 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
        into each async hash thread: a mutex, a notify and an allocation
        apiece. Measured on a 552 MiB tree: 940k futex calls, gone once
        the tokens coalesce. */
+    /* A coroutine is not a thread: producer and consumer alternate on
+       one OS stack, so the source reads and the destination writes of
+       an import never overlap. On a warm 552 MiB tree that costs
+       little (the reads are memcpy out of page cache), but on a
+       multi-GiB tree read cold off the disk -- a box committing hours
+       after boot, which is the shape that actually ships -- the whole
+       import runs at read latency with the writer idle beside it, and
+       then at write bandwidth with the reader idle. Measured on a
+       9.3 GiB desktop tree: 11.5 s of source reads and ~9 s of writes
+       that had to happen one after the other.
+
+       So the boundary is a real thread with a bounded ring of buffers
+       between the two sides, the same shape as the async hashers in
+       libstore. The buffers are recycled rather than allocated per
+       chunk: at 32 KiB a piece a multi-GiB import is hundreds of
+       thousands of them. */
     struct SourceToSink : BufferedSink, FinishSink
     {
         /* both bases pin the vtable with their own anchor override, so
            this one has to name the final overrider */
         void anchor() override {}
 
-        typedef boost::coroutines2::coroutine<bool> coro_t;
-
         fun<void(Source &)> reader;
-        std::optional<coro_t::push_type> coro;
+
+        std::thread worker;
+        std::mutex mtx;
+        std::condition_variable cvFull, cvFree;
+        std::vector<std::string> full, free_;
+        std::string producing, consuming;
+        size_t consumed = 0;
+        bool closed = false, quit = false;
+        std::exception_ptr failure;
 
         SourceToSink(fun<void(Source &)> reader)
             : reader(reader)
         {
         }
 
-        std::string_view cur;
+        /* Consumer side: hand the reader the next chunk, blocking
+           until one exists. EndOfFile once the producer has finished
+           and the ring is drained, which is what the coroutine's
+           "coroutine has finished" throw signalled. */
+        size_t pull(char * out, size_t out_len)
+        {
+            if (consumed == consuming.size()) {
+                std::unique_lock lk(mtx);
+                /* hand the spent buffer back for reuse */
+                if (!consuming.empty()) {
+                    consuming.clear();
+                    free_.push_back(std::move(consuming));
+                }
+                cvFull.wait(lk, [&] { return closed || !full.empty(); });
+                if (full.empty())
+                    throw EndOfFile("source-to-sink stream has finished");
+                consuming = std::move(full.front());
+                full.erase(full.begin());
+                consumed = 0;
+                /* it is taking a chunk out of a *full* ring that lets
+                   the producer move again, not recycling the buffer */
+                if (full.size() == sourceToSinkQueued - 1)
+                    cvFree.notify_one();
+            }
+            size_t n = std::min(out_len, consuming.size() - consumed);
+            memcpy(out, consuming.data() + consumed, n);
+            consumed += n;
+            return n;
+        }
+
+        void start()
+        {
+            worker = std::thread([this] {
+                try {
+                    LambdaSource source([this](char * out, size_t out_len) { return pull(out, out_len); });
+                    reader(source);
+                } catch (...) {
+                    failure = std::current_exception();
+                }
+                /* whatever happened, stop the producer blocking on a
+                   ring nobody will drain again */
+                {
+                    std::lock_guard<std::mutex> lk(mtx);
+                    quit = true;
+                }
+                cvFree.notify_one();
+            });
+        }
 
         void writeUnbuffered(std::string_view in) override
         {
             if (in.empty())
                 return;
-            cur = in;
+            if (!worker.joinable())
+                start();
 
-            if (!coro) {
-                coro = coro_t::push_type(
-                    boost::coroutines2::protected_fixedsize_stack(defaultCoroutineStackSize),
-                    [&](coro_t::pull_type & yield) {
-                        LambdaSource source([&](char * out, size_t out_len) {
-                            if (cur.empty()) {
-                                yield();
-                                if (yield.get())
-                                    throw EndOfFile("coroutine has finished");
-                            }
+            producing.assign(in);
 
-                            size_t n = cur.copy(out, out_len);
-                            cur.remove_prefix(n);
-                            return n;
-                        });
-                        reader(source);
-                    });
+            std::unique_lock lk(mtx);
+            cvFree.wait(lk, [&] { return quit || full.size() < sourceToSinkQueued; });
+            if (quit) {
+                /* the reader is gone; surface its failure here, the way
+                   resuming a throwing coroutine used to */
+                lk.unlock();
+                stop();
+                return;
             }
+            full.push_back(std::move(producing));
+            if (!free_.empty()) {
+                producing = std::move(free_.back());
+                free_.pop_back();
+            } else
+                producing.clear();
+            bool wake = full.size() == 1;
+            lk.unlock();
+            if (wake)
+                cvFull.notify_one();
+        }
 
-            if (!*coro) {
-                unreachable();
+        /* Join the reader and re-throw whatever it raised. Idempotent:
+           finish() and ~SourceToSink both call it. */
+        void stop()
+        {
+            if (!worker.joinable())
+                return;
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                closed = true;
             }
-
-            if (!cur.empty()) {
-                (*coro)(false);
+            cvFull.notify_one();
+            worker.join();
+            if (failure) {
+                auto e = failure;
+                failure = nullptr;
+                std::rethrow_exception(e);
             }
         }
 
         void finish() override
         {
-            /* the tail of the NAR is still in the buffer; the coroutine
+            /* the tail of the NAR is still in the buffer; the reader
                must see it before being told the stream ended */
             flush();
-            if (coro && *coro)
-                (*coro)(true);
+            stop();
+        }
+
+        ~SourceToSink()
+        {
+            try {
+                stop();
+            } catch (...) {
+                ignoreExceptionInDestructor();
+            }
         }
     };
 
