@@ -1,4 +1,4 @@
-# The store libs alone, on stock Debian: no Arch, no Nix, no arch/.
+# The store libs alone, on stock Debian.
 #
 #   docker build -t nixstore .
 #   docker run --rm -it -v "$PWD/work:/work" nixstore
@@ -11,6 +11,7 @@
 #
 # See src/README.md for the API. A store is just a directory you own:
 # point openStore() at /work and it creates the skeleton on first use.
+
 FROM debian:forky-slim
 
 # exactly what src/*/meson.build asks for: blake3 >= 1.8.2, boost
