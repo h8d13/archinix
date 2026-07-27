@@ -27,7 +27,7 @@ Everything derives from one absolute root path:
 <root>/nix/store/.links/<hash>            dedup farm: one inode per unique file
 <root>/nix/var/nix/db/db.sqlite           ValidPaths + Refs (source of truth)
 <root>/nix/var/nix/db/reserved            8 MiB so GC can run on a full disk
-<root>/nix/var/nix/gcroots/<basename>     symlink = this path stays alive
+<root>/nix/var/nix/gcroots/<any-name>     symlink = its target stays alive
 <root>/nix/var/nix/profiles/              also scanned as roots
 ```
 
@@ -121,8 +121,8 @@ void addToStore(const ValidPathInfo & info, Source & narSource,
 
 Produce the NAR with `SourcePath{...}.dumpPath(sink)`
 (`util/source-accessor.hh`). Sockets and fifos are skipped by the dumper
-itself: NAR cannot represent them, so live trees import without a
-destructive pre-clean.
+itself (`archive.cc`): NAR has no representation for them, so they are
+absent from the imported path rather than an error.
 
 Import strips ACLs, canonicalises mtimes to 1, makes the result read-only.
 
@@ -142,8 +142,8 @@ void          queryReferrers(const StorePath &, StorePathSet & out);
 
 `ValidPathInfo` (`path-info.hh`) carries `narHash`, `narSize`,
 `registrationTime`, `references`, `deriver`, `ca`.
-`queryPathsByHashPrefix` resolves short ids without globbing the store
-dir.
+`queryPathsByHashPrefix` matches a hash-part prefix of any length
+through the db, so partial ids resolve without a directory glob.
 
 ### Roots
 
@@ -168,10 +168,12 @@ void optimiseStore(OptimiseStats &);
 
 Hash each regular file, hardlink it to `.links/<hash>` when the content
 is already there. `OptimiseStats` reports `filesLinked` and
-`bytesFreed`.
+`bytesFreed`. `optimisePath` does one path, `optimiseStore` walks every
+valid path; passing the `ImportFileHashes` from the import skips
+re-hashing what was just written.
 
-Optimise the fresh path only: older ones are already
-linked, which is what makes the next near-identical tree cost its diff.
+Sharing is per file, below the store-path level, so two paths that
+differ in a few files hold one inode per distinct content between them.
 
 ### Delete
 
@@ -202,14 +204,12 @@ void exportPaths(Store &, const StorePathSet &, Sink &);
 `nix-store --export` wire format, topologically sorted, re-hashed
 against the db on the way out so local corruption cannot spread.
 
-There is deliberately no `importPaths` counterpart. Stores here are
-unsigned, so the receiving side has to re-read the stream itself,
-recompute the path with `makeFixedOutputPathFromCA`
-(`store-dir-config.hh`) and reject anything that does not hash back to
-the name it claims; upstream's `importPaths` accepted framing-valid
-corruption under the claimed name.
-
-The loop is ~50 lines over `parseDump` + `addToStore`.
+There is no `importPaths` counterpart: it went with signing, and
+upstream's version trusted the path name the stream claimed. Receiving
+is a loop you write over `parseDump` and `addToStore`. With signatures
+gone, the identity check available to you is content addressing:
+re-hash the received NAR, recompute the path with
+`makeFixedOutputPathFromCA` (`store-dir-config.hh`), reject a mismatch.
 
 ### Verify
 
@@ -222,10 +222,9 @@ referrers resolve). `checkContents` re-hashes every store path and every
 `.links` entry against the recorded NAR hash: slow, and the one that
 catches bitrot.
 
-Detect only, never heal: repair belonged to the
-substituter machinery this extraction dropped, and a verify that
-silently dropped registrations would destroy the record you ran it to
-find.
+Detect only: `verifyStore` refuses a `Repair` flag with `Unsupported`,
+since repairing meant re-fetching from a substituter. A missing or corrupt path is reported, not pruned; delete
+it deliberately through the GC.
 
 ### Paths on disk
 
@@ -295,7 +294,9 @@ try {
   mid-import must not reach `std::terminate`, or the partial temp dir
   never unwinds.
 - `openStore` needs an **absolute** path.
-- One writer at a time: the store takes a shared lock on
-  `nix/var/nix/db/big-lock`, sqlite runs in WAL mode.
+- Concurrent importers are fine: sqlite runs in WAL mode, per-path
+  locks cover the rest. Opening takes `db/big-lock` shared (it only
+  blocks schema upgrades); GC takes `gc.lock` exclusive, so a sweep and
+  an import serialise against each other.
 - Store paths are read-only; `chmod -R u+w` before deleting a test root
   by hand.
