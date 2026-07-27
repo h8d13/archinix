@@ -1,4 +1,4 @@
-# libstore: the local store API
+# libutil + libstore: the store layer API
 
 Two shared libraries, ~20k lines, no Nix on the host, no daemon, no
 network:
@@ -7,6 +7,37 @@ network:
 |---|---|---|---|
 | `libnixutil` | `nix-util` | `include/nix/util/` | NAR archive, hashing, source accessors, serialisation, fs helpers |
 | `libnixstore` | `nix-store` | `include/nix/store/` | store dir + sqlite db, GC, dedup farm, export |
+
+## One layer, two libraries
+
+The split is by subject, not by optionality. libutil knows bytes, files
+and hashes and has no notion of a store; libstore adds the store dir,
+the db and the GC on top. Content addressing is the seam: libutil
+serialises a tree to a NAR and hashes it, libstore turns that hash into
+a name and a registration.
+
+You link both whether you plan to or not:
+
+```
+libnixstore.so -> libnixutil.so, libsqlite3.so
+libnixutil.so  -> libblake3.so, libcrypto.so, libboost_context.so
+```
+
+`nix-store.pc` carries `Requires: nix-util`, so `pkg-config --cflags
+--libs nix-store` already emits `-lnixstore -lnixutil`. Naming both is
+just explicit.
+
+And the store API is written in libutil's types, so its headers are in
+your translation unit regardless:
+
+| you call | you need |
+|---|---|
+| anything | `ref<Store>` (`util/ref.hh`), `Error`/`SysError` (`util/error.hh`) |
+| `addToStoreFromDump`, `exportPaths` | `Source`/`Sink` (`util/serialise.hh`) |
+| producing a NAR from disk | `SourceAccessor`, `SourcePath`, `CanonPath` (`util/source-accessor.hh`, `util/canon-path.hh`) |
+| reading one back | `parseDump`, `FileSystemObjectSink` (`util/archive.hh`, `util/fs-sink.hh`) |
+| `ValidPathInfo`, CA helpers | `Hash`, `HashAlgorithm` (`util/hash.hh`) |
+| quieting the library | `verbosity` (`util/logging.hh`) |
 
 ## What is left
 
