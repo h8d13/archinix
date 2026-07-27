@@ -17,7 +17,7 @@ Pkg-split (`boost` is headers only; the compiled `context` lib lives in `boost-l
 
 ```
 pacman -S --needed meson ninja gcc pkgconf boost boost-libs openssl \
-	libblake3 sqlite
+	sqlite
 ```
 
 API reference: [`src/README.md`](src/) covers the store layer as it

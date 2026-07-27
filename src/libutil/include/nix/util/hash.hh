@@ -9,7 +9,7 @@ namespace nix {
 
 MakeError(BadHash, Error);
 
-enum struct HashAlgorithm : char { MD5 = 42, SHA1, SHA256, SHA512, BLAKE3 };
+enum struct HashAlgorithm : char { MD5 = 42, SHA1, SHA256, SHA512 };
 
 /**
  * @return the size of a hash for the given algorithm
@@ -17,8 +17,6 @@ enum struct HashAlgorithm : char { MD5 = 42, SHA1, SHA256, SHA512, BLAKE3 };
 constexpr inline size_t regularHashSize(HashAlgorithm type)
 {
     switch (type) {
-    case HashAlgorithm::BLAKE3:
-        return 32;
     case HashAlgorithm::MD5:
         return 16;
     case HashAlgorithm::SHA1:

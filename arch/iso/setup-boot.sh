@@ -166,7 +166,7 @@ EOF
 # demand there, not into every generation; trailing libs = runtime
 # deps of import-dir/libnixstore
 pacman -Syu --noconfirm --needed linux mkinitcpio squashfs-tools diffutils \
-	libblake3 boost-libs sqlite
+	boost-libs sqlite
 # cached downloads are not system state (nixgen-update/-commit scrub the
 # same); already-compressed .zst does not squash, shipping it bloats the ISO
 rm -rf /var/cache/pacman/pkg/*

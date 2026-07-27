@@ -18,7 +18,7 @@ FROM debian:forky-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	g++ meson ninja-build pkg-config \
-	libblake3-dev libboost-dev libboost-context-dev \
+	libboost-dev libboost-context-dev \
 	libssl-dev libsqlite3-dev \
 	&& rm -rf /var/lib/apt/lists/*
 

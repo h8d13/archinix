@@ -62,7 +62,6 @@ endif
 # libstdc++ uses Intel TBB as backend for C++17 parallel algorithms when <execution> is included.
 # boost::concurrent_flat_map includes <execution>, which would require linking against TBB.
 # Since we don't actually use parallel algorithms, disable the TBB backend to avoid the dependency.
-# TBB is a dependency of blake3 and leaking into our build environment.
 is_using_libstdcxx = cxx.compiles(
   '''
   #include <ciso646>

@@ -35,7 +35,7 @@ jobs:
           # to cut upstream subsystems (signing, fetchers, compression,
           # build sandbox)
           pacman --noconfirm --needed -Syu git meson ninja gcc pkgconf boost boost-libs \
-            openssl zstd libblake3 nlohmann-json sqlite curl \
+            openssl zstd nlohmann-json sqlite curl \
             grub xorriso mtools github-cli
           # container root has no subuid range; without one bootstrap.sh
           # falls back to its single-uid sandbox and pacman hooks spam
