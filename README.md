@@ -31,7 +31,7 @@ still describe the parts kept verbatim.
 
 ## [Arch Linux generations](arch/)
 
-Immutable `x86-efi` generations on the Nixstore. In roughly ~2k LoC (excluding tests).
+Immutable `x86-efi` generations on the Nixstore.
 
 ### From releases: [ISO](https://github.com/h8d13/archinix/releases)
 
