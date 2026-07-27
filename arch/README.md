@@ -68,6 +68,8 @@ filesystem is a unit like any other; `nixgen-bind.service` exposes the
 store at `/nixstore` and the store-disk root at `/nixstoredev` before
 switch-root. See [NOTES](./NOTES.md) for more details.
 
+![BootFlow](./boot.svg)
+
 Networking is baked in (networkd DHCP on `en*`, resolved DNS).
 
 ### State
