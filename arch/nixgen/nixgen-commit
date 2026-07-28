@@ -54,7 +54,12 @@ fi
 # sockets/fifos (NAR can't represent them) are skipped by the dump
 # itself: the live root is never mutated to appease the serializer.
 # Cached downloads are not system state; this still deletes from the
-# live root (nixgen-update scrubs the same)
+# live root (nixgen-update scrubs the same).
+# The shipped manifest makes this path a volatile row, so on a default
+# box the mount is a submount that the non-recursive bind above already
+# dropped and the delete finds an empty dir. Kept anyway: the row is
+# configuration, and deleting it must not silently start fossilizing
+# package downloads into generations
 [ ! -d "$SNAP/var/cache/pacman/pkg" ] || \
 	find "$SNAP/var/cache/pacman/pkg" -mindepth 1 -delete
 

@@ -109,7 +109,11 @@ fi
 
 # scrub what a generation must not capture: scratch dirs and the
 # downloaded package cache (sockets/fifos are skipped by import-dir's
-# dump filter, no scrub needed)
+# dump filter, no scrub needed).
+# Not covered by the volatile row that handles this on a booted box:
+# this chroot is a bare overlay with no generated mount units in it, so
+# the scrub here is the only thing between a -Syu's downloads and the
+# generation being built
 rm -rf "$SCRATCH/mnt/tmp"/* "$SCRATCH/mnt/tmp"/.[!.]* "$SCRATCH/mnt/run"/* \
 	"$SCRATCH/mnt/var/cache/pacman/pkg"/* 2>/dev/null || true
 

@@ -109,19 +109,32 @@ install -Dm644 "$I/nixgen-fs" /usr/local/lib/nixgen-fs
 # commit/update/adopt and the state seeder the generated units call
 install -Dm755 "$I/nixgen-entry" /usr/local/lib/nixgen-entry
 install -Dm755 "$I/nixgen-seedstate" /usr/local/lib/nixgen-seedstate
+# the manifest parser the generator, nixgen-data and nixgen-setup all
+# read rows through
+install -Dm755 "$I/nixgen-statepaths" /usr/local/lib/nixgen-statepaths
 
-# persistent state, opt-in per boot entry: the generator turns
-# nixdata=<label> plus this manifest into mount units (partition at
-# /run/nixdata, one bind per path). Without nixdata= it is inert and
-# every write stays in the RAM upper. The manifest is generation
-# content on purpose: WHICH paths are state is configuration and rolls
-# back with it; the state itself lives on the partition and flows
-# forward. /var/lib/pacman is deliberately absent: the package db
-# describes the static tree and must roll back with it
+# state manifest: the generator turns each row into a mount unit.
+# Bare rows are persistent and opt-in per boot entry (nixdata=<label>
+# mounts the partition at /run/nixdata, one bind per path); without
+# the flag they are inert and every write stays in the RAM upper.
+# volatile rows are caches: backed by the store disk when one is
+# attached, by their own capped tmpfs otherwise, and never by the
+# shared upper. The manifest is generation content on purpose: WHICH
+# paths are state or cache is configuration and rolls back with it;
+# the state itself lives on the partition and flows forward.
+# /var/lib/pacman is deliberately absent: the package db describes the
+# static tree and must roll back with it.
+# The volatile row is /var/cache/pacman/pkg, not /var/cache: the
+# generation ships committed content under /var/cache (ldconfig's
+# aux-cache, systemd's private/) and a volatile row starts EMPTY,
+# unlike a persistent row that nixgen-seedstate fills from the
+# generation. Shadowing the whole dir would hide committed data with
+# no seeding path
 install -Dm755 "$I/nixgen-data-generator" \
 	/etc/systemd/system-generators/nixgen-data-generator
 install -d /etc/nixgen
-printf '/home\n/var/log\n' > /etc/nixgen/state
+printf '/home\n/var/log\n/var/cache/pacman/pkg\tvolatile\n' \
+	> /etc/nixgen/state
 
 # store import canonicalises permissions (dirs 0755, no setuid/sticky/
 # ownership/caps); replay the captured manifest before anything else

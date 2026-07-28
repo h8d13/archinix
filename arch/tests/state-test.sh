@@ -82,7 +82,16 @@ qemu-system-x86_64 $ACCEL -m 2G -boot d -cdrom build/nixarch.iso \
 	-nic user,model=virtio-net-pci \
 	-display none -no-reboot -serial "unix:$SOCK,server,nowait" &
 QPID=$!
-# expect a pattern *after* the generation name (see update-test)
+# The generation name is read back on a line of its own, with the
+# marker LAST. wait_for matches a substring of whatever has arrived so
+# far and then prints only the lines carrying it, so neither end works:
+# "committed: " can fire mid-name and capture nothing, and the name's
+# own suffix matches import-dir's earlier "imported: /nix/store/<gen>"
+# line, whose match clears the buffer before commit's line lands.
+# nixgen-commit's trailing "(GRUB entry added, visible next boot)" used
+# to be the pattern here and was dropped in f9fb8e3.
+# The read-back is queued while commit still runs; bash executes it
+# after, so the glob always resolves
 OUT=$(drive "NIXARCH BOOT OK" \
 	'mkdir -p /home/pre && echo seedmark > /home/pre/seedfile && echo PRE_OK' \
 	"PRE_OK" \
@@ -91,7 +100,9 @@ OUT=$(drive "NIXARCH BOOT OK" \
 	"/dev/vdb" \
 	"label NIXDATA" \
 	"nixgen-commit test-state" \
-	"visible next boot" \
+	"-test-state" \
+	'echo "committed: $(basename $(ls -d /nixstoredev/nix/store/*-test-state))" GENLINE_"OK"' \
+	"GENLINE_OK" \
 	"poweroff") || { kill $QPID 2>/dev/null; exit 1; }
 wait $QPID
 GEN=$(echo "$OUT" | sed -n 's/.*committed: \([^ ]*\).*/\1/p')
@@ -130,7 +141,7 @@ drive "NIXARCH BOOT OK" \
 	'echo statemark > /home/pre/statemark && echo logmark > /var/log/logmark && echo MARKS_OK' \
 	"MARKS_OK" \
 	"nixgen-commit test-excl" \
-	"visible next boot" \
+	"-test-excl" \
 	'E=$(basename "$(ls -d /nixstoredev/nix/store/*-test-excl)"); [ -f "/nixstoredev/nix/store/$E/home/pre/seedfile" ] && [ ! -e "/nixstoredev/nix/store/$E/home/pre/statemark" ] && [ ! -e "/nixstoredev/nix/store/$E/var/log/logmark" ] && echo EXCL_OK' \
 	"EXCL_OK" \
 	'[ -L "/nixstoredev/nix/var/nix/gcroots/$E" ] && echo ROOTED' \

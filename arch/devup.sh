@@ -10,7 +10,7 @@ for t in nixgen/nixgen-*; do
 	case ${t#nixgen/} in
 	nixgen-fs) ;;
 	# lib pieces stay out of the drift-checked command surface
-	nixgen-entry|nixgen-seedstate)
+	nixgen-entry|nixgen-seedstate|nixgen-statepaths)
 		install -m755 "$t" /usr/local/lib/ ;;
 	nixgen-data-generator)
 		install -m755 "$t" /etc/systemd/system-generators/ ;;

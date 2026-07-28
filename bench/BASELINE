@@ -95,6 +95,38 @@ Passes 1 and 2 are optimiseStore (already parallel per store path, and
 unchanged); the import-side optimise is the single-path walk, which is
 where 0.127 / 0.044 became 0.037 / 0.029.
 
+## bench/vm-perms.sh   (nixgen-perms.service, in-box over serial)
+
+Boot-time metadata replay, per manifest class, ms. Anchor: systemd
+charged the service 53.3 ms on the ISO boot, staged replay of the
+equivalent committed base 49-59 ms, so staging models the boot.
+
+class    rows      before    after     per row after
+mode     20k/100k  284/1137  268/1232  ~12 us    (batched chmod)
+own      20k/100k  20899/143974  321/1395  ~13 us (batched chown)
+caps     5k        5738      1908      ~380 us   (one exec per row)
+acls     20k files 222       237       ~1 us     (setfacl --restore)
+xattrs   20k files 199       206       ~3 us     (setfattr --restore)
+attrs    5k        4526      56        0         (bails at row 1)
+
+Size is not the variable, exec count is. What the sweep was built to
+find: 100k user-owned files (a committed /home, which is what an
+install without nixdata= produces) cost 144 s of chown forks before
+sysinit.target, every boot. Grouping by owner pair, the way the mode
+loop already grouped by mode, put it next to the mode number.
+
+Two caveats on the before column. It was measured on the pre-REBUILD
+ISO, and fork-heavy loops ran ~3x slower there for reasons outside
+this change: caps is untouched code and moved 5738 -> 1908 across the
+rebuild alone. Discount the own win to ~35x rather than 103x. And
+attrs' before is 2409 ms on the new ISO (the first fix probed a
+synthetic file, which overlayfs accepts because a freshly created path
+has no lower to copy up from; every real row still failed).
+
+Nothing here is worth batching further: caps rows are
+capability-carrying binaries, 2 on a stock tree, and setcap has no
+one-caps-many-files form.
+
 ## syscall profile   (import-dir of arch-base, strace -c -f / perf stat)
 
 Import is three-way overlapped: the coroutine spine (dumpPath reads +

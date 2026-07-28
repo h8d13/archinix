@@ -72,7 +72,10 @@ echo "--- boot 1: ISO + fresh disk, offline kernel version change in the box"
 SERIAL_CMD_TIMEOUT=1800 python3 "$SERSH" iso \
 	"nixgen-update test-up '$UPCMD'" \
 	"nixgen-update noop-up true" > "$L1"
-need "$L1" "reboot to switch"
+# "updated: <gen>" since f9fb8e3 dropped the trailing "(GRUB entry
+# added, reboot to switch)"; this is a post-hoc log grep, so unlike
+# state-test's expects it failed loudly rather than hanging
+need "$L1" "updated: .*-test-up"
 need "$L1" "no change"
 NEWGEN=$(sed -n 's/.*updated: \([^ ]*\).*/\1/p' "$L1" | head -1)
 [ -n "$NEWGEN" ] || { echo "FAIL: no generation name captured"; exit 1; }

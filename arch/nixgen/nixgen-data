@@ -32,8 +32,13 @@ is_supported_fs "$FS" || exit 1
 	echo "  <type>: $(echo "$NIXGEN_FS_ALL" | tr ' ' '|') (default ext4)" >&2
 	exit 1
 }
-[ -s /etc/nixgen/state ] || {
-	echo "no /etc/nixgen/state manifest: nothing would ever mount" >&2
+# persistent rows only: volatile rows never touch this partition (the
+# store disk or a capped tmpfs backs them), so a manifest of nothing
+# but caches would format a disk that stays empty forever
+PATHS=$(/usr/local/lib/nixgen-statepaths persistent | tr '\n' ' ')
+[ -n "$PATHS" ] || {
+	echo "no persistent rows in /etc/nixgen/state:" \
+		"nothing would ever mount from this partition" >&2
 	exit 1
 }
 if grep -q "^$DEV" /proc/mounts; then
@@ -67,12 +72,6 @@ cleanup() {
 }
 trap cleanup EXIT
 mount "$DEV" "$T"
-PATHS=
-while IFS= read -r p; do
-	case $p in
-	/*) PATHS="$PATHS $p" ;;
-	esac
-done < /etc/nixgen/state
 /usr/local/lib/nixgen-seedstate "$T" $PATHS
 
 echo "data partition ready on $DEV (label NIXDATA)"

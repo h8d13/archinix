@@ -15,8 +15,8 @@
   of downloads+extract) dies with `Write failed` in a 2G box. Big
   installs: `nixgen-update` (upper on the store disk), more `-m`, or
   commit + reboot between chunks (the upper resets).
-- **State is three categories, not two.** Committed content rolls back
-  with the generation; the RAM upper vanishes; paths listed in
+- **State is four categories, not two.** Committed content rolls back
+  with the generation; the RAM upper vanishes; bare rows in
   `/etc/nixgen/state` (default `/home`, `/var/log`) can ride a data
   partition (`nixgen-data`, then `nixdata=NIXDATA` on the entry) and
   flow *forward* across generations. Bulk mutable data (a Steam
@@ -24,6 +24,21 @@
   through commit it branches with the config tree. `/var/lib/pacman`
   is deliberately not listed: the package db describes the static tree
   and must roll back with it.
+  The fourth is `volatile` rows (default `/var/cache/pacman/pkg`):
+  worth neither committing nor persisting, but too heavy to share the
+  upper's blast radius. Backed by the store disk at
+  `/nixstoredev/cache<path>` when one is attached, so downloads skip
+  RAM entirely and survive a rollback-then-retry; by their own capped
+  tmpfs (25%, `volatile=<size>` to override) when none is. Either way
+  they are mounts on top of the root, so commit's non-recursive
+  snapshot drops them. Nothing prunes the disk-backed copy: it is a
+  cache on a disk sized for generations, so `paccache -r` when
+  `nixgen-commit`'s free-space warning starts firing.
+  Do NOT reach for a volatile row to fix commit churn alone: a
+  volatile row also makes the path RAM/disk-backed at runtime, which
+  is why the journal keeps its own tmpfs shadow in `nixgen-commit`
+  instead (it needs snapshot exclusion *and* persistence under
+  `nixdata=`).
 - **A store root is two directories.** `<root>/nix/store` holds the
   paths and `<root>/nix/var/nix/db` holds the registration db, which is
   the source of truth for what is valid: a directory listing also shows

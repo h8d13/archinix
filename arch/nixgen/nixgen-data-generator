@@ -1,17 +1,104 @@
 #!/bin/sh
-# systemd generator (booted system, not initrd): nixdata=<label> on the
-# kernel cmdline plus the generation's state manifest
-# (/etc/nixgen/state, one absolute path per line) become mount units:
-# the labeled partition at /run/nixdata, one bind per manifest path on
-# top of the overlay root. Nothing here lives in the store, so the same
-# generation boots volatile or persistent depending only on its GRUB
-# entry; no nixdata= or no manifest generates nothing at all. An
-# absent partition fails the mounts wants-style after the device
-# timeout below and the boot continues volatile.
+# systemd generator (booted system, not initrd): the generation's state
+# manifest (/etc/nixgen/state, see nixgen-statepaths for the row format)
+# becomes mount units. Two kinds of row, and only one of them needs a
+# partition:
+#   persistent (bare row), with nixdata=<label> on the cmdline: the
+#     labeled partition at /run/nixdata, one bind per path on top of
+#     the overlay root. State flows forward across generations.
+#   volatile (tagged row): a cache. Backed by the store disk when one
+#     is attached (survives rollbacks and retries, and the bytes never
+#     enter RAM), by its own capped tmpfs when none is. Either way it
+#     is a mount on top of the root, so commit's non-recursive snapshot
+#     drops it and nothing fossilizes into a generation.
+# Nothing here lives in the store, so the same generation boots
+# volatile or persistent depending only on its GRUB entry; no manifest
+# generates nothing at all.
 DEST=${2:-$1}
 [ -n "$DEST" ] || exit 1
 [ ! -e /etc/initrd-release ] || exit 0
 
+PARSE=/usr/local/lib/nixgen-statepaths
+[ -s /etc/nixgen/state ] || exit 0
+
+mkdir -p "$DEST/local-fs.target.wants"
+
+# --- volatile rows ----------------------------------------------------
+# Deliberately before the nixdata= check: these rows describe paths that
+# must not share the upper whether or not a data partition exists, and
+# the diskless ISO session is exactly the case with the least RAM to
+# spare.
+VOL=$("$PARSE" volatile)
+if [ -n "$VOL" ]; then
+	# The store disk is bound into the tree by the initramfs
+	# (iso/initcpio-nixgen-bind) before switch-root, so by generator
+	# time it is either a mountpoint or it is not going to be one.
+	# Testing the mount, not the directory: /nixstoredev is a baked
+	# empty dir in every generation, and on a writable overlay root a
+	# plain -d test says yes on a diskless box and puts the cache back
+	# in the RAM it was supposed to leave
+	BACKED=false
+	if grep -q ' /nixstoredev ' /proc/self/mountinfo; then
+		BACKED=true
+	fi
+	if [ "$BACKED" = true ]; then
+		# one oneshot for every backing dir: a mount unit cannot
+		# create its own source, and the alternative is a
+		# tmpfiles.d fragment per row. DefaultDependencies=no for
+		# the reason nixgen-state.service has it below
+		{
+			cat <<EOF
+[Unit]
+Description=create nixgen volatile backing dirs on the store disk
+DefaultDependencies=no
+RequiresMountsFor=/nixstoredev
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EOF
+			echo "$VOL" | while read -r p size; do
+				echo "ExecStart=/usr/bin/mkdir -p /nixstoredev/cache$p"
+			done
+		} > "$DEST/nixgen-volatile.service"
+	fi
+	echo "$VOL" | while read -r p size; do
+		unit=$(systemd-escape --path --suffix=mount "$p")
+		if [ "$BACKED" = true ]; then
+			cat > "$DEST/$unit" <<EOF
+[Unit]
+Description=volatile $p on the store disk (never committed)
+Requires=nixgen-volatile.service
+After=nixgen-volatile.service
+
+[Mount]
+What=/nixstoredev/cache$p
+Where=$p
+Options=bind
+EOF
+		else
+			# size= is the whole point of the tmpfs branch: a
+			# runaway cache fills its own mount and the app
+			# degrades, instead of eating the shared upper until
+			# unrelated system writes start failing
+			cat > "$DEST/$unit" <<EOF
+[Unit]
+Description=volatile $p (tmpfs, capped, never committed)
+
+[Mount]
+What=tmpfs
+Where=$p
+Type=tmpfs
+Options=mode=0755,size=$size
+EOF
+		fi
+		ln -sf "../$unit" "$DEST/local-fs.target.wants/$unit"
+	done
+fi
+
+# --- persistent rows --------------------------------------------------
 label=
 for w in $(cat /proc/cmdline); do
 	case $w in
@@ -19,7 +106,14 @@ for w in $(cat /proc/cmdline); do
 	esac
 done
 [ -n "$label" ] || exit 0
-[ -s /etc/nixgen/state ] || exit 0
+
+# the manifest is parsed once, here; paths ride into the seeder as
+# arguments (absolute, no whitespace: the unit line splits on it)
+set --
+for p in $("$PARSE" persistent); do
+	set -- "$@" "$p"
+done
+[ $# -gt 0 ] || exit 0
 
 cat > "$DEST/run-nixdata.mount" <<EOF
 [Unit]
@@ -39,16 +133,6 @@ cat > "$DEST/$DEVUNIT.d/nixgen-timeout.conf" <<EOF
 [Unit]
 JobRunningTimeoutSec=10
 EOF
-
-# the manifest is parsed once, here; paths ride into the seeder as
-# arguments (absolute, no whitespace: the unit line splits on it)
-set --
-while IFS= read -r p; do
-	case $p in
-	/*) set -- "$@" "$p" ;;
-	esac
-done < /etc/nixgen/state
-[ $# -gt 0 ] || exit 0
 
 # DefaultDependencies=no: a service's default deps include
 # After=basic.target, and the binds below sit before local-fs.target,
@@ -71,7 +155,6 @@ EOF
 
 # wants-links (not requires): a failed data mount must not fail
 # local-fs.target, the boot degrades to volatile instead
-mkdir -p "$DEST/local-fs.target.wants"
 for p; do
 	unit=$(systemd-escape --path --suffix=mount "$p")
 	cat > "$DEST/$unit" <<EOF

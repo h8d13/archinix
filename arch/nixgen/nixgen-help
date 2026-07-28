@@ -85,8 +85,8 @@ COMMANDS
 
        nixgen-data <partition> [--fs <type>]
               Format a partition as the persistent data disk (label
-              NIXDATA) and seed it from the running root. Paths listed
-              in /etc/nixgen/state (default /home and /var/log) then
+              NIXDATA) and seed it from the running root. Persistent
+              rows of /etc/nixgen/state (default /home, /var/log) then
               mount from it on any boot whose GRUB entry carries
               nixdata=NIXDATA; commit excludes them, so that state
               flows forward across generations instead of rolling back
@@ -158,9 +158,20 @@ INTERNALS
        Off the command surface (/usr/local/lib): nixgen-entry writes
        entries.cfg atomically and GC-roots the entry's generation
        (shared by commit/update/adopt); nixgen-seedstate first-time
-       seeds state dirs onto the data partition. A system generator
+       seeds state dirs onto the data partition; nixgen-statepaths is
+       the one parser of the state manifest's rows. A system generator
        (nixgen-data-generator) turns nixdata=<label> plus the manifest
-       into the /run/nixdata mount and the per-path binds.
+       into the /run/nixdata mount and the per-path binds, and every
+       volatile row into its own mount regardless of the flag.
+
+       State manifest rows are "<abs-path> [tag]". A bare row is
+       persistent (above). The one tag is volatile[=<size>]: a cache,
+       backed by the store disk at /nixstoredev/cache<path> when one
+       is attached and by its own tmpfs (25% of RAM, or <size>) when
+       not, so it never shares the upper and never enters a
+       generation. Default manifest: /home, /var/log,
+       /var/cache/pacman/pkg volatile. Nothing prunes the disk-backed
+       cache; paccache -r does.
 
 FILES
        /nixstore                     store holding the running generation
@@ -170,7 +181,10 @@ FILES
        /run/nixdata                  data partition (nixdata= boots)
        etc/nixgen/{perms,caps,acls,xattrs,attrs}
                                      metadata manifests, per generation
-       etc/nixgen/state              paths that ride the data partition
+       etc/nixgen/state              state manifest: persistent rows
+                                     ride the data partition, volatile
+                                     rows the store disk or a tmpfs
+       /nixstoredev/cache/<path>     backing dir of a volatile row
 
 NIXGEN(7)                  nixstore generations                  NIXGEN(7)
 EOF

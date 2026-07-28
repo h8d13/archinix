@@ -30,17 +30,31 @@ awk -F'\t' '$1 != "l" { print $2 }' "$M" | sort -u | while read -r mode; do
 		|| echo "restmeta: some mode-$mode paths skipped" >&2
 done
 
-# ownership deviations are few, applied one by one; -h never follows
-# symlinks. In a single-uid userns sandbox non-zero uids have no
-# mapping and must fail soft; the booted box is real root and applies
-# them all
-awk -F'\t' '$3 != 0 || $4 != 0 { print $3 ":" $4 " " $5 }' "$M" \
-	| while read -r own p; do
-		chown -h "$own" "$p" || echo "restmeta: chown $own $p skipped" >&2
+# Batched per distinct owner pair for the reason the modes are: a row
+# per file is a fork per file. Deviations used to be assumed few, which
+# holds for a stock tree (a handful) and not for the shape that
+# actually ships one: a committed /home, where every file carries the
+# user's uid. 100k such rows cost 144 s one by one, and this service
+# runs Before=sysinit.target, so that is 144 s of every boot.
+# -h never follows symlinks. In a single-uid userns sandbox non-zero
+# uids have no mapping and must fail soft; the booted box is real root
+# and applies them all
+awk -F'\t' '$3 != 0 || $4 != 0 { print $3 ":" $4 }' "$M" | sort -u \
+	| while read -r own; do
+		awk -F'\t' -v o="$own" 'BEGIN { split(o, a, ":") }
+			$3 == a[1] && $4 == a[2] { print $5 }' "$M" \
+			| tr '\n' '\0' | xargs -0 -r chown -h "$own" \
+			|| echo "restmeta: some $own paths skipped" >&2
 	done
 
 C=$R/etc/nixgen/caps
 if [ -s "$C" ]; then
+	# one exec per row, unlike the two loops above: setcap takes
+	# <caps> <file> pairs with no one-caps-many-files form, and it
+	# abandons the rest of its arg list on the first failure, which
+	# would turn one stale row into a silently dropped tail. Rows are
+	# capability-carrying binaries (2 on a stock tree), so the fork
+	# per row buys fail-soft at a cost nothing scales
 	while read -r p caps; do
 		setcap "$caps" "$p" || echo "restmeta: setcap $p skipped" >&2
 	done < "$C"
@@ -71,8 +85,30 @@ fi
 # filesystem accepts varies across the nixgen-fs table
 T=$R/etc/nixgen/attrs
 if [ -s "$T" ]; then
+	# Fail soft per row, but stop at the first EOPNOTSUPP: that one is
+	# never about the row, it is the whole filesystem answering. Every
+	# booted root, a soft-reboot's /run/nextroot and the build
+	# sandboxes are overlays, and overlayfs has no flag ioctl for a
+	# path that must copy up (with metacopy and without), which is
+	# every row here. Left per-row it was a fork, a failed ioctl and
+	# two stderr lines apiece for a replay that cannot land: 5k rows
+	# = 4.5 s and 10k console lines of it, before sysinit.target.
+	# A plain-fs root replays as before.
+	# Not a synthetic probe file: created fresh it lands in the upper
+	# with no lower to copy up from, so overlayfs accepts the ioctl and
+	# the probe passes while every real row fails.
+	# LC_ALL=C pins the message this matches on
 	while IFS='	' read -r fl p; do
-		chattr "+$fl" "$p" \
-			|| echo "restmeta: chattr +$fl $p skipped" >&2
+		msg=$(LC_ALL=C chattr "+$fl" "$p" 2>&1) && continue
+		case $msg in
+		*"not supported"*)
+			echo "restmeta: no flag support here ($msg);" \
+				"$(wc -l < "$T") attr rows skipped" >&2
+			break
+			;;
+		*)
+			echo "restmeta: chattr +$fl $p skipped ($msg)" >&2
+			;;
+		esac
 	done < "$T"
 fi

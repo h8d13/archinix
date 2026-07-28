@@ -57,8 +57,11 @@ is_supported_fs "$FS" || exit 1
 	done
 	exit 1
 }
-[ -z "$DATA" ] || [ -s /etc/nixgen/state ] || {
-	echo "--data without /etc/nixgen/state: nothing would ever mount" >&2
+# persistent rows, not just a manifest: volatile rows are backed by the
+# store disk or a tmpfs and would leave the data partition empty
+[ -z "$DATA" ] || [ -n "$(/usr/local/lib/nixgen-statepaths persistent)" ] || {
+	echo "--data without persistent rows in /etc/nixgen/state:" \
+		"nothing would ever mount" >&2
 	exit 1
 }
 case $DEV in
@@ -164,7 +167,7 @@ if [ -n "$DATA" ]; then
 	# the sed cannot touch anything else
 	mount "${PART}2" "$T/data"
 	/usr/local/lib/nixgen-seedstate "$T/data" \
-		$(grep '^/' /etc/nixgen/state)
+		$(/usr/local/lib/nixgen-statepaths persistent)
 	umount "$T/data"
 	sed -i 's|^\tlinux .*|& nixdata=NIXDATA|' "$T/store/entries.cfg"
 fi

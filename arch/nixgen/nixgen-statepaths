@@ -1,0 +1,67 @@
+#!/bin/sh -e
+# The one parser for /etc/nixgen/state, shared by the generator that
+# turns rows into mount units, the nixgen-data formatter and
+# nixgen-setup. Four call sites open-coding the row format is how a
+# manifest row becomes a mount unit named "/var/cache volatile", or how
+# the word "volatile" arrives at nixgen-seedstate as a path to create.
+#
+# A row is "<abs-path> [tag]". No tag = persistent: bound from the data
+# partition under nixdata=, seeded from the generation, excluded from
+# commit by the non-recursive snapshot. The only tag is
+# volatile[=<size>]: a path whose content is worth neither committing
+# nor persisting, but too heavy to share the upper's blast radius (a
+# package cache is the shipped case). Volatile rows need no partition
+# and no nixdata=; see nixgen-data-generator for what backs them.
+# usage: nixgen-statepaths <persistent|volatile> [manifest]
+#   persistent: one absolute path per line
+#   volatile:   "<abs-path> <tmpfs size>" per line
+MODE=$1
+M=${2:-/etc/nixgen/state}
+
+# The upper is 75% of RAM (iso/initcpio-nixgen-store). A volatile row
+# is a separate pool, so this cap is what keeps a runaway cache from
+# spending the upper's share: joint ceiling stays the RAM the box has,
+# but a full cache fails the cache's writes, not the system's. Per-row
+# override for boxes that download more than this: volatile=40%
+VOL_SIZE=25%
+
+case $MODE in
+persistent | volatile) ;;
+*)
+	echo "usage: ${0##*/} <persistent|volatile> [manifest]" >&2
+	exit 1
+	;;
+esac
+[ -s "$M" ] || exit 0
+
+# read -r p tag: the path is field 1, so a tagged row can never reach a
+# consumer as one string. Paths with whitespace were never supported
+# (they cannot survive a unit's Where= either)
+while read -r p tag; do
+	case $p in
+	/*) ;;
+	*) continue ;;
+	esac
+	case $tag in
+	"")
+		if [ "$MODE" = persistent ]; then
+			echo "$p"
+		fi
+		;;
+	volatile)
+		if [ "$MODE" = volatile ]; then
+			echo "$p $VOL_SIZE"
+		fi
+		;;
+	volatile=*)
+		if [ "$MODE" = volatile ]; then
+			echo "$p ${tag#volatile=}"
+		fi
+		;;
+	*)
+		# a typo'd tag must not silently demote the row to
+		# persistent and put a package cache on the data partition
+		echo "${0##*/}: $M: unknown tag '$tag' on $p, row ignored" >&2
+		;;
+	esac
+done < "$M"
