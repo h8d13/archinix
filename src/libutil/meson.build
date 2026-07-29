@@ -46,18 +46,11 @@ configdata_pub.set(
 
 subdir('nix-meson-build-support/libatomic')
 
-# header-only: every boost facility this library uses (lexical_cast,
-# format, container_hash, container::small_vector,
-# unordered::concurrent_flat_map) is headers. The 'context' module was
-# here for boost::coroutine2, whose only consumer was sinkToSource.
-boost = dependency(
-  'boost',
-  include_type : 'system',
-  version : '>=1.87.0',
-)
-# boost is a public dependency, but not a pkg-config dependency unfortunately, so we
-# put in `deps_other`.
-deps_other += boost
+# header-only, so no dependency object and nothing in `deps_other`: this
+# only checks the headers are present and new enough. The 'context'
+# module was here for boost::coroutine2, whose only consumer was
+# sinkToSource.
+subdir('nix-meson-build-support/boost')
 
 openssl = dependency(
   'libcrypto',

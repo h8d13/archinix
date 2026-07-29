@@ -95,18 +95,9 @@ configdata_pub.set(
 
 subdir('nix-meson-build-support/libatomic')
 
-boost = dependency(
-  'boost',
-  modules : [
-    'container',
-    # Shouldn't list, because can header-only, and Meson currently looks for libs
-    #'regex',
-  ],
-  include_type : 'system',
-)
-# boost is a public dependency, but not a pkg-config dependency unfortunately, so we
-# put in `deps_other`.
-deps_other += boost
+# header-only here too: container::small_vector and container_hash, both
+# used from installed headers (gc-store.hh, local-store.hh)
+subdir('nix-meson-build-support/boost')
 
 # curl (filetransfer) and seccomp (build sandbox) served only the
 # remote stores and .drv realisation machinery, both cut from this
