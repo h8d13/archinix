@@ -63,15 +63,18 @@ fi
 [ ! -d "$SNAP/var/cache/pacman/pkg" ] || \
 	find "$SNAP/var/cache/pacman/pkg" -mindepth 1 -delete
 
-# import dedups against the link farm while it streams: only content
-# not already in the store hits the disk, so du (full un-deduped size)
-# is a far upper bound. Warn instead of refusing; a genuinely full
-# disk aborts the import cleanly mid-stream
-NEED=$(du -sxm "$SNAP" | cut -f1)
+# A genuinely full disk aborts the import cleanly mid-stream, so there
+# is nothing to gate on here. The note this used to print cost a
+# `du -sxm` of the whole snapshot -- a full stat walk of every entry,
+# on top of the six savemeta already does and the two import-dir does
+# -- to compute an upper bound so far above reality (the import dedups
+# against the link farm as it streams, and most of a re-commit is
+# unchanged) that it warned on stores with ample room. Free space is
+# still worth seeing, so print it without walking anything.
 FREE=$(df -Pm "$TARGET" | awk 'NR==2 { print $4 }')
-[ "$FREE" -ge "$NEED" ] || echo "note: snapshot is ${NEED}M un-deduped," \
-	"${FREE}M free on $TARGET: only new content lands, but consider" \
-	"nixgen-remove of old generations" >&2
+[ "$FREE" -gt 512 ] || echo "note: only ${FREE}M free on $TARGET;" \
+	"only new content lands, but consider nixgen-remove of old" \
+	"generations" >&2
 
 /usr/local/bin/nixgen-savemeta "$SNAP"
 # import-dir stdout is exactly the store path; mtime-based selection

@@ -7,14 +7,12 @@
 #include <condition_variable>
 #include <cstring>
 #include <cerrno>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
-
-#include <boost/coroutine2/coroutine.hpp>
-#include <boost/coroutine2/protected_fixedsize_stack.hpp>
 
 #  include <poll.h>
 
@@ -268,13 +266,6 @@ void StringSource::skip(size_t len)
     pos += len;
 }
 
-/* 512KiB is a conservative estimate for deeply nested NARs, which are limited
-   to 64 levels. We also tend to allocate rather large buffers on the stack, so
-   we should leave plenty of headroom. Note that no evaluation is supposed to
-   happen on sourceToSink/sinkToSource coroutine stacks (for Boehm GC reasons),
-   which requires much more stack space. */
-static constexpr size_t defaultCoroutineStackSize = 512 * 1024;
-
 /* Chunks in flight between sourceToSink's two threads. At the 32 KiB
    BufferedSink chunk this is ~2 MiB of slack, enough to ride out a
    slow read or a slow write without either side idling, and bounded so
@@ -283,8 +274,7 @@ static constexpr size_t sourceToSinkQueued = 64;
 
 std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
 {
-    /* Buffered for the same reason sinkToSource buffers its side:
-       dumpPath emits the NAR as a stream of tiny tokens ("(", "type",
+    /* Buffered because dumpPath emits the NAR as a stream of tiny tokens ("(", "type",
        "regular", each length word, each padding run). Unbuffered, every
        one of them resumes the coroutine and arrives at the consumer as
        its own read(), which downstream becomes a queue push per token
@@ -318,7 +308,11 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
         std::thread worker;
         std::mutex mtx;
         std::condition_variable cvFull, cvFree;
-        std::vector<std::string> full, free_;
+        /* full is a FIFO: a vector made every pop an O(queue) move of
+           the remaining chunks. free_ is a LIFO (any spare buffer will
+           do), so it stays a vector. */
+        std::deque<std::string> full;
+        std::vector<std::string> free_;
         std::string producing, consuming;
         size_t consumed = 0;
         bool closed = false, quit = false;
@@ -342,12 +336,21 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
                     consuming.clear();
                     free_.push_back(std::move(consuming));
                 }
+                /* Before the throw, not after it: reading a Source past
+                   EndOfFile has to keep throwing (ChainSource and
+                   drainInto both do it by design, and the coroutine
+                   this replaced re-threw every time). Left stale, the
+                   recycle above makes consuming empty while consumed
+                   still holds the last chunk's length, so the next call
+                   skips this block and computes size() - consumed as a
+                   size_t underflow: a ~2^64 length memcpy from a
+                   moved-from buffer. */
+                consumed = 0;
                 cvFull.wait(lk, [&] { return closed || !full.empty(); });
                 if (full.empty())
                     throw EndOfFile("source-to-sink stream has finished");
                 consuming = std::move(full.front());
-                full.erase(full.begin());
-                consumed = 0;
+                full.pop_front();
                 /* it is taking a chunk out of a *full* ring that lets
                    the producer move again, not recycling the buffer */
                 if (full.size() == sourceToSinkQueued - 1)
@@ -446,89 +449,6 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
     };
 
     return std::make_unique<SourceToSink>(reader);
-}
-
-std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
-{
-    struct SinkToSource : Source
-    {
-        typedef boost::coroutines2::coroutine<std::string_view> coro_t;
-
-        fun<void(Sink &)> writer;
-        fun<void()> eof;
-        std::optional<coro_t::pull_type> coro;
-
-        SinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
-            : writer(writer)
-            , eof(eof)
-        {
-        }
-
-        std::string_view cur;
-
-        size_t read(char * data, size_t len) override
-        {
-            bool hasCoro = coro.has_value();
-            if (!hasCoro) {
-                coro = coro_t::pull_type(
-                    boost::coroutines2::protected_fixedsize_stack(defaultCoroutineStackSize),
-                    [&](coro_t::push_type & yield) {
-                        /* Feed the consumer in chunks, instead of on each write
-                           to avoid excessive context switching. parseDump does
-                           lots of small writes to the sink, which we should
-                           accumulate. */
-                        struct CoroBufferedSink : BufferedSink
-                        {
-                            coro_t::push_type & yield;
-
-                            void writeUnbuffered(std::string_view data) override
-                            {
-                                yield(data);
-                            }
-
-                            CoroBufferedSink(coro_t::push_type & yield)
-                                : yield(yield)
-                            {
-                            }
-                        };
-
-                        CoroBufferedSink sink(yield);
-                        writer(sink);
-                        sink.flush();
-                    });
-            }
-
-            if (cur.empty()) {
-                if (hasCoro && *coro) {
-                    (*coro)();
-                }
-                if (*coro) {
-                    cur = coro->get();
-                } else {
-                    coro.reset();
-                    eof();
-                    unreachable();
-                }
-            }
-
-            size_t n = cur.copy(data, len);
-            cur.remove_prefix(n);
-
-            /* This is necessary to ensure that the coroutine gets resumed
-               after the consumer has finished reading the Source. Otherwise the
-               coroutine is always abandoned (i.e. it is always destroyed when
-               suspended). */
-            if (cur.empty() && coro && *coro) {
-                (*coro)();
-                if (*coro)
-                    cur = coro->get();
-            }
-
-            return n;
-        }
-    };
-
-    return std::make_unique<SinkToSource>(writer, eof);
 }
 
 void writePadding(size_t len, Sink & sink)

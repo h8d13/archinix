@@ -13,10 +13,8 @@ libnixstore) from [NixOS/nix](https://github.com/NixOS/nix)
 
 Build depends on: `meson`, `ninja`, C++23 compiler:
 
-Pkg-split (`boost` is headers only; the compiled `context` lib lives in `boost-libs`.)
-
 ```
-pacman -S --needed meson ninja gcc pkgconf boost boost-libs openssl sqlite
+pacman -S --needed meson ninja gcc pkgconf boost openssl sqlite
 ```
 
 API reference: [`src/README.md`](src/) covers the store layer as it

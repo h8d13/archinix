@@ -20,7 +20,7 @@ You link both whether you plan to or not:
 
 ```
 libnixstore.so -> libnixutil.so, libsqlite3.so
-libnixutil.so  -> libcrypto.so, libboost_context.so
+libnixutil.so  -> libcrypto.so
 ```
 
 `nix-store.pc` carries `Requires: nix-util`, so `pkg-config --cflags

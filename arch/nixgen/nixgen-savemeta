@@ -68,43 +68,71 @@ find . -mindepth 1 -xdev \( -path './tmp/*' -o -path './var/tmp/*' \) -prune \
 		-o -path ./root/\* \) \
 	-o -type l ! \( -user 0 -group 0 \) \) \
 	-printf '%y\t%m\t%U\t%G\t%p\n' | LC_ALL=C sort -t'	' -k5 > etc/nixgen/perms
-# sorted explicit list for the same determinism reason as acls below
-# (getcap -r walks in readdir order); regular files only.
+# One traversal feeds all four probe manifests below. They used to run
+# four separate finds and four sorts over the same entry set: three
+# redundant walks of every entry, and on a driver-heavy generation
+# (50k entries) that is not free, especially over the overlayfs merged
+# view a live commit reads. The per-path probes still run one at a
+# time (getcap/getfacl/getfattr/lsattr have no bulk form), so what
+# this removes is the walking, not the asking.
+# Records are '<type>\t<path>' NUL-terminated. The type is stripped
+# before sorting, not after: sorting the typed record would order by
+# type first and silently reshuffle every manifest.
 # LC_ALL=C on every sort: the manifest is regenerated on both sides of
 # the no-op check (host build sandbox vs env -i box), and UTF-8 vs C
 # collation order dot-files differently: same rows, different order,
 # false change
+ERR=$(mktemp)
+LIST=$(mktemp)
+FILES=$(mktemp)
+FD=$(mktemp)
+trap 'rm -f "$ERR" "$LIST" "$FILES" "$FD"' EXIT
 find . -mindepth 1 -xdev ! -path "*${TAB}*" ! -path "*${NL}*" \
-	-type f -print0 | LC_ALL=C sort -z | xargs -0 -r getcap > etc/nixgen/caps
+	\( -type f -o -type d \) -printf "%y${TAB}%p\0" > "$LIST"
+# no process substitution: this is /bin/sh, and the box's may be dash
+grep -z "^f${TAB}" "$LIST" | cut -z -f2- | LC_ALL=C sort -z > "$FILES"
+cut -z -f2- "$LIST" | LC_ALL=C sort -z > "$FD"
+
+# sorted explicit list for the same determinism reason as acls below
+# (getcap -r walks in readdir order); regular files only
+xargs -0 -r getcap < "$FILES" > etc/nixgen/caps
 # -s: only paths carrying extended/default ACLs; numeric ids stay
 # resolution-independent like the perms manifest.
 # Explicit sorted list, not -R: readdir walk order differs between
 # filesystems and would reorder the manifest for identical trees.
-# journal pruned: journald re-applies its journal ACLs on write and
+# journal dropped: journald re-applies its journal ACLs on write and
 # rotates files, capturing them churns the manifest every build. A
-# stable manifest is what makes no-op update detection possible
+# stable manifest is what makes no-op update detection possible. It is
+# filtered out of the shared list rather than pruned by find, which is
+# the same set: the other three manifests never pruned it
 # only files and dirs: ACLs cannot live on symlinks, and getfacl -P
 # on one is an ELOOP error that would abort the whole capture (-e)
-find . -mindepth 1 -xdev -path ./var/log/journal -prune \
-	-o ! -path "*${TAB}*" ! -path "*${NL}*" \( -type f -o -type d \) -print0 \
-	| LC_ALL=C sort -z | xargs -0 -r getfacl -sPp --numeric > etc/nixgen/acls
+grep -zEv '^\./var/log/journal(/|$)' "$FD" \
+	| xargs -0 -r getfacl -sPp --numeric > etc/nixgen/acls
 
 # Both probes below ask the underlying filesystem for something it may
 # not implement: squashfs (the ISO's whole lower) has no xattr or flag
 # ioctl, so EOPNOTSUPP arrives once per path. Expected and voluminous,
 # so it is filtered and anything else still reaches stderr. Neither
 # walk may abort the capture: this runs inside every nixgen-commit.
-ERR=$(mktemp)
-trap 'rm -f "$ERR"' EXIT
+#
+# Measured in the box on a driver generation (79k entries): lsattr 342
+# ms and getfattr 143 ms of a 1011 ms savemeta, every call of both
+# returning EOPNOTSUPP against a root whose lower is squashfs and whose
+# upper is tmpfs. Tempting to probe the filesystem once and skip the
+# walk, and wrong: -xdev sees one st_dev, but that device is overlayfs
+# over two filesystems with different capabilities, so a probe landing
+# on the tmpfs upper would skip flags that files still on an ext4 lower
+# really carry. Silent metadata loss, and the meta-test runs on plain
+# ext4 so it would not catch it. The per-path cost stays until there is
+# a way to ask that is honest about the union.
 
 # user.*/trusted.* xattrs: security.capability rides the caps manifest
 # (raw values are userns-encoded and must round-trip through setcap)
 # and system.posix_acl_* rides acls, so both are excluded here rather
 # than captured twice and replayed raw over each other.
 # -h: never dereference, a symlink's xattrs are its own
-find . -mindepth 1 -xdev ! -path "*${TAB}*" ! -path "*${NL}*" \
-	\( -type f -o -type d \) -print0 | LC_ALL=C sort -z \
-	| xargs -0 -r getfattr -h -d -m '^(user|trusted)\.' 2> "$ERR" \
+xargs -0 -r getfattr -h -d -m '^(user|trusted)\.' < "$FD" 2> "$ERR" \
 	> etc/nixgen/xattrs || :
 grep -v 'Operation not supported' "$ERR" >&2 || :
 
@@ -114,9 +142,7 @@ grep -v 'Operation not supported' "$ERR" >&2 || :
 # I htree index) are not chattr-able and would fail every replay.
 # lsattr prints "<flags> <path>": the path can hold spaces, so strip
 # exactly the first field rather than splitting the line
-find . -mindepth 1 -xdev ! -path "*${TAB}*" ! -path "*${NL}*" \
-	\( -type f -o -type d \) -print0 | LC_ALL=C sort -z \
-	| xargs -0 -r lsattr -d 2> "$ERR" \
+xargs -0 -r lsattr -d < "$FD" 2> "$ERR" \
 	| awk -v OFS='\t' '{
 		f = ""
 		n = split("i a A d j c m s S t u D", w, " ")

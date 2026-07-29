@@ -44,6 +44,15 @@ struct MakeReadOnly
             if (!path.empty())
                 canonicaliseTimestampAndPermissions(path.string());
         } catch (...) {
+            /* Cannot throw from here, but the consequence is a
+               directory left writable inside a store path, which is
+               precisely the state optimisePath_ warns about for files
+               and would otherwise pass in silence. Say so. */
+            try {
+                printError("optimise: %s left writable: its mode could not be restored",
+                    PathFmt(path));
+            } catch (...) {
+            }
             ignoreExceptionInDestructor();
         }
     }
@@ -132,6 +141,14 @@ void LocalStore::optimisePath_(
                 try {
                     canonicaliseTimestampAndPermissions(path);
                 } catch (...) {
+                    /* see ~MakeReadOnly: a silently writable directory
+                       in a store path is the failure worth hearing
+                       about, even though we cannot throw from here */
+                    try {
+                        printError("optimise: %s left writable: its mode could not be restored",
+                            PathFmt(path));
+                    } catch (...) {
+                    }
                     ignoreExceptionInDestructor();
                 }
             }
@@ -204,9 +221,21 @@ void LocalStore::optimisePath_(
 
        An import that captured per-file hashes while restoring spares
        the content re-read; anything not in the map (concurrent
-       changes, symlinks) falls back to hashing from disk. */
+       changes) falls back to hashing from disk. Symlinks are in the
+       map too: hashing one from disk costs an O_NOFOLLOW open that
+       takes ELOOP, a reopen of the parent by absolute path, and a
+       readlink, for a digest the restore already had the target for. */
     Hash hash = [&] {
-        if (ctx.fileHashes && S_ISREG(st.st_mode)) {
+        /* The capture happened during the restore, under the import's
+           PathLocks; this pass runs after those are released, so a
+           captured hash is only trustworthy while the node still looks
+           exactly as the restore left it. Canonical means mtime 1, so
+           anything else was touched afterwards and the captured digest
+           may no longer describe the contents -- and the branch below
+           would then publish it into the farm as a key, poisoning every
+           later dedup against that hash. Cheap to check: st is already
+           in hand. */
+        if (ctx.fileHashes && st.st_mtime == mtimeStore) {
             auto rel = path.native().substr(ctx.fileHashesBase);
             if (rel.empty())
                 rel = "/";
@@ -365,7 +394,14 @@ void LocalStore::optimisePath_(
     }
 
     ctx.filesLinked.fetch_add(1, std::memory_order_relaxed);
-    ctx.bytesFreed.fetch_add(st.st_size, std::memory_order_relaxed);
+    /* Only regular files free data blocks. A symlink's st_size is its
+       target length, and on ext4 a target under ~60 bytes lives inline
+       in the inode, so collapsing two of them frees no blocks at all;
+       counting st_size here reported savings that never existed. The
+       link is still worth making (it shares the inode), it just is not
+       bytes. */
+    if (S_ISREG(st.st_mode))
+        ctx.bytesFreed.fetch_add(st.st_size, std::memory_order_relaxed);
 
     if (act)
         act->result(resFileLinked, st.st_size, st.st_blocks);
@@ -431,10 +467,13 @@ void LocalStore::optimisePath(const StorePath & path, OptimiseStats & stats, con
     ctx.fileHashes = fileHashes;
     ctx.fileHashesBase = realPath.native().size();
     if (fileHashes) {
+        /* `files` now holds symlinks as well as regular files, so it is
+           the whole total; only the streamed-dedup swaps come off it,
+           and those are regular files by construction (tryDedup is
+           reached from End, which only regular files queue). Where
+           symlinks cannot be farmed they are still walked and still
+           counted, so the bar stays honest either way. */
         ctx.total = fileHashes->files.size() - fileHashes->dedupedFiles;
-#if CAN_LINK_SYMLINK
-        ctx.total += fileHashes->symlinks;
-#endif
     }
 
     /* A commit optimises exactly one path, so the whole pass used to

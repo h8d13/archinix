@@ -38,8 +38,14 @@ std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t
          */
         auto how = ::open_how{.flags = flags, .mode = mode, .resolve = resolve};
         auto res = ::syscall(__NR_openat2, dirFd, path, &how, sizeof(how));
-        /* Cache that the syscall is not supported. */
-        if (res < 0 && errno == ENOSYS) {
+        /* Cache that the syscall is not supported. EPERM and
+           EOPNOTSUPP mean the same thing as ENOSYS here: a seccomp
+           filter that predates openat2 rejects it rather than reporting
+           it missing, and Docker's default profile did exactly that for
+           years (this repo ships a Dockerfile). Treating those as hard
+           errors makes every open in the restore path fail instead of
+           falling back to the iterative resolver that exists for it. */
+        if (res < 0 && (errno == ENOSYS || errno == EPERM || errno == EOPNOTSUPP)) {
             unsupported.test_and_set();
             return std::nullopt;
         }

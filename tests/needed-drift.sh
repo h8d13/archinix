@@ -24,7 +24,10 @@ needed() {
 }
 
 STORE_WANT="ld-linux-x86-64 libc libgcc_s libnixutil libsqlite3 libstdc++ "
-UTIL_WANT="ld-linux-x86-64 libboost_context libc libcrypto libgcc_s libm libstdc++ "
+# no libboost_context: boost::coroutine2 went with sinkToSource, and
+# every boost facility left in the fork is header-only. libcrypto is
+# now the only non-toolchain dependency libnixutil has.
+UTIL_WANT="ld-linux-x86-64 libc libcrypto libgcc_s libm libstdc++ "
 
 # r=0-or-1 dance keeps `sh -e` from aborting before ok() can report
 got=$(needed "$P"/libnixstore.so.[0-9]*)

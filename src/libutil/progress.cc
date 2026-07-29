@@ -22,8 +22,12 @@ constexpr auto paintEvery = std::chrono::milliseconds(80);
 
 } // namespace
 
-void progressTick(std::string_view what, uint64_t done, uint64_t total)
+void progressTick(std::string_view what, uint64_t done, uint64_t total, uint64_t bytes)
 {
+    /* checked before the lock and before any formatting: an import
+       calls this once per data chunk (~84k times on a 3.3 GiB tree) so
+       that the byte figure keeps moving through a large file, and off a
+       terminal that has to cost a cached bool and a return. */
     if (!isTTY())
         return;
 
@@ -55,6 +59,12 @@ void progressTick(std::string_view what, uint64_t done, uint64_t total)
             (uintmax_t) (done * 100 / total));
     else
         fprintf(stderr, "\r%.*s: %ju", (int) what.size(), what.data(), (uintmax_t) done);
+
+    /* MiB rather than bytes: the figure has to grow monotonically in
+       width as well as value, and a raw byte count crossing a power of
+       ten shrinks nothing but reads as noise on a serial console. */
+    if (bytes)
+        fprintf(stderr, ", %ju MiB", (uintmax_t) (bytes >> 20));
 }
 
 void progressEnd()

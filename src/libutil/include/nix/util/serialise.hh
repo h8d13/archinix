@@ -9,10 +9,6 @@
 #include "nix/util/util.hh"
 #include "nix/util/file-descriptor.hh"
 
-namespace boost::context {
-struct stack_context;
-}
-
 namespace nix {
 
 /**
@@ -525,13 +521,6 @@ public:
 };
 
 std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader);
-
-/**
- * Convert a function that feeds data into a Sink into a Source. The
- * Source executes the function as a coroutine.
- */
-std::unique_ptr<Source>
-sinkToSource(fun<void(Sink &)> writer, fun<void()> eof = []() { throw EndOfFile("coroutine has finished"); });
 
 void writePadding(size_t len, Sink & sink);
 void writeString(std::string_view s, Sink & sink);

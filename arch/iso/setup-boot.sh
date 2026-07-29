@@ -177,9 +177,11 @@ EOF
 # against a fresh db without upgrading it would ship gen1 as a partial
 # upgrade. nixgen-setup's extra deps (grub, dosfstools) install on
 # demand there, not into every generation; trailing libs = runtime
-# deps of import-dir/libnixstore
+# deps of import-dir/libnixstore, which is now sqlite alone: libcrypto
+# comes with base, and boost-libs went when sinkToSource did (boost is
+# header-only here, so nothing links libboost_context any more)
 pacman -Syu --noconfirm --needed linux mkinitcpio squashfs-tools diffutils \
-	boost-libs sqlite
+	sqlite
 # cached downloads are not system state (nixgen-update/-commit scrub the
 # same); already-compressed .zst does not squash, shipping it bloats the ISO
 rm -rf /var/cache/pacman/pkg/*

@@ -46,11 +46,12 @@ configdata_pub.set(
 
 subdir('nix-meson-build-support/libatomic')
 
+# header-only: every boost facility this library uses (lexical_cast,
+# format, container_hash, container::small_vector,
+# unordered::concurrent_flat_map) is headers. The 'context' module was
+# here for boost::coroutine2, whose only consumer was sinkToSource.
 boost = dependency(
   'boost',
-  modules : [
-    'context',
-  ],
   include_type : 'system',
   version : '>=1.87.0',
 )

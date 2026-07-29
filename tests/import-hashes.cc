@@ -2,10 +2,14 @@
 // AsyncFileHasher re-implements the single-file NAR framing; if it ever
 // drifts from what hashPath() computes from disk, optimisePath() farms
 // files under wrong keys and dedup silently degrades. Pin it: every
-// captured hash must equal a from-disk rehash of the restored file,
-// capture must cover exactly the regular files (symlinks/dirs absent),
-// and a capture-driven optimise must link duplicates and leave empty
-// files alone.
+// captured hash must equal a from-disk rehash of the restored node,
+// capture must cover exactly the regular files and symlinks (dirs
+// absent), and a capture-driven optimise must link duplicates and
+// leave empty files alone.
+// Symlinks are in the map so optimisePath does not have to rehash them
+// from disk, which costs an O_NOFOLLOW open that takes ELOOP plus a
+// reopen of the parent and a readlink. Their framing is hand-written
+// in AsyncFileHasher::symlink and the rehash below is what pins it.
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -74,7 +78,10 @@ int main(int argc, char ** argv)
 	std::string contentA(300, 'a'), contentB(300, 'b');
 
 	/* every shape the capture must handle: nested regulars, an
-	   executable, empty files, an in-tree duplicate, a symlink */
+	   executable, empty files, an in-tree duplicate, and symlinks --
+	   a short target, a long one (past the 60-byte ext4 fast-symlink
+	   boundary), a dangling one, and two that share a target so the
+	   farm has to collapse them */
 	auto acc = make_ref<MemorySourceAccessor>();
 	acc->addFile(CanonPath("top"), std::string(contentA));
 	acc->addFile(CanonPath("d1/d2/deep"), std::string(contentA)); // dup of top
@@ -84,19 +91,32 @@ int main(int argc, char ** argv)
 	acc->addFile(CanonPath("empty1"), "");
 	acc->addFile(CanonPath("d1/empty2"), "");
 	acc->open(CanonPath("link"), File{File::Symlink{.target = "top"}});
+	acc->open(CanonPath("d1/longlink"),
+		File{File::Symlink{.target = std::string(200, 'x')}});
+	acc->open(CanonPath("d1/dangling"),
+		File{File::Symlink{.target = "/nowhere/at/all"}});
+	acc->open(CanonPath("d1/samelink"), File{File::Symlink{.target = "top"}});
 
 	LocalStore::ImportFileHashes fileHashes;
 	auto path = importTree(local, acc, "hashtest", fileHashes);
 	auto realPath = local->toRealPath(path);
 
-	/* capture covers exactly the regular files */
+	/* capture covers exactly the regular files and the symlinks */
 	std::set<std::string> expectedKeys{
-		"/top", "/d1/d2/deep", "/d1/unique", "/bin/tool", "/empty1", "/d1/empty2"};
+		"/top", "/d1/d2/deep", "/d1/unique", "/bin/tool", "/empty1", "/d1/empty2",
+		"/link", "/d1/longlink", "/d1/dangling", "/d1/samelink"};
 	std::set<std::string> gotKeys;
 	for (auto & [k, h] : fileHashes.files)
 		gotKeys.insert(k);
-	ok(gotKeys == expectedKeys, "capture keys are exactly the regular files",
+	ok(gotKeys == expectedKeys, "capture keys are the regular files and symlinks",
 		fmt("got %d keys", gotKeys.size()));
+
+	/* two symlinks with the same target must hash the same, a
+	   different target must not: the framing has to actually depend on
+	   the target and on nothing else */
+	ok(fileHashes.files.at("/link") == fileHashes.files.at("/d1/samelink")
+			&& fileHashes.files.at("/link") != fileHashes.files.at("/d1/longlink"),
+		"symlink digests track the target");
 
 	/* the drift guard: captured hash == from-disk rehash, per file */
 	unsigned mismatches = 0;
@@ -113,11 +133,14 @@ int main(int argc, char ** argv)
 	ok(mismatches == 0, "captured hashes equal from-disk NAR hashes",
 		fmt("%d mismatches", mismatches));
 
-	/* capture-driven optimise: the one in-tree duplicate gets linked
-	   (first occurrence becomes the farm copy, not counted) */
+	/* capture-driven optimise: the in-tree duplicates get linked (first
+	   occurrence of each becomes the farm copy and is not counted), so
+	   d1/d2/deep against top and d1/samelink against link. The symlink
+	   half is what proves the captured symlink digests are usable as
+	   farm keys and not merely equal to hashPath's. */
 	OptimiseStats stats;
 	local->optimisePath(path, stats, &fileHashes);
-	ok(stats.filesLinked == 1, "optimise links the in-tree duplicate",
+	ok(stats.filesLinked == 2, "optimise links the duplicate file and symlink",
 		fmt("linked %d", stats.filesLinked));
 
 	/* empty files stay unlinked: distinct inodes, no farm entry */

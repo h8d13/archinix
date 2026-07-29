@@ -15,7 +15,9 @@
 #include "nix/util/url.hh"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
+#include <random>
 
 #include <condition_variable>
 #include <deque>
@@ -825,8 +827,19 @@ static bool hashingThreadPaysOff()
    twice (whole-NAR digest for the store path, per-file digests for
    dedup); this takes one of them off the restore's critical path.
    Bounded queue so a fast producer cannot balloon memory. Hashes
-   inline on single-core machines. */
-class AsyncHashSink : public Sink
+   inline on single-core machines.
+
+   Buffered, for the reason sourceToSink is: this sink is fed by the
+   TeeSource the *restore* reads through, and parseDump reads the NAR
+   the way it is framed -- an 8 byte length word, a tag, the contents,
+   a padding run, per node. Unbuffered, each of those tiny reads
+   arrived here as its own queue push: an allocation, a mutex and a
+   notify apiece. Measured on a 3.3 GiB driver generation: 1,740,668
+   pushes averaging 2005 bytes, against 193,620 at 18 KB on the
+   per-file hasher next to it. The dump direction got this fix when
+   sourceToSink learned to buffer; the restore direction reads through
+   the same shape and never did. */
+class AsyncHashSink : public BufferedSink
 {
     HashSink inner;
     bool threaded;
@@ -834,6 +847,14 @@ class AsyncHashSink : public Sink
     std::mutex mtx;
     std::condition_variable cvPush, cvPop;
     std::deque<std::string> chunks;
+    /* Spent buffers, handed back by the worker for the producer to
+       refill: at 32-64 KiB a chunk, a multi-GiB import is otherwise
+       hundreds of thousands of allocate/free pairs. sourceToSink was
+       rebuilt around exactly this and the reasoning transfers whole. A
+       LIFO because any spare buffer will do, and bounded by maxQueued
+       + 1 because that is how many exist. */
+    std::vector<std::string> free_;
+    std::string producing;
     bool closed = false;
     std::exception_ptr failure;
     static constexpr size_t maxQueued = 64;
@@ -871,19 +892,28 @@ public:
                     }
                 }
                 lk.lock();
+                chunk.clear();
+                free_.push_back(std::move(chunk));
             }
         });
     }
 
-    void operator()(std::string_view data) override
+    void writeUnbuffered(std::string_view data) override
     {
         if (!threaded) {
             inner(data);
             return;
         }
+        /* filled outside the lock; the producer owns this buffer */
+        producing.assign(data);
         std::unique_lock lk(mtx);
         cvPop.wait(lk, [&] { return chunks.size() < maxQueued; });
-        chunks.emplace_back(data);
+        chunks.push_back(std::move(producing));
+        if (!free_.empty()) {
+            producing = std::move(free_.back());
+            free_.pop_back();
+        } else
+            producing.clear();
         /* The worker only ever waits after observing an empty queue
            under this mutex, so a push that leaves the queue non-empty
            by more than itself cannot have raced one to sleep. */
@@ -906,6 +936,9 @@ public:
 
     HashResult finish()
     {
+        /* the tail of the stream is still in the buffer; the worker
+           has to digest it before the queue is closed */
+        flush();
         close();
         if (failure)
             std::rethrow_exception(failure);
@@ -915,6 +948,9 @@ public:
     ~AsyncHashSink()
     {
         try {
+            /* ~BufferedSink asserts on an unflushed buffer, so this
+               has to run even on the error path */
+            flush();
             close();
         } catch (...) {
             ignoreExceptionInDestructor();
@@ -940,9 +976,11 @@ class AsyncFileHasher
             Size, /* size = contents length */
             Data, /* data = contents chunk */
             End,
+            Symlink, /* data = map key, target = link target */
         } tag;
 
         std::string data;
+        std::string target;
         uint64_t size = 0;
     };
 
@@ -952,12 +990,20 @@ class AsyncFileHasher
        the farm if its content is already there (streaming dedup) */
     const std::filesystem::path * dedupRoot;
     const std::filesystem::path * linksDir;
+    /* the store root, parent of the farm: where tryDedup's temp link
+       goes, so it can never collide with a name inside the tree being
+       restored */
+    std::filesystem::path storeRootPath;
+    const std::filesystem::path * storeRoot = nullptr;
 
     bool threaded;
     std::thread worker;
     std::mutex mtx;
     std::condition_variable cvPush, cvPop;
     std::deque<Ev> events;
+    /* recycled data buffers; see AsyncHashSink */
+    std::vector<std::string> free_;
+    std::string producing;
     bool closed = false;
     std::exception_ptr failure;
     static constexpr size_t maxQueued = 64;
@@ -968,6 +1014,9 @@ class AsyncFileHasher
     std::string key;
     std::unique_ptr<HashSink> hash;
     uint64_t size = 0;
+    /* every content byte the import has hashed, across all files:
+       what keeps the counter moving through a single large blob */
+    uint64_t bytesDone = 0;
 
     void begin(std::string k)
     {
@@ -990,6 +1039,11 @@ class AsyncFileHasher
     void data(std::string_view d)
     {
         (*hash)(d);
+        bytesDone += d.size();
+        /* throttled to one repaint per 80 ms inside progressTick, and
+           a cached isTTY() check off a terminal, so this is cheap
+           enough to call per chunk */
+        progressTick("importing", out.files.size(), 0, bytesDone);
     }
 
     void end()
@@ -1002,18 +1056,19 @@ class AsyncFileHasher
         hash.reset();
         /* the NAR is a stream with no length known up front, so this
            is a bare count; the caller's summary has the totals */
-        progressTick("importing", out.files.size());
+        progressTick("importing", out.files.size(), 0, bytesDone);
     }
 
-    /* The file just restored is complete and NAR restores are
-       sequential, so nothing touches it again: if the link farm holds
-       its content (same NAR hash, so the execute bit matches too),
-       swap the fresh copy for a hard link via link+rename and give the
-       data pages back. The later canonicalise/optimise passes see a
-       farm inode that is already canonical (0444/0555, mtime 1) and
-       apply the same values. Opportunistic: any failure leaves the
-       copy for optimisePath() to farm; never throws into the import.
-       Empty files are skipped, same rule (and reason) as optimise. */
+    /* The restore has finished this file (the caller queues End only
+       after the sink flushed and stamped it), so nothing touches it
+       again: if the link farm holds its content (same NAR hash, so the
+       execute bit matches too), swap the fresh copy for a hard link via
+       link+rename and give the data pages back. The later
+       canonicalise/optimise passes see a farm inode that is already
+       canonical (0444/0555, mtime 1) and apply the same values.
+       Opportunistic: any failure leaves the copy for optimisePath() to
+       farm; never throws into the import. Empty files are skipped, same
+       rule (and reason) as optimise. */
     void tryDedup(const Hash & h)
     {
         if (!dedupRoot || !linksDir || size == 0)
@@ -1027,11 +1082,31 @@ class AsyncFileHasher
                 return;
             std::filesystem::path file{
                 dedupRoot->native() + (key == "/" ? std::string() : key)};
-            std::filesystem::path tmp{file.native() + ".dedup~"};
+            /* The temp link goes in the store root, never beside the
+               file: "<file>.dedup~" is a name the imported tree may
+               itself contain, and then this link races the restore
+               thread's O_CREAT|O_EXCL for it and whichever loses aborts
+               the whole import. It would also leave junk *inside* a
+               store path if we died between link and rename, which
+               breaks that path's hash. optimisePath_ places its own
+               temp link in the store root for exactly these reasons. */
+            static std::atomic<uint32_t> tmpCounter(std::random_device{}());
+            /* getpid() is a real syscall since glibc 2.25 dropped its
+               cache, and it cannot change under us: resolve once. */
+            static const std::string tmpPart =
+                "/.tmp-dedup-" + std::to_string(getpid()) + "-";
+            std::filesystem::path tmp{
+                storeRoot->native() + tmpPart
+                + std::to_string(tmpCounter.fetch_add(1, std::memory_order_relaxed))};
             if (::link(link.c_str(), tmp.c_str()) == -1)
                 return;
             if (::rename(tmp.c_str(), file.c_str()) == -1) {
-                ::unlink(tmp.c_str());
+                /* A leftover temp link is inert in the store root, but
+                   it is still a leak and it means the rename failed for
+                   a reason worth hearing about: the mode/mtime ordering
+                   trap this code has hit before shows up here first. */
+                if (::unlink(tmp.c_str()) == -1)
+                    warn("dedup: cannot unlink %s: %s", PathFmt(tmp), strerror(errno));
                 return;
             }
             out.dedupedFiles++;
@@ -1041,11 +1116,37 @@ class AsyncFileHasher
         }
     }
 
+    /* A symlink's NAR is its target and nothing else, so its digest is
+       a dozen bytes of framing rather than a content read. Capturing it
+       here is what lets optimisePath look symlinks up in the map like
+       regular files. Without it every symlink fell through to
+       hashPath(), which opens the path O_NOFOLLOW, takes the ELOOP, then
+       reopens the parent by full absolute path and readlinks: three
+       syscalls and two allocations per symlink, and a store tree is
+       roughly a quarter symlinks. Framing must match dumpPath's symlink
+       branch exactly (archive.cc), or the farm gets entries filed under
+       hashes that do not describe them. */
+    void symlink(std::string k, const std::string & target)
+    {
+        HashSink h{HashAlgorithm::SHA256};
+        h << narVersionMagic1 << "(" << "type" << "symlink" << "target" << target << ")";
+        out.files.insert_or_assign(std::move(k), h.finish().hash);
+        out.symlinks++;
+    }
+
     void push(Ev ev)
     {
         std::unique_lock lk(mtx);
         cvPop.wait(lk, [&] { return events.size() < maxQueued; });
         events.push_back(std::move(ev));
+        /* Refill the producer's scratch buffer from whatever the worker
+           has handed back. Only Data events use it, but doing it on
+           every push keeps one code path and costs a branch. */
+        if (!free_.empty()) {
+            producing = std::move(free_.back());
+            free_.pop_back();
+        } else
+            producing.clear();
         /* See AsyncHashSink: wake only on the empty -> non-empty edge.
            This queue carries ~4 metadata events per file on top of the
            data chunks, so the elided wakes are most of them. */
@@ -1088,12 +1189,22 @@ class AsyncFileHasher
                     case Ev::End:
                         end();
                         break;
+                    case Ev::Symlink:
+                        symlink(std::move(ev.data), ev.target);
+                        break;
                     }
                 } catch (...) {
                     failure = std::current_exception();
                 }
             }
             lk.lock();
+            /* hand the data buffer back for the producer to refill;
+               done on the drain-after-failure path too, or the pool
+               bleeds out exactly when the queue is busiest */
+            if (ev.tag == Ev::Data) {
+                ev.data.clear();
+                free_.push_back(std::move(ev.data));
+            }
         }
     }
 
@@ -1107,17 +1218,24 @@ public:
         , linksDir(linksDir)
         , threaded(hashingThreadPaysOff())
     {
+        if (linksDir) {
+            storeRootPath = linksDir->parent_path();
+            storeRoot = &storeRootPath;
+        }
         if (threaded)
             worker = std::thread([this] { run(); });
     }
 
-    /* Symlinks carry no content, so they never enter the event queue,
-       but optimisePath() links them and its progress total counts
-       them. Called from the restore thread, which is the only writer
-       of this member. */
-    void countSymlink()
+    /* Symlinks carry no content to stream, but they do carry a digest
+       (over the target), and optimisePath() links them like any other
+       node. Routed through the queue rather than recorded inline
+       because `out` is worker-owned once the thread is running. */
+    void fileSymlink(std::string k, const std::string & target)
     {
-        out.symlinks++;
+        if (threaded)
+            push({Ev::Symlink, std::move(k), target});
+        else
+            symlink(std::move(k), target);
     }
 
     void fileBegin(std::string k)
@@ -1139,16 +1257,19 @@ public:
     void fileSize(uint64_t s)
     {
         if (threaded)
-            push({Ev::Size, {}, s});
+            push({Ev::Size, {}, {}, s});
         else
             setSize(s);
     }
 
     void fileData(std::string_view d)
     {
-        if (threaded)
-            push({Ev::Data, std::string(d)});
-        else
+        if (threaded) {
+            /* filled outside the lock into a buffer the producer owns;
+               push() hands back a spent one to take its place */
+            producing.assign(d);
+            push({Ev::Data, std::move(producing)});
+        } else
             data(d);
     }
 
@@ -1223,8 +1344,8 @@ struct FileHashingSink : FileSystemObjectSink
 
     void createSymlink(const CanonPath & path, const std::string & target) override
     {
-        hasher.countSymlink();
         inner.createSymlink(path, target);
+        hasher.fileSymlink((prefix / path).abs(), target);
     }
 
     void createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)> func) override
@@ -1263,8 +1384,16 @@ struct FileHashingSink : FileSystemObjectSink
             } hcrf{crf, hasher};
             hasher.fileBegin((prefix / path).abs());
             func(hcrf);
-            hasher.fileEnd();
         });
+        /* End goes here, NOT inside the callback: RestoreSink does its
+           flush, fchmod and futimens after the callback returns, so
+           queueing End from inside let the hasher's streamed dedup
+           link+rename over a file whose tail was still in the FdSink
+           buffer. That was survivable only because everything after
+           func() is fd-relative and so landed harmlessly on the
+           orphaned inode. Out here the file really is finished, which
+           is what tryDedup's comment claims. */
+        hasher.fileEnd();
     }
 };
 
@@ -1303,7 +1432,7 @@ static void restorePathCapturingHashes(
        canonicalises the root once it reaches its final path */
     for (auto & dir : dirs) {
         chmod(dir, 0755);
-        setWriteTime(dir, 1, 1, false); /* mtimeStore */
+        setWriteTime(dir, mtimeStore, mtimeStore, false);
     }
 }
 
@@ -1357,10 +1486,15 @@ StorePath LocalStore::addToStoreFromDump(
     /* Fill out buffer, and decide whether we are working strictly in
        memory based on whether we break out because the buffer is full
        or the original source is empty */
+    /* Grow geometrically rather than in fixed 64 KiB steps: a rootfs
+       NAR always runs this to the full narBufferSize, and stepping
+       there took ~512 reallocs of a buffer that spends most of its life
+       above the mmap threshold. Doubling gets there in ~9. */
+    size_t chunkSize = 65536;
     while (dump.size() < localSettings.narBufferSize) {
         auto oldSize = dump.size();
-        constexpr size_t chunkSize = 65536;
         auto want = std::min(chunkSize, localSettings.narBufferSize - oldSize);
+        chunkSize = std::min(chunkSize * 2, localSettings.narBufferSize);
         if (auto tmp = realloc(dumpBuffer.get(), oldSize + want)) {
             dumpBuffer.release();
             dumpBuffer.reset((char *) tmp);
@@ -1511,18 +1645,24 @@ std::pair<std::filesystem::path, AutoCloseFD> LocalStore::createTempDirInStore()
     std::filesystem::path tmpDirFn;
     AutoCloseFD tmpDirFd;
     bool lockedByUs = false;
-    do {
-        /* There is a slight possibility that `tmpDir' gets deleted by
-           the GC between createTempDir() and when we acquire a lock on it.
-           We'll repeat until 'tmpDir' exists and we've locked it.
-           Make the directory accessible only to the current user. */
+    /* The retry exists for one race (the GC deleting the dir between
+       creating and locking it), which resolves on the next pass. Any
+       other failure is persistent, and an unbounded `continue` on it
+       spins a core forever instead of reporting: a read-only store,
+       EMFILE, or a store dir we cannot enter all reach here. Bound it,
+       and let the last errno explain. */
+    for (unsigned attempt = 0;; attempt++) {
+        if (attempt == 64)
+            throw SysError("creating a temporary directory in %1%",
+                PathFmt(config->realStoreDir));
         tmpDirFn = createTempDir(std::filesystem::path{config->realStoreDir}, "tmp", /*mode=*/0700);
         tmpDirFd = openDirectory(tmpDirFn, FinalSymlink::DontFollow);
-        if (!tmpDirFd) {
+        if (!tmpDirFd)
             continue;
-        }
         lockedByUs = lockFile(tmpDirFd.get(), ltWrite, true);
-    } while (!pathExists(tmpDirFn) || !lockedByUs);
+        if (pathExists(tmpDirFn) && lockedByUs)
+            break;
+    }
     return {tmpDirFn, std::move(tmpDirFd)};
 }
 

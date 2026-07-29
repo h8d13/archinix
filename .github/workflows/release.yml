@@ -34,7 +34,7 @@ jobs:
           # releases. libsodium/libarchive/brotli/libseccomp belonged
           # to cut upstream subsystems (signing, fetchers, compression,
           # build sandbox)
-          pacman --noconfirm --needed -Syu git meson ninja gcc pkgconf boost boost-libs \
+          pacman --noconfirm --needed -Syu git meson ninja gcc pkgconf boost \
             openssl zstd nlohmann-json sqlite curl \
             grub xorriso mtools github-cli
           # container root has no subuid range; without one bootstrap.sh
