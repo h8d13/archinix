@@ -203,9 +203,6 @@ sources = files(
 
 subdir('include/nix/store')
 
-subdir('linux')
-subdir('unix')
-
 this_library = library(
   'nixstore',
   generated_headers,

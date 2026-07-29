@@ -35,7 +35,6 @@ headers = [ config_pub_h ] + files(
   'lru-cache.hh',
   'memory-source-accessor.hh',
   'os-string.hh',
-  'processes.hh',
   'progress.hh',
   'ref.hh',
   'repair-flag.hh',
@@ -53,7 +52,6 @@ headers = [ config_pub_h ] + files(
   'topo-sort.hh',
   'types.hh',
   'url.hh',
-  'users.hh',
   'util.hh',
   'variant-wrapper.hh',
 )

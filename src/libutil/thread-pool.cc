@@ -86,7 +86,7 @@ void ThreadPool::doWork(bool mainThread)
     ReceiveInterrupts receiveInterrupts;
 
     if (!mainThread)
-        unix::interruptCheck = [&]() { return (bool) quit; };
+        interruptCheck = [&]() { return (bool) quit; };
 
     bool didWork = false;
     std::exception_ptr exc;

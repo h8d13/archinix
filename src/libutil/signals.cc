@@ -12,11 +12,11 @@ void Interrupted::anchor() {}
 
 void Cancelled::anchor() {}
 
-std::atomic<bool> unix::_isInterrupted = false;
+std::atomic<bool> _isInterrupted = false;
 
-thread_local std::function<bool()> unix::interruptCheck;
+thread_local std::function<bool()> interruptCheck;
 
-void unix::_interrupted()
+void _interrupted()
 {
     /* Block user interrupts while an exception is being handled.
        Throwing an exception while another exception is being handled
@@ -57,9 +57,11 @@ static Sync<InterruptCallbacks> & getInterruptCallbacks()
     return *_interruptCallbacks;
 }
 
+/* Only the signal handler thread raises interrupts. */
+static void triggerInterrupt();
+
 static void signalHandlerThread(sigset_t set)
 {
-    using namespace nix::unix;
     while (true) {
         int signal = 0;
         sigwait(&set, &signal);
@@ -69,7 +71,7 @@ static void signalHandlerThread(sigset_t set)
     }
 }
 
-void unix::triggerInterrupt()
+static void triggerInterrupt()
 {
     _isInterrupted = true;
 
@@ -96,7 +98,7 @@ void unix::triggerInterrupt()
     }
 }
 
-void unix::startSignalHandlerThread()
+void startSignalHandlerThread()
 {
     sigset_t set;
     sigemptyset(&set);

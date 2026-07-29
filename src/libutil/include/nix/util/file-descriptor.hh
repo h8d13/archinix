@@ -232,15 +232,10 @@ public:
     void close();
 };
 
-namespace unix {
-
 /**
  * Set the close-on-exec flag for the given file descriptor.
  */
 void closeOnExec(Descriptor fd);
-
-
-} // namespace unix
 
 MakeError(EndOfFile, Error);
 

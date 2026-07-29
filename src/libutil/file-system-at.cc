@@ -24,7 +24,6 @@
 namespace nix {
 
 
-namespace linux {
 
 std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t flags, uint64_t mode, uint64_t resolve)
 {
@@ -56,10 +55,9 @@ std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t
     return std::nullopt;
 }
 
-} // namespace linux
 
 
-void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t mode)
+void fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t mode)
 {
     assert(!path.isRoot());
 
@@ -261,7 +259,7 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
        default to not including it. */
     auto flagsAdj = (flags & O_PATH) && !(flags & O_DIRECTORY) ? flags | O_NOFOLLOW : flags;
 
-    if (auto maybeFd = linux::openat2(
+    if (auto maybeFd = openat2(
             dirFd, path.rel_c_str(), flagsAdj, static_cast<uint64_t>(mode), RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)) {
         if (!*maybeFd && errno == NIX_ERR_OPEN_SYMLINK)
             throw SymlinkNotAllowed(path);

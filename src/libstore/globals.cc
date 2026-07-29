@@ -29,7 +29,7 @@ void initLibStore()
     /* Without this nothing ever sets the interrupt flag, so every
        checkInterrupt() on the import/gc/optimise paths is a no-op and
        Ctrl-C kills the process mid-write instead of unwinding. */
-    unix::startSignalHandlerThread();
+    startSignalHandlerThread();
 
     initLibStoreDone = true;
 }

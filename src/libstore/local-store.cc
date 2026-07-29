@@ -9,7 +9,6 @@
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/fs-sink.hh"
-#include "nix/util/users.hh"
 #include "nix/util/progress.hh"
 #include "nix/store/store-open.hh"
 #include "nix/util/url.hh"
@@ -1432,7 +1431,7 @@ static void restorePathCapturingHashes(
        canonicalises the root once it reaches its final path */
     for (auto & dir : dirs) {
         chmod(dir, 0755);
-        setWriteTime(dir, mtimeStore, mtimeStore, false);
+        setWriteTime(dir, mtimeStore, mtimeStore);
     }
 }
 

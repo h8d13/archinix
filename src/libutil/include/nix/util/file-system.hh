@@ -230,11 +230,7 @@ void createDirs(const std::filesystem::path & path);
  * `std::optional` is passed, the information will be recomputed if it
  * is needed. Race conditions are possible so be careful!
  */
-void setWriteTime(
-    const std::filesystem::path & path,
-    time_t accessedTime,
-    time_t modificationTime,
-    std::optional<bool> isSymlink = std::nullopt);
+void setWriteTime(const std::filesystem::path & path, time_t accessedTime, time_t modificationTime);
 
 /**
  * Convenience wrapper that takes all arguments from the `PosixStat`.
