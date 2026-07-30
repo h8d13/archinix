@@ -707,7 +707,7 @@ metric.
   queries, but once per import, not per file. The first exists to avoid
   taking PathLocks and is doing its job.
 
-## boost: audited, and the answer is nowhere but one map
+## boost: audited, and the answer is nowhere
 
 Two independent audits (one linear, one a 13-agent fan-out over 97
 inventoried sites) reached the same verdict on the four hand-rolled
@@ -741,64 +741,8 @@ get relitigated:
   libcrypto call at hash.cc:310.
 
 Where the fork already uses boost (concurrent_flat_set for InodeHash,
-unordered_flat_map for ImportFileHashes, container::small_vector) those
-are cases with no std equivalent and a real algorithmic win. The queues
-are not. (gc's unordered_flat_map went out with the 313 lines cb3bfb2
-deleted: generations are reference-free, so collectGarbage is one
-decision per path and the roots/dead/alive sets and referrersCache it
-held have no graph left to walk.)
-
-Three later additions, so the sweep above is not read as complete:
-
-- DedupSwapPool (local-store.cc) postdates the audit and is the fifth
-  concurrency site. It closes on the same reasoning: promoted at one
-  thread, so it is SPSC in practice, and its Job holds a
-  std::filesystem::path plus a std::string, which is the non-trivial
-  destructor lockfree::queue rejects outright.
-- boost::circular_buffer for the std::deque *inside* the queue mutex,
-  which the sweep never considered (it keeps the condvars, so no
-  semantic loss). std::deque does churn at the shape these use, 1 node
-  alloc per 16 push/pop pairs at the 512 B chunk boundary. Measured at
-  64 slots with a std::string payload, min of 5 interleaved: deque
-  468.79 ns/round, circular_buffer 462.45. 6.34 ns against ~30 us of
-  SHA-256 for that chunk, ~0.7 ms over a 3.3 GiB import. Not worth a
-  dependency on a container.
-- PROMOTED: ImportFileHashes::files, std::map -> unordered_flat_map
-  (local-store.hh). The one boost add that survived. Keys are
-  CanonPath::abs() full paths sharing deep prefixes, the case a tree
-  handles worst since each node comparison memcmps through the common
-  part before diverging; only find() and size() are ever called
-  (optimise-store.cc:247,463), so no traversal observes an order.
-  Fill+lookup, min of 5, 40 B value matching nix::Hash:
-
-    entries    std::map    flat_map+reserve   mem delta   time delta
-     50,000    8.14 MiB       7.46 MiB          -8.3%       -84%
-    100,000   16.32 MiB      14.97 MiB          -8.3%       -82%
-    144,925   23.74 MiB      26.49 MiB         +11.6%       -78%
-    300,000   49.32 MiB      53.82 MiB          +9.1%       -68%
-
-  Memory is a wash, not a cost: open addressing trades the tree's
-  per-node overhead against empty slots, and which wins depends on
-  where the file count falls between rehash doublings. Measuring one
-  size only (144,925, just past a doubling) reads as a +12% regression
-  and is the worst case, not the trend. reserve() makes peak equal
-  live; without it the grow-and-copy spike is the one real cost, worst
-  observed +37% peak at 144,925. That matters because this is the
-  struct the memory section above names as the commit's only O(tree)
-  structure.
-
-  End-to-end it is below the noise floor and should not be claimed
-  otherwise. Interleaved A/B, 8 pairs, /usr/include (577 MiB, 45,385
-  files), separate binaries per side since the layout change breaks
-  ABI: import (capture on) +2.7%, optimise (capture on) +0.0%. The
-  capture-off rows are the control, and they moved -4.0% and +16.5%
-  on a change that cannot touch them: optimise (capture off) spans
-  0.399-0.593 pre against 0.465-0.645 post, overlapping. The container
-  work is ~22 ms of a ~1.8 s import+optimise, so ~1.2%, under a floor
-  that is ±6% at best on import and far worse on that optimise row.
-  Taken on the microbenchmark and the algorithmic argument, with
-  linked/freed identical on both sides (935 files, 3.8 MiB) and the
-  full test suite passing, not on a measured wall-clock win.
+unordered_flat_map in gc, container::small_vector) those are cases with
+no std equivalent and a real algorithmic win. The queues are not.
 
 The structural reason none of it matters: one SHA-256 pass over a 3.3
 GiB tree is 1.709 s of a ~2.2 s import, the two passes already run
