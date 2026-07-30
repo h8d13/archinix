@@ -1,9 +1,9 @@
 # Boost, headers only.
 #
-# Every boost facility this repo uses is header-only: lexical_cast,
-# format, container_hash, container::small_vector, and
-# unordered::{unordered,concurrent}_flat_{map,set}. Nothing links against
-# a libboost_*.
+# Every boost facility this repo uses is header-only: lexical_cast
+# (util.cc), format (fmt.hh, logging.hh), container::small_vector
+# (strings.hh), and unordered::{unordered_flat_map,concurrent_flat_set}
+# (local-store.hh). Nothing links against a libboost_*.
 #
 # `dependency('boost')` cannot express that. Meson's boost lookup scans
 # for compiled libboost_* files first and returns "not found" if it sees

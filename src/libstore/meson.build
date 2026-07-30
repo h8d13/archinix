@@ -95,8 +95,8 @@ configdata_pub.set(
 
 subdir('nix-meson-build-support/libatomic')
 
-# header-only here too: container::small_vector and container_hash, both
-# used from installed headers (gc-store.hh, local-store.hh)
+# header-only here too: concurrent_flat_set and unordered_flat_map, both
+# used from an installed header (local-store.hh)
 subdir('nix-meson-build-support/boost')
 
 # curl (filetransfer) and seccomp (build sandbox) served only the
