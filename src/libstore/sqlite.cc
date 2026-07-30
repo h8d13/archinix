@@ -182,16 +182,6 @@ SQLiteStmt::Use & SQLiteStmt::Use::apply(std::string_view value, bool notNull)
     return *this;
 }
 
-SQLiteStmt::Use & SQLiteStmt::Use::apply(const unsigned char * data, size_t len, bool notNull)
-{
-    if (notNull) {
-        if (sqlite3_bind_blob(stmt, curArg++, data, len, SQLITE_TRANSIENT) != SQLITE_OK)
-            SQLiteError::throw_(stmt.db, "binding argument");
-    } else
-        bind();
-    return *this;
-}
-
 SQLiteStmt::Use & SQLiteStmt::Use::apply(int64_t value, bool notNull)
 {
     if (notNull) {

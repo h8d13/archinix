@@ -39,7 +39,7 @@ Deps inside the box (installed by [`setup-boot.sh`](./iso/setup-boot.sh))
 | `generation.sh <store-root> <base> <name> [cmd]` | mutate base in an overlay sandbox, import result as new generation |
 | `enter.sh <base> [cmd]` | same sandbox, throwaway: writes evaporate |
 | `rm-path <store-root> <basename>...` | delete generations, disk + db via GC; refuses referenced paths, prunes orphaned `.links`. Never `rm -rf` inside a store |
-| `export-path <store-root> <basename>... > bundle` | stream generations in `nix-store --export` wire format; re-hashes against the db so local corruption cannot spread |
+| `export-path <store-root> <basename>... > bundle` | stream generations as NAR + path + references; re-hashes against the db so local corruption cannot spread |
 | `import-path <store-root> < bundle` | receive a bundle on another machine + dedup; recomputes the CA store path from the received bytes, refuses mismatches |
 | `iso/mkiso.sh <store-root> <base>` | bootable ISO: squashed store + GRUB entry per generation |
 | `iso/mkstoredisk.sh [img] [size] [fs]` | blank store disk (label NIXSTORE); attached, it persists committed generations |

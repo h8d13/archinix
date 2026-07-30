@@ -13,22 +13,6 @@ namespace nix {
 class Store;
 struct StoreDirConfig;
 
-struct SubstitutablePathInfo
-{
-    std::optional<StorePath> deriver;
-    StorePathSet references;
-    /**
-     * 0 = unknown or inapplicable
-     */
-    uint64_t downloadSize;
-    /**
-     * 0 = unknown
-     */
-    uint64_t narSize;
-};
-
-using SubstitutablePathInfos = std::map<StorePath, SubstitutablePathInfo>;
-
 /**
  * Information about a store object.
  *
@@ -44,11 +28,6 @@ struct UnkeyedValidPathInfo
      * may have different store directories.
      */
     std::string storeDir;
-
-    /**
-     * Path to derivation that produced this store object, if known.
-     */
-    std::optional<StorePath> deriver;
 
     /**
      * \todo document this
@@ -72,27 +51,10 @@ struct UnkeyedValidPathInfo
     uint64_t narSize = 0;
 
     /**
-     * Whether the path is ultimately trusted, that is, it's a
-     * derivation output that was built locally.
-     */
-    bool ultimate = false;
-
-    /**
-     * If non-empty, an assertion that the path is content-addressed,
-     * i.e., that the store path is computed from a cryptographic hash
-     * of the contents of the path, plus some other bits of data like
-     * the "name" part of the path. Such a path doesn't need
-     * signatures, since we don't have to trust anybody's claim that
-     * the path is the output of a particular derivation. (In the
-     * extensional store model, we have to trust that the *contents*
-     * of an output path of a derivation were actually produced by
-     * that derivation. In the intensional model, we have to trust
-     * that a particular output path was produced by a derivation; the
-     * path then implies the contents.)
-     *
-     * Ideally, the content-addressability assertion would just be a Boolean,
-     * and the store path would be computed from the name component, 'narHash'
-     * and 'references'. However, we support many types of content addresses.
+     * If set, an assertion that the store path was computed from this
+     * hash of the path's contents, so the store does not have to trust
+     * anybody's claim about where the path came from: it re-derives
+     * the name and compares.
      */
     std::optional<ContentAddress> ca;
 
@@ -106,15 +68,6 @@ struct UnkeyedValidPathInfo
     {
     }
 
-    bool operator==(const UnkeyedValidPathInfo &) const noexcept;
-
-    /**
-     * @todo return `std::strong_ordering` once `id` is removed
-     */
-    std::weak_ordering operator<=>(const UnkeyedValidPathInfo &) const noexcept;
-
-    virtual ~UnkeyedValidPathInfo() {}
-
     /**
      * @param store If non-null, store paths are rendered as full paths.
      *              If null, store paths are rendered as base names.
@@ -124,25 +77,11 @@ struct UnkeyedValidPathInfo
      *               string content addresses. Version 2 uses structured
      *               hashes and structured content addresses.
      */
-private:
-    /* VTable anchor to avoid weak linkage of the vtable - it breaks
-       dynamic_cast across shared libraries on Darwin. */
-    virtual void anchor();
 };
 
-struct ValidPathInfo : virtual UnkeyedValidPathInfo
+struct ValidPathInfo : UnkeyedValidPathInfo
 {
     StorePath path;
-
-    bool operator==(const ValidPathInfo &) const = default;
-    auto operator<=>(const ValidPathInfo &) const = default;
-
-    /**
-     * @return The `ContentAddressWithReferences` that determines the
-     * store path for a content-addressed store object, `std::nullopt`
-     * for an input-addressed store object.
-     */
-    std::optional<ContentAddressWithReferences> contentAddressWithReferences() const;
 
     /**
      * @return true iff the path is verifiably content-addressed.
@@ -160,11 +99,11 @@ struct ValidPathInfo : virtual UnkeyedValidPathInfo
     {
     }
 
-    static ValidPathInfo
-    makeFromCA(const StoreDirConfig & store, std::string_view name, ContentAddressWithReferences && ca, Hash narHash);
-
-private:
-    void anchor() override;
+    /**
+     * The info for a path just imported: its store path follows from
+     * the NAR hash, which is also its content address.
+     */
+    static ValidPathInfo makeFromCA(const StoreDirConfig & store, std::string_view name, Hash narHash);
 };
 
 static_assert(std::is_move_assignable_v<ValidPathInfo>);

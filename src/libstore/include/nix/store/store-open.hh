@@ -7,7 +7,7 @@
  * entry point.
  */
 
-#include "nix/store/store-api.hh"
+#include "nix/store/local-store.hh"
 
 namespace nix {
 
@@ -30,6 +30,6 @@ namespace nix {
  * Writers leave this false: a blank disk gets its store on first
  * import.
  */
-ref<Store> openStore(const std::filesystem::path & root, bool mustExist = false);
+ref<LocalStore> openStore(const std::filesystem::path & root, bool mustExist = false);
 
 } // namespace nix

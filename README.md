@@ -9,7 +9,7 @@ libnixstore) from [NixOS/nix](https://github.com/NixOS/nix)
 > [!NOTE]
 > Remote stores (s3/http/ssh/daemon), the `.drv` realisation machinery (arguably, what an overlay already is; in kernel)
 > are cut: stores hold imported trees only. [`arch/`](arch/) is the shell/C++ glue that retrieves and integrates them
-> with userland. Also removes any support for other platforms than `unix` and `linux`, from build targets.
+> with userland.
 
 Build depends on: `meson`, `ninja`, C++23 compiler:
 

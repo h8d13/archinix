@@ -187,24 +187,18 @@ sources = files(
   'export-import.cc',
   'gc.cc',
   'globals.cc',
-  'local-fs-store.cc',
   'local-store.cc',
-  'misc.cc',
   'optimise-store.cc',
   'path-info.cc',
   'path.cc',
   'pathlocks.cc',
   'posix-fs-canonicalise.cc',
-  'references.cc',
   'sqlite.cc',
   'store-api.cc',
   'store-dir-config.cc',
 )
 
 subdir('include/nix/store')
-
-subdir('linux')
-subdir('unix')
 
 this_library = library(
   'nixstore',

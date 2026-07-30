@@ -3,11 +3,8 @@
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 
-#include "store-config-private.hh"
 
 namespace nix {
-
-std::string nixVersion = PACKAGE_VERSION;
 
 static bool initLibStoreDone = false;
 
@@ -29,7 +26,7 @@ void initLibStore()
     /* Without this nothing ever sets the interrupt flag, so every
        checkInterrupt() on the import/gc/optimise paths is a no-op and
        Ctrl-C kills the process mid-write instead of unwinding. */
-    unix::startSignalHandlerThread();
+    startSignalHandlerThread();
 
     initLibStoreDone = true;
 }

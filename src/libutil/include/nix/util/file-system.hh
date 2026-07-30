@@ -230,11 +230,7 @@ void createDirs(const std::filesystem::path & path);
  * `std::optional` is passed, the information will be recomputed if it
  * is needed. Race conditions are possible so be careful!
  */
-void setWriteTime(
-    const std::filesystem::path & path,
-    time_t accessedTime,
-    time_t modificationTime,
-    std::optional<bool> isSymlink = std::nullopt);
+void setWriteTime(const std::filesystem::path & path, time_t accessedTime, time_t modificationTime);
 
 /**
  * Convenience wrapper that takes all arguments from the `PosixStat`.
@@ -277,8 +273,6 @@ class AutoDelete
     bool del;
     bool recursive;
 public:
-    AutoDelete();
-
     AutoDelete(AutoDelete && x) noexcept
     {
         _path = std::move(x._path);
@@ -397,15 +391,6 @@ bool chmodIfNeeded(const std::filesystem::path & path, mode_t mode, mode_t mask 
  * wrapper) to avoid TOCTOU issues.
  */
 void chmod(const std::filesystem::path & path, mode_t mode);
-
-/**
- * Change ownership of a file, throwing an exception on error.
- *
- * @param path Path to the file to change the ownership for.
- * @param owner New owner user ID.
- * @param group New owner group ID.
- */
-void chown(const std::filesystem::path & path, uid_t owner, gid_t group);
 
 /**
  * Remove a file, throwing an exception on error.

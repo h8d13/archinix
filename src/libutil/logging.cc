@@ -2,143 +2,26 @@
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/terminal.hh"
-#include "nix/util/util.hh"
-#include "nix/util/sync.hh"
 
-#include <atomic>
 #include <sstream>
 
 namespace nix {
 
 LoggerSettings loggerSettings;
 
-
-static thread_local ActivityId curActivity = 0;
-
-ActivityId getCurActivity()
-{
-    return curActivity;
-}
-
-void setCurActivity(const ActivityId activityId)
-{
-    curActivity = activityId;
-}
+Verbosity verbosity = lvlInfo;
 
 /**
- * This is a raw pointer to allow it to leak.
- * Avoids races in activity teardown.
+ * This is a raw pointer to allow it to leak: it outlives every
+ * destructor that might still want to log.
  */
-Logger * logger = makeSimpleLogger(true).release();
+Logger * logger = new Logger();
 
-Logger::~Logger() {}
-
-void Logger::warn(const std::string & msg)
+Logger::Logger()
 {
-    log(lvlWarn, ANSI_WARNING "warning:" ANSI_NORMAL " " + msg);
+    systemd = getEnv("IN_SYSTEMD") == "1";
+    tty = isTTY();
 }
-
-void Logger::writeToStdout(std::string_view s)
-{
-    Descriptor standard_out = getStandardOutput();
-    writeFull(standard_out, s);
-    writeFull(standard_out, "\n");
-}
-
-namespace {
-
-class SimpleLogger : public Logger
-{
-public:
-
-    bool systemd, tty;
-    bool printBuildLogs;
-
-    SimpleLogger(bool printBuildLogs)
-        : printBuildLogs(printBuildLogs)
-    {
-        systemd = getEnv("IN_SYSTEMD") == "1";
-        tty = isTTY();
-    }
-
-    bool isVerbose() override
-    {
-        return printBuildLogs;
-    }
-
-    void log(Verbosity lvl, std::string_view s) override
-    {
-        if (lvl > verbosity)
-            return;
-
-        std::string prefix;
-
-        if (systemd) {
-            char c;
-            switch (lvl) {
-            case lvlError:
-                c = '3';
-                break;
-            case lvlWarn:
-                c = '4';
-                break;
-            case lvlNotice:
-            case lvlInfo:
-                c = '5';
-                break;
-            case lvlTalkative:
-            case lvlChatty:
-                c = '6';
-                break;
-            case lvlDebug:
-            case lvlVomit:
-                c = '7';
-                break;
-            default:
-                c = '7';
-                break; // should not happen, and missing enum case is reported by -Werror=switch-enum
-            }
-            prefix = std::string("<") + c + ">";
-        }
-
-        writeToStderr(prefix + filterANSIEscapes(s, !tty) + "\n");
-    }
-
-    void logEI(const ErrorInfo & ei) override
-    {
-        std::ostringstream oss;
-        showErrorInfo(oss, ei, loggerSettings.showTrace);
-
-        log(ei.level, oss.view());
-    }
-
-    void startActivity(
-        ActivityId act,
-        Verbosity lvl,
-        ActivityType type,
-        const std::string & s,
-        const Fields & fields,
-        ActivityId parent) override
-    {
-        if (lvl <= verbosity && !s.empty())
-            log(lvl, s + "...");
-    }
-
-    void result(ActivityId act, ResultType type, const Fields & fields) override
-    {
-        if (type == resBuildLogLine && printBuildLogs) {
-            auto lastLine = fields[0].s;
-            printError(lastLine);
-        } else if (type == resPostBuildLogLine && printBuildLogs) {
-            auto lastLine = fields[0].s;
-            printError("post-build-hook: " + lastLine);
-        }
-    }
-};
-
-} // namespace
-
-Verbosity verbosity = lvlInfo;
 
 static void writeFullLogging(Descriptor fd, std::string_view s)
 {
@@ -157,38 +40,55 @@ void writeToStderr(std::string_view s)
     writeFullLogging(getStandardError(), s);
 }
 
-std::unique_ptr<Logger> makeSimpleLogger(bool printBuildLogs)
+void Logger::log(Verbosity lvl, std::string_view s)
 {
-    return std::make_unique<SimpleLogger>(printBuildLogs);
-}
+    if (lvl > verbosity)
+        return;
 
-std::atomic<uint64_t> nextId{0};
+    std::string prefix;
 
-static uint64_t getPid()
-{
-    return getpid();
-}
-
-Activity::Activity(
-    Logger & logger,
-    Verbosity lvl,
-    ActivityType type,
-    const std::string & s,
-    const Logger::Fields & fields,
-    ActivityId parent)
-    : logger(logger)
-    , id(nextId++ + (((uint64_t) getPid()) << 32))
-{
-    logger.startActivity(id, lvl, type, s, fields, parent);
-}
-
-Activity::~Activity()
-{
-    try {
-        logger.stopActivity(id);
-    } catch (...) {
-        ignoreExceptionInDestructor();
+    if (systemd) {
+        char c;
+        switch (lvl) {
+        case lvlError:
+            c = '3';
+            break;
+        case lvlWarn:
+            c = '4';
+            break;
+        case lvlNotice:
+        case lvlInfo:
+            c = '5';
+            break;
+        case lvlTalkative:
+        case lvlChatty:
+            c = '6';
+            break;
+        case lvlDebug:
+        case lvlVomit:
+            c = '7';
+            break;
+        default:
+            c = '7';
+            break; // should not happen, and missing enum case is reported by -Werror=switch-enum
+        }
+        prefix = std::string("<") + c + ">";
     }
+
+    writeToStderr(prefix + filterANSIEscapes(s, !tty) + "\n");
+}
+
+void Logger::logEI(const ErrorInfo & ei)
+{
+    std::ostringstream oss;
+    showErrorInfo(oss, ei, loggerSettings.showTrace);
+
+    log(ei.level, oss.view());
+}
+
+void Logger::warn(const std::string & msg)
+{
+    log(lvlWarn, ANSI_WARNING "warning:" ANSI_NORMAL " " + msg);
 }
 
 } // namespace nix

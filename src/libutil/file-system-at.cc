@@ -24,7 +24,6 @@
 namespace nix {
 
 
-namespace linux {
 
 std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t flags, uint64_t mode, uint64_t resolve)
 {
@@ -56,10 +55,9 @@ std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t
     return std::nullopt;
 }
 
-} // namespace linux
 
 
-void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t mode)
+void fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t mode)
 {
     assert(!path.isRoot());
 
@@ -261,7 +259,7 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
        default to not including it. */
     auto flagsAdj = (flags & O_PATH) && !(flags & O_DIRECTORY) ? flags | O_NOFOLLOW : flags;
 
-    if (auto maybeFd = linux::openat2(
+    if (auto maybeFd = openat2(
             dirFd, path.rel_c_str(), flagsAdj, static_cast<uint64_t>(mode), RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)) {
         if (!*maybeFd && errno == NIX_ERR_OPEN_SYMLINK)
             throw SymlinkNotAllowed(path);
@@ -272,7 +270,23 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
     return openFileEnsureBeneathNoSymlinksIterative(dirFd, path, flags, mode, std::move(dirFdCallback));
 }
 
-OsString readLinkAt(Descriptor dirFd, const CanonPath & path)
+void setWriteTimeAt(Descriptor dirFd, const CanonPath & path, time_t accessedTime, time_t modificationTime)
+{
+    struct timespec times[2] = {
+        {
+            .tv_sec = accessedTime,
+            .tv_nsec = 0,
+        },
+        {
+            .tv_sec = modificationTime,
+            .tv_nsec = 0,
+        },
+    };
+    if (utimensat(dirFd, path.rel_c_str(), times, AT_SYMLINK_NOFOLLOW) == -1)
+        throw SysError("changing modification time of %s", PathFmt(descriptorToPath(dirFd) / path.rel()));
+}
+
+std::string readLinkAt(Descriptor dirFd, const CanonPath & path)
 {
     assert(!path.rel().starts_with('/')); /* Just in case the invariant is somehow broken. */
     std::vector<char> buf;
@@ -293,17 +307,6 @@ PosixStat fstat(Descriptor fd)
     PosixStat st;
     if (::fstat(fd, &st)) {
         throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(fd))); });
-    }
-    return st;
-}
-
-PosixStat fstatat(Descriptor dirFd, const std::filesystem::path & path)
-{
-    assert(path.is_relative());
-    assert(!path.empty());
-    PosixStat st;
-    if (::fstatat(dirFd, path.c_str(), &st, AT_SYMLINK_NOFOLLOW)) {
-        throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(dirFd) / path)); });
     }
     return st;
 }

@@ -89,6 +89,25 @@ cp -P "$I"/payload/libnix*.so* /usr/local/lib/
 # documented bare export-path/import-path flow dies at link time
 echo /usr/local/lib > /etc/ld.so.conf.d/nixgen.conf
 ldconfig
+# import-dir raises its writer thread to SCHED_RR (see
+# src/libutil/scheduling.cc). nixgen-commit runs it as root, which
+# already carries CAP_SYS_NICE, so this is not what grants it on a
+# stock box: it declares the requirement on the binary and keeps the
+# real-time path working where root is capability-bounded (a unit with
+# CapabilityBoundingSet, a container). Refusal is not an error, the
+# import runs at normal priority.
+# The cap must survive the store: NAR carries no xattrs, so it is
+# nixgen-savemeta that captures this row and nixgen-restmeta that
+# replays it at boot -- setting it here is what puts it in the manifest.
+# A file capability also means AT_SECURE for this binary, so ld.so
+# ignores LD_LIBRARY_PATH for it: /usr/local/lib has to be in the
+# ld.so cache, which is what the ldconfig above is for.
+if command -v setcap > /dev/null; then
+	setcap cap_sys_nice=ep /usr/local/bin/import-dir ||
+		echo "setcap failed, import-dir will run at normal priority" >&2
+else
+	echo "no setcap (libcap), import-dir will run at normal priority" >&2
+fi
 install -m755 "$I/nixgen-commit" /usr/local/bin/nixgen-commit
 install -m755 "$I/nixgen-remove" /usr/local/bin/nixgen-remove
 install -m755 "$I/nixgen-update" /usr/local/bin/nixgen-update

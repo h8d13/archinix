@@ -1,7 +1,6 @@
 #include <cstring>
 
 #include <openssl/crypto.h>
-#include <openssl/md5.h>
 #include <openssl/sha.h>
 
 #include "nix/util/hash.hh"
@@ -18,21 +17,7 @@ namespace nix {
 
 void BadHash::anchor() {}
 
-void AbstractHashSink::anchor() {}
-
 void HashSink::anchor() {}
-
-const StringSet hashAlgorithms = {"md5", "sha1", "sha256", "sha512"};
-
-const StringSet hashFormats = {"base64", "nix32", "base16", "sri"};
-
-Hash::Hash(HashAlgorithm algo)
-    : algo(algo)
-{
-    hashSize = regularHashSize(algo);
-    assert(hashSize <= maxHashSize);
-    memset(hash, 0, maxHashSize);
-}
 
 bool Hash::operator==(const Hash & h2) const noexcept
 {
@@ -44,46 +29,29 @@ bool Hash::operator==(const Hash & h2) const noexcept
     return true;
 }
 
-std::strong_ordering Hash::operator<=>(const Hash & h) const noexcept
-{
-    if (auto cmp = hashSize <=> h.hashSize; cmp != 0)
-        return cmp;
-    for (unsigned int i = 0; i < hashSize; i++) {
-        if (auto cmp = hash[i] <=> h.hash[i]; cmp != 0)
-            return cmp;
-    }
-    if (auto cmp = algo <=> h.algo; cmp != 0)
-        return cmp;
-    return std::strong_ordering::equivalent;
-}
-
 std::string Hash::to_string(HashFormat hashFormat, bool includeAlgo) const
 {
     std::string s;
     if (hashFormat == HashFormat::SRI || includeAlgo) {
-        s += printHashAlgo(algo);
+        s += hashAlgoName;
         s += hashFormat == HashFormat::SRI ? '-' : ':';
     }
+    assert(hashSize);
     const auto bytes = std::as_bytes(std::span<const uint8_t>{&hash[0], hashSize});
     switch (hashFormat) {
     case HashFormat::Base16:
-        assert(hashSize);
         s += base16::encode(bytes);
         break;
     case HashFormat::Nix32:
-        assert(hashSize);
         s += BaseNix32::encode(bytes);
         break;
     case HashFormat::Base64:
     case HashFormat::SRI:
-        assert(hashSize);
         s += base64::encode(bytes);
         break;
     }
     return s;
 }
-
-Hash Hash::dummy(HashAlgorithm::SHA256);
 
 namespace {
 
@@ -96,51 +64,32 @@ struct DecodeNamePair
 
 } // namespace
 
-static DecodeNamePair baseExplicit(HashFormat format)
-{
-    switch (format) {
-    case HashFormat::Base16:
-        return {base16::decode, "base16"};
-    case HashFormat::Nix32:
-        return {BaseNix32::decode, "nix32"};
-    case HashFormat::Base64:
-        return {base64::decode, "Base64"};
-    case HashFormat::SRI:
-        break;
-    }
-    unreachable();
-}
-
 /**
- * Given the expected size of the message once decoded it, figure out
+ * Given the expected size of the message once decoded, figure out
  * which encoding we are using by looking at the size of the encoded
  * message.
  */
-static HashFormat baseFromSize(std::string_view rest, HashAlgorithm algo)
+static DecodeNamePair baseFromSize(std::string_view rest)
 {
-    auto hashSize = regularHashSize(algo);
+    if (rest.size() == base16::encodedLength(hashSizeSha256))
+        return {base16::decode, "base16"};
 
-    if (rest.size() == base16::encodedLength(hashSize))
-        return HashFormat::Base16;
+    if (rest.size() == BaseNix32::encodedLength(hashSizeSha256))
+        return {BaseNix32::decode, "nix32"};
 
-    if (rest.size() == BaseNix32::encodedLength(hashSize))
-        return HashFormat::Nix32;
+    if (rest.size() == base64::encodedLength(hashSizeSha256))
+        return {base64::decode, "base64"};
 
-    if (rest.size() == base64::encodedLength(hashSize))
-        return HashFormat::Base64;
-
-    throw BadHash("hash '%s' has wrong length for hash algorithm '%s'", rest, printHashAlgo(algo));
+    throw BadHash("hash '%s' has wrong length for hash algorithm '%s'", rest, hashAlgoName);
 }
 
 /**
- * Given the exact decoding function, and a display name for in error
- * messages.
- *
- * @param rest the string view to parse. Must not include any `<algo>(:|-)` prefix.
+ * @param rest the string view to parse. Must not include any
+ * `sha256(:|-)` prefix.
  */
-static Hash parseLowLevel(std::string_view rest, HashAlgorithm algo, DecodeNamePair pair)
+static Hash parseLowLevel(std::string_view rest, DecodeNamePair pair)
 {
-    Hash res{algo};
+    Hash res;
     std::string d;
     try {
         d = pair.decode(rest);
@@ -150,155 +99,63 @@ static Hash parseLowLevel(std::string_view rest, HashAlgorithm algo, DecodeNameP
     if (d.size() != res.hashSize)
         throw BadHash(
             "invalid %s hash '%s', length %d != expected length %d", pair.encodingName, rest, d.size(), res.hashSize);
-    assert(res.hashSize);
     memcpy(res.hash, d.data(), res.hashSize);
 
     return res;
 }
 
-Hash Hash::parseSRI(std::string_view original)
+Hash Hash::parseAnyPrefixed(std::string_view original)
 {
     auto rest = original;
 
-    // Parse the has type before the separator, if there was one.
-    auto hashRaw = splitPrefixTo(rest, '-');
-    if (!hashRaw)
-        throw BadHash("hash '%s' is not SRI", original);
-    HashAlgorithm parsedType = parseHashAlgo(*hashRaw);
-
-    return parseLowLevel(rest, parsedType, {base64::decode, "SRI"});
-}
-
-/**
- * @param rest is the string to parse
- *
- * @param resolveAlgo resolves the parsed type (or throws an error when it is not
- * possible.)
- *
- * @return the parsed hash and the format it was parsed from
- */
-static std::pair<Hash, HashFormat> parseAnyHelper(std::string_view rest, auto resolveAlgo)
-{
     bool isSRI = false;
-
-    // Parse the hash type before the separator, if there was one.
-    std::optional<HashAlgorithm> optParsedAlgo;
-    {
-        auto hashRaw = splitPrefixTo(rest, ':');
-
-        if (!hashRaw) {
-            hashRaw = splitPrefixTo(rest, '-');
-            if (hashRaw)
-                isSRI = true;
-        }
-        if (hashRaw)
-            optParsedAlgo = parseHashAlgo(*hashRaw);
+    auto algoRaw = splitPrefixTo(rest, ':');
+    if (!algoRaw) {
+        algoRaw = splitPrefixTo(rest, '-');
+        if (algoRaw)
+            isSRI = true;
     }
 
-    HashAlgorithm algo = resolveAlgo(std::move(optParsedAlgo));
+    if (!algoRaw)
+        throw BadHash("hash '%s' does not include a type", original);
+    if (*algoRaw != hashAlgoName)
+        throw BadHash("hash '%s' is not %s, which is the only algorithm this store uses", original, hashAlgoName);
 
-    auto [decode, formatName, format] = [&]() -> std::tuple<decltype(base16::decode) *, std::string_view, HashFormat> {
-        if (isSRI) {
-            /* In the SRI case, we always are using Base64. If the
-               length is wrong, get an error later. */
-            return {base64::decode, "SRI", HashFormat::SRI};
-        } else {
-            /* Otherwise, decide via the length of the hash (for the
-               given algorithm) what base encoding it is. */
-            auto format = baseFromSize(rest, algo);
-            auto [decode, formatName] = baseExplicit(format);
-            return {decode, formatName, format};
-        }
-    }();
-
-    return {parseLowLevel(rest, algo, {decode, formatName}), format};
+    /* SRI is always Base64; otherwise the length says which base. */
+    return parseLowLevel(rest, isSRI ? DecodeNamePair{base64::decode, "SRI"} : baseFromSize(rest));
 }
 
-Hash Hash::parseAnyPrefixed(std::string_view original)
+Hash Hash::parseNonSRIUnprefixed(std::string_view s)
 {
-    return parseAnyHelper(
-               original,
-               [&](std::optional<HashAlgorithm> optParsedAlgo) {
-                   // Either the string or user must provide the type, if they both do they
-                   // must agree.
-                   if (!optParsedAlgo)
-                       throw BadHash("hash '%s' does not include a type", original);
-
-                   return *optParsedAlgo;
-               })
-        .first;
+    return parseLowLevel(s, baseFromSize(s));
 }
 
-Hash Hash::parseNonSRIUnprefixed(std::string_view s, HashAlgorithm algo)
+struct Hash::Ctx
 {
-    return parseExplicitFormatUnprefixed(s, algo, baseFromSize(s, algo));
-}
-
-Hash Hash::parseExplicitFormatUnprefixed(std::string_view s, HashAlgorithm algo, HashFormat format)
-{
-    return parseLowLevel(s, algo, baseExplicit(format));
-}
-
-union Hash::Ctx
-{
-    MD5_CTX md5;
-    SHA_CTX sha1;
     SHA256_CTX sha256;
-    SHA512_CTX sha512;
 };
 
-static void start(HashAlgorithm ha, Hash::Ctx & ctx)
-{
-    if (ha == HashAlgorithm::MD5)
-        MD5_Init(&ctx.md5);
-    else if (ha == HashAlgorithm::SHA1)
-        SHA1_Init(&ctx.sha1);
-    else if (ha == HashAlgorithm::SHA256)
-        SHA256_Init(&ctx.sha256);
-    else if (ha == HashAlgorithm::SHA512)
-        SHA512_Init(&ctx.sha512);
-}
-
-static void update(HashAlgorithm ha, Hash::Ctx & ctx, std::string_view data)
-{
-    if (ha == HashAlgorithm::MD5)
-        MD5_Update(&ctx.md5, data.data(), data.size());
-    else if (ha == HashAlgorithm::SHA1)
-        SHA1_Update(&ctx.sha1, data.data(), data.size());
-    else if (ha == HashAlgorithm::SHA256)
-        SHA256_Update(&ctx.sha256, data.data(), data.size());
-    else if (ha == HashAlgorithm::SHA512)
-        SHA512_Update(&ctx.sha512, data.data(), data.size());
-}
-
-static void finish(HashAlgorithm ha, Hash::Ctx & ctx, unsigned char * hash)
-{
-    if (ha == HashAlgorithm::MD5)
-        MD5_Final(hash, &ctx.md5);
-    else if (ha == HashAlgorithm::SHA1)
-        SHA1_Final(hash, &ctx.sha1);
-    else if (ha == HashAlgorithm::SHA256)
-        SHA256_Final(hash, &ctx.sha256);
-    else if (ha == HashAlgorithm::SHA512)
-        SHA512_Final(hash, &ctx.sha512);
-}
-
-Hash hashString(HashAlgorithm ha, std::string_view s)
+Hash hashString(std::string_view s)
 {
     Hash::Ctx ctx;
-    Hash hash(ha);
-    start(ha, ctx);
-    update(ha, ctx, s);
-    finish(ha, ctx, hash.hash);
+    Hash hash;
+    SHA256_Init(&ctx.sha256);
+    SHA256_Update(&ctx.sha256, s.data(), s.size());
+    SHA256_Final(hash.hash, &ctx.sha256);
     return hash;
 }
 
-HashSink::HashSink(HashAlgorithm ha)
-    : ha(ha)
+/* 1 KiB, not BufferedSink's 32 KiB default: the only writes this
+   buffer coalesces are the NAR framing tokens ("(", "type", "regular",
+   length words), a few dozen bytes per file. Content arrives in chunks
+   larger than any sane buffer and bypasses it either way, so a per-file
+   hash sink was allocating and freeing 32 KiB to batch ~40 bytes. */
+HashSink::HashSink()
+    : BufferedSink(1024)
 {
     ctx = new Hash::Ctx;
     bytes = 0;
-    start(ha, *ctx);
+    SHA256_Init(&ctx->sha256);
 }
 
 HashSink::~HashSink()
@@ -310,14 +167,14 @@ HashSink::~HashSink()
 void HashSink::writeUnbuffered(std::string_view data)
 {
     bytes += data.size();
-    update(ha, *ctx, data);
+    SHA256_Update(&ctx->sha256, data.data(), data.size());
 }
 
 HashResult HashSink::finish()
 {
     flush();
-    Hash hash(ha);
-    nix::finish(ha, *ctx, hash.hash);
+    Hash hash;
+    SHA256_Final(hash.hash, &ctx->sha256);
     return HashResult(hash, bytes);
 }
 
@@ -325,59 +182,18 @@ HashResult HashSink::currentHash()
 {
     flush();
     Hash::Ctx ctx2 = *ctx;
-    Hash hash(ha);
-    nix::finish(ha, ctx2, hash.hash);
+    Hash hash;
+    SHA256_Final(hash.hash, &ctx2.sha256);
     return HashResult(hash, bytes);
 }
 
 Hash compressHash(const Hash & hash, unsigned int newSize)
 {
-    Hash h(hash.algo);
+    Hash h;
     h.hashSize = newSize;
     for (unsigned int i = 0; i < hash.hashSize; ++i)
         h.hash[i % newSize] ^= hash.hash[i];
     return h;
 }
 
-std::optional<HashAlgorithm> parseHashAlgoOpt(std::string_view s)
-{
-    if (s == "md5")
-        return HashAlgorithm::MD5;
-    if (s == "sha1")
-        return HashAlgorithm::SHA1;
-    if (s == "sha256")
-        return HashAlgorithm::SHA256;
-    if (s == "sha512")
-        return HashAlgorithm::SHA512;
-    return std::nullopt;
-}
-
-HashAlgorithm parseHashAlgo(std::string_view s)
-{
-    auto opt_h = parseHashAlgoOpt(s);
-    if (opt_h)
-        return *opt_h;
-    else
-        throw UsageError("unknown hash algorithm '%1%', expect 'md5', 'sha1', 'sha256', or 'sha512'", s);
-}
-
-std::string_view printHashAlgo(HashAlgorithm ha)
-{
-    switch (ha) {
-    case HashAlgorithm::MD5:
-        return "md5";
-    case HashAlgorithm::SHA1:
-        return "sha1";
-    case HashAlgorithm::SHA256:
-        return "sha256";
-    case HashAlgorithm::SHA512:
-        return "sha512";
-    default:
-        // illegal hash type enum value internally, as opposed to external input
-        // which should be validated with nice error message.
-        assert(false);
-    }
-}
-
 } // namespace nix
-

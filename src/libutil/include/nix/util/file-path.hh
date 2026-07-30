@@ -4,7 +4,6 @@
 #include <filesystem>
 
 #include "nix/util/types.hh"
-#include "nix/util/os-string.hh"
 
 namespace nix {
 
@@ -18,19 +17,19 @@ typedef std::set<std::filesystem::path> PathSet;
  * Stop gap until `std::filesystem::path_view` from P1030R6 exists in a
  * future C++ standard.
  */
-struct PathView : OsStringView
+struct PathView : std::string_view
 {
-    using string_view = OsStringView;
+    using string_view = std::string_view;
 
     using string_view::string_view;
 
     PathView(const std::filesystem::path & path)
-        : OsStringView{path.native()}
+        : std::string_view{path.native()}
     {
     }
 
-    PathView(const OsString & path)
-        : OsStringView{path}
+    PathView(const std::string & path)
+        : std::string_view{path}
     {
     }
 

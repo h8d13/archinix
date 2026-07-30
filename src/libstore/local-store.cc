@@ -2,17 +2,14 @@
 #include "nix/store/globals.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/pathlocks.hh"
-#include "nix/store/references.hh"
-#include "nix/util/topo-sort.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
+#include "nix/util/file-system-at.hh"
 #include "nix/util/fs-sink.hh"
-#include "nix/util/users.hh"
 #include "nix/util/progress.hh"
 #include "nix/store/store-open.hh"
-#include "nix/util/url.hh"
 
 #include <algorithm>
 #include <atomic>
@@ -51,20 +48,30 @@
 
 namespace nix {
 
-void LocalStoreConfig::anchor() {}
-
-void LocalBuildStoreConfig::anchor() {}
-
-void LocalStore::anchor() {}
-
-void GcStore::anchor() {}
-
-LocalStoreConfig::LocalStoreConfig(const std::filesystem::path & path)
-    : LocalFSStoreConfig(path)
+LocalStoreConfig::LocalStoreConfig(const std::filesystem::path & rootDir)
+    : StoreDirConfig{logicalStoreDir()}
+    , rootDir(canonPath(rootDir))
+    , stateDir(this->rootDir / "nix" / "var" / "nix")
+    , realStoreDir(this->rootDir / "nix" / "store")
 {
 }
 
-ref<Store> LocalStore::Config::openStore() const
+/* The logical store dir is baked in: the initramfs and GRUB entries
+   spell out /nix/store, so only the *physical* half (realStoreDir) can
+   move with the root. Kept as a function-local static so it outlives
+   every config that references it. */
+const std::string & LocalStoreConfig::logicalStoreDir()
+{
+    static const std::string dir = [] {
+        std::filesystem::path p{NIX_STORE_DIR};
+        if (!p.is_absolute())
+            throw UsageError("store directory path %s is not an absolute path", PathFmt(p));
+        return canonPath(std::move(p)).string();
+    }();
+    return dir;
+}
+
+ref<LocalStore> LocalStore::Config::openStore() const
 {
     return make_ref<LocalStore>(ref{shared_from_this()});
 }
@@ -122,8 +129,7 @@ static void writeSchemaFile(const std::filesystem::path & schemaPath, int versio
 }
 
 LocalStore::LocalStore(ref<const Config> config)
-    : Store{*config}
-    , LocalFSStore{*config}
+    : StoreDirConfig{*config}
     , config{config}
     , _state(make_ref<Sync<State>>())
     , dbDir(config->stateDir / "db")
@@ -131,13 +137,27 @@ LocalStore::LocalStore(ref<const Config> config)
     , reservedPath(dbDir / "reserved")
     , schemaPath(dbDir / "schema")
 {
+    assertLibStoreInitialized();
+
     auto state(_state->lock());
     state->stmts = std::make_unique<State::Stmts>();
 
     /* Create missing state directories if they don't already exist. */
     createDirs(config->realStoreDir);
-    if (!config->readOnly)
+    if (!config->readOnly) {
         requireWritableStore();
+        /* Close the store dir before anything is created inside it.
+           Imported trees carry secrets (shadow, ssh host keys) at
+           canonical 0444, and this inode is the one path-credential
+           gate (arch/import-dir.cc says why, and re-applies it on every
+           import to heal older stores). createDirs goes through
+           std::filesystem::create_directories, which has no mode
+           argument and lands 0777&~umask, so the farm, the db and the
+           gcroots used to be created during a world-traversable
+           window. */
+        if (::chmod(config->realStoreDir.c_str(), 0700) == -1)
+            throw SysError("securing store directory %s", PathFmt(config->realStoreDir));
+    }
     createDirs(linksDir);
     auto profilesDir = config->stateDir / "profiles";
     createDirs(profilesDir);
@@ -199,94 +219,40 @@ LocalStore::LocalStore(ref<const Config> config)
     } catch (SystemError & e) { /* don't care about errors */
     }
 
-    /* Acquire the big fat lock in shared mode to make sure that no
-       schema upgrade is in progress. */
-    if (!config->readOnly) {
-        auto globalLockPath = dbDir / "big-lock";
-        try {
-            globalLock = openLockFile(globalLockPath, true);
-        } catch (SystemError & e) {
-            if (e.is(std::errc::permission_denied) || e.is(std::errc::operation_not_permitted)) {
-                e.addTrace(
-                    "This command may have been run as non-root in a single-user Nix installation,\n"
-                    "or the Nix daemon may have crashed.");
-            }
-            throw;
-        }
-    }
-
-    if (!config->readOnly && !lockFile(globalLock.get(), ltRead, false)) {
-        printInfo("waiting for the big Nix store lock...");
-        lockFile(globalLock.get(), ltRead, true);
-    }
-
-    /* Check the current database schema and if necessary do an
-       upgrade.  */
+    /* One schema, created here or not ours. There is no migration
+       ladder: a store is minted by this tool and rebuilt when the
+       schema changes, so any other version means the path points at
+       somebody else's database. Refuse rather than rewrite it. */
     int curSchema = getSchema();
-    if (config->readOnly && curSchema < nixSchemaVersion) {
-        debug("current schema version: %d", curSchema);
-        debug("supported schema version: %d", nixSchemaVersion);
-        throw Error(
-            curSchema == 0 ? "database does not exist, and cannot be created in read-only mode"
-                           : "database schema needs migrating, but this cannot be done in read-only mode");
-    }
 
-    auto acquireWriteLock = [&]() {
-        if (!lockFile(globalLock.get(), ltWrite, false)) {
-            printInfo("waiting for exclusive access to the Nix store...");
-            // We have acquired a shared lock; release it to prevent deadlocks.
-            // This can happen if someone else is trying to promote their read
-            // lock into a write lock.
-            lockFile(globalLock.get(), ltNone, false);
-            lockFile(globalLock.get(), ltWrite, true);
-        }
-    };
-
-    if (curSchema > nixSchemaVersion)
-        throw Error("current Nix store schema is version %1%, but I only support %2%", curSchema, nixSchemaVersion);
-
-    else if (curSchema == 0) { /* new store */
-        curSchema = nixSchemaVersion;
+    if (curSchema == 0) {
+        if (config->readOnly)
+            throw Error("database does not exist, and cannot be created in read-only mode");
         openDB(*state, true);
-        writeSchemaFile(schemaPath, curSchema);
+        writeSchemaFile(schemaPath, nixSchemaVersion);
     }
 
-    else if (curSchema < nixSchemaVersion) {
-        /* This store layer only ever creates the current schema. The upstream
-           ladder that migrated Berkeley DB / flat-file / pre-2.0 Nix
-           databases up to 10 is gone: nothing here can produce such a
-           store, so the only way to land in this branch is pointing at
-           a foreign Nix store. Refuse rather than rewrite someone
-           else's database. */
+    else if (curSchema != nixSchemaVersion)
         throw Error(
             "store database at '%s' has schema version %d, but this store requires %d; "
             "it was not created by this tool",
             PathFmt(schemaPath),
             curSchema,
             nixSchemaVersion);
-    }
 
     else
         openDB(*state, false);
 
-    if (!config->readOnly && upgradeDBSchema(*state, true)) {
-        acquireWriteLock();
-        upgradeDBSchema(*state, false);
-        // Downgrade to a read lock and hold to prevent other processes from
-        // upgrading the schema while we're using the store
-        lockFile(globalLock.get(), ltRead, true);
-    }
-
     /* Prepare SQL statements. */
     state->stmts->RegisterValidPath.create(
         state->db,
-        "insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, ca) values (?, ?, ?, ?, ?, ?, ?);");
+        "insert into ValidPaths (path, hash, registrationTime, narSize, ca) values (?, ?, ?, ?, ?);");
     state->stmts->UpdatePathInfo.create(
-        state->db, "update ValidPaths set narSize = ?, hash = ?, ultimate = ?, ca = ? where path = ?;");
+        state->db, "update ValidPaths set narSize = ?, hash = ?, ca = ? where path = ?;");
     state->stmts->AddReference.create(state->db, "insert or replace into Refs (referrer, reference) values (?, ?);");
     state->stmts->QueryPathInfo.create(
         state->db,
-        "select id, hash, registrationTime, deriver, narSize, ultimate, ca from ValidPaths where path = ?;");
+        "select id, hash, registrationTime, narSize, ca from ValidPaths where path = ?;");
     state->stmts->QueryReferences.create(
         state->db, "select path from Refs join ValidPaths on reference = id where referrer = ?;");
     state->stmts->QueryReferrers.create(
@@ -305,22 +271,15 @@ AutoCloseFD LocalStore::openGCLock()
     return openLockFile(fnGCLock, /*create=*/true);
 }
 
-void LocalStore::deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed, bool isKnownPath)
+void LocalStore::deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed)
 {
     try {
         deletePath(path, bytesFreed);
     } catch (SystemError & e) {
         if (config->ignoreGcDeleteFailure) {
-            logWarning(
-                {.msg = HintFmt(
-                     isKnownPath ? "ignoring failure to remove store path %1%: %2%"
-                                 : "ignoring failure to remove garbage in store directory %1%: %2%",
-                     PathFmt(path),
-                     e.info().msg)});
+            logWarning({.msg = HintFmt("ignoring failure to remove store path %1%: %2%", PathFmt(path), e.info().msg)});
         } else {
-            e.addTrace(
-                isKnownPath ? "While deleting store path %1%" : "While deleting garbage in store directory %1%",
-                PathFmt(path));
+            e.addTrace("While deleting store path %1%", PathFmt(path));
             throw;
         }
     }
@@ -411,61 +370,6 @@ void LocalStore::openDB(State & state, bool create)
     }
 }
 
-bool LocalStore::upgradeDBSchema(State & state, bool dryRun)
-{
-    bool ret = false;
-
-    {
-        SQLiteStmt queryHasSchemaMigrations;
-        queryHasSchemaMigrations.create(
-            state.db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='SchemaMigrations';");
-        auto useQueryHasSchemaMigrations(queryHasSchemaMigrations.use());
-        if (!useQueryHasSchemaMigrations.next()) {
-            if (dryRun)
-                return true;
-            else {
-                state.db.exec("create table SchemaMigrations (migration text primary key not null);");
-                ret = true;
-            }
-        }
-    }
-
-    StringSet schemaMigrations;
-
-    {
-        SQLiteStmt querySchemaMigrations;
-        querySchemaMigrations.create(state.db, "select migration from SchemaMigrations;");
-        auto useQuerySchemaMigrations(querySchemaMigrations.use());
-        while (useQuerySchemaMigrations.next())
-            schemaMigrations.insert(useQuerySchemaMigrations.getStr(0));
-    }
-
-    auto needsMigration = [&](const std::string & migrationName) -> bool {
-        return !schemaMigrations.contains(migrationName);
-    };
-
-    auto maybeUpgrade = [&](const std::string & migrationName, const std::string & stmt) {
-        if (!needsMigration(migrationName))
-            return;
-
-        ret = true;
-        if (dryRun)
-            return;
-
-        debug("executing Nix database schema migration '%s'...", migrationName);
-
-        SQLiteTxn txn(state.db);
-        state.db.exec(stmt + fmt(";\ninsert or ignore into SchemaMigrations values('%s')", migrationName));
-        txn.commit();
-
-        schemaMigrations.insert(migrationName);
-    };
-
-    maybeUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
-
-    return ret;
-}
-
 /* The store dir must be writable to import into it. Remounting it is
    deliberately not our job: arch/ owns the mount table (the initramfs
    overlay-mounts the generation), and a remount from in here would
@@ -497,9 +401,7 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
         .apply(printStorePath(info.path))
         .apply(info.narHash.to_string(HashFormat::Base16, true))
         .apply(info.registrationTime == 0 ? time(nullptr) : info.registrationTime)
-        .apply(info.deriver ? printStorePath(*info.deriver) : "", (bool) info.deriver)
         .apply(info.narSize, info.narSize != 0)
-        .apply(info.ultimate ? 1 : 0, info.ultimate)
         .apply(renderContentAddress(info.ca), (bool) info.ca)
         .exec();
     uint64_t id = state.db.getLastInsertedRowId();
@@ -507,7 +409,7 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
     return id;
 }
 
-std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoUncached(const StorePath & path)
+std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoUnchecked(const StorePath & path)
 {
     return retrySQLite<std::shared_ptr<const ValidPathInfo>>([&]() {
         return queryPathInfoInternal(*_state->lock(), path);
@@ -524,7 +426,7 @@ std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoInternal(State & s
 
     auto id = useQueryPathInfo.getInt(0);
 
-    auto narHash = Hash::dummy;
+    Hash narHash;
     try {
         narHash = Hash::parseAnyPrefixed(useQueryPathInfo.getStr(1));
     } catch (BadHash & e) {
@@ -535,16 +437,10 @@ std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoInternal(State & s
 
     info->registrationTime = useQueryPathInfo.getInt(2);
 
-    auto s = (const char *) sqlite3_column_text(state.stmts->QueryPathInfo, 3);
-    if (s)
-        info->deriver = parseStorePath(s);
-
     /* Note that narSize = NULL yields 0. */
-    info->narSize = useQueryPathInfo.getInt(4);
+    info->narSize = useQueryPathInfo.getInt(3);
 
-    info->ultimate = useQueryPathInfo.getInt(5) == 1;
-
-    s = (const char *) sqlite3_column_text(state.stmts->QueryPathInfo, 6);
+    auto s = (const char *) sqlite3_column_text(state.stmts->QueryPathInfo, 4);
     if (s)
         info->ca = ContentAddress::parseOpt(s);
 
@@ -563,7 +459,6 @@ void LocalStore::updatePathInfo(State & state, const ValidPathInfo & info)
     state.stmts->UpdatePathInfo.use()
         .apply(info.narSize, info.narSize != 0)
         .apply(info.narHash.to_string(HashFormat::Base16, true))
-        .apply(info.ultimate ? 1 : 0, info.ultimate)
         .apply(renderContentAddress(info.ca), (bool) info.ca)
         .apply(printStorePath(info.path))
         .exec();
@@ -582,7 +477,7 @@ bool LocalStore::isValidPath_(State & state, const StorePath & path)
     return state.stmts->QueryPathInfo.use().apply(printStorePath(path)).next();
 }
 
-bool LocalStore::isValidPathUncached(const StorePath & path)
+bool LocalStore::isValidPath(const StorePath & path)
 {
     return retrySQLite<bool>([&]() { return isValidPath_(*_state->lock(), path); });
 }
@@ -658,42 +553,25 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
         auto state(_state->lock());
 
         SQLiteTxn txn(state->db);
-        StorePathSet paths;
 
         for (auto & [_, i] : infos) {
-            assert(i.narHash.algo == HashAlgorithm::SHA256);
             if (isValidPath_(*state, i.path))
                 updatePathInfo(*state, i);
             else
                 addValidPath(*state, i);
-            paths.insert(i.path);
         }
 
+        /* Refs rows, for a reference set that the import door keeps
+           empty: the loop is what would make a bypass visible to the
+           `on delete restrict` FK. No cycle check follows it, since a
+           cycle needs edges this store does not have. */
         for (auto & [_, i] : infos) {
+            if (i.references.empty())
+                continue;
             auto referrer = queryValidPathId(*state, i.path);
             for (auto & j : i.references)
                 state->stmts->AddReference.use().apply(referrer).apply(queryValidPathId(*state, j)).exec();
         }
-
-        /* Do a topological sort of the paths.  This will throw an
-           error if a cycle is detected and roll back the
-           transaction.  Cycles can only occur when a derivation
-           has multiple outputs. */
-        auto topoSortResult = topoSort(paths, [&](const StorePath & path) {
-            auto i = infos.find(path);
-            return i == infos.end() ? StorePathSet() : i->second.references;
-        });
-
-        std::visit(
-            overloaded{
-                [&](const Cycle<StorePath> & cycle) {
-                    throw Error(
-                        "cycle detected in the references of '%s' from '%s'",
-                        printStorePath(cycle.path),
-                        printStorePath(cycle.parent));
-                },
-                [](auto &) { /* Success, continue */ }},
-            topoSortResult);
 
         txn.commit();
     });
@@ -712,30 +590,26 @@ void LocalStore::invalidatePath(State & state, const StorePath & path)
 
 }
 
-void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair)
+void LocalStore::addToStore(const ValidPathInfo & info, Source & source)
 {
     {
 
-        if (repair || !isValidPath(info.path)) {
+        if (!isValidPath(info.path)) {
 
             PathLocks outputLock;
 
             auto realPath = toRealPath(info.path);
 
-            /* Lock the output path.  But don't lock if we're being called
-               from a build hook (whose parent process already acquired a
-               lock on this path). */
-            if (!locksHeld.count(printStorePath(info.path)))
-                outputLock.lockPaths({realPath});
+            outputLock.lockPaths({realPath});
 
             /* The path may have been created by another process in the meantime, so check again. */
-            if (repair || !isValidPathUncached(info.path)) {
+            if (!isValidPath(info.path)) {
 
                 deletePath(realPath);
 
                 /* While restoring the path from the NAR, compute the hash
                    of the NAR. */
-                HashSink hashSink(HashAlgorithm::SHA256);
+                HashSink hashSink;
 
                 TeeSource wrapperSource{source, hashSink};
 
@@ -759,38 +633,12 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
                         info.narSize,
                         hashResult.numBytesDigested);
 
-                if (info.ca) {
-                    auto & specified = *info.ca;
-                    auto actualHash = ({
-                        SourcePath sourcePath = requireStoreObjectAccessor(info.path, /*requireValidPath=*/false);
-                        Hash h{HashAlgorithm::SHA256}; // throwaway def to appease C++
-                        auto fim = specified.method.getFileIngestionMethod();
-                        switch (fim) {
-                        case FileIngestionMethod::Flat:
-                        case FileIngestionMethod::NixArchive: {
-                            HashModuloSink caSink{
-                                specified.hash.algo,
-                                std::string{info.path.hashPart()},
-                            };
-                            dumpPath(sourcePath, caSink, (FileSerialisationMethod) fim);
-                            h = caSink.finish().hash;
-                            break;
-                        }
-                        }
-                        ContentAddress{
-                            .method = specified.method,
-                            .hash = std::move(h),
-                        };
-                    });
-                    if (specified.hash != actualHash.hash) {
-                        throw Error(
-                            "ca hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
-                            printStorePath(info.path),
-                            specified.hash.to_string(HashFormat::Nix32, true),
-                            actualHash.hash.to_string(HashFormat::Nix32, true));
-                    }
-                }
-
+                /* No re-hash against info.ca here: the only caller
+                   (import-path) builds its ValidPathInfo from the NAR
+                   it just read and never carries a ca, and it has
+                   already recomputed the store path from that hash
+                   before calling. addValidPath still checks ca for the
+                   paths that do carry one (addToStoreFromDump). */
 
                 /* the canonical restore stamped every node except the
                    root (see restorePath); finish it in place */
@@ -800,7 +648,7 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
                     canonicalisePathMetaData(
                         realPath, {NIX_WHEN_SUPPORT_ACLS(config->getLocalSettings().ignoredAcls)});
 
-                optimisePath(realPath, repair); // FIXME: combine with hashPath()
+                optimisePath(realPath); // FIXME: combine with hashPath()
 
                 if (config->getLocalSettings().fsyncStorePaths) {
                     recursiveSync(realPath);
@@ -860,9 +708,8 @@ class AsyncHashSink : public BufferedSink
     static constexpr size_t maxQueued = 64;
 
 public:
-    AsyncHashSink(HashAlgorithm algo)
-        : inner(algo)
-        , threaded(hashingThreadPaysOff())
+    AsyncHashSink()
+        : threaded(hashingThreadPaysOff())
     {
         if (!threaded)
             return;
@@ -958,6 +805,175 @@ public:
     }
 };
 
+/* Where a restored file lives, from the tree root and the map key the
+   hasher already built. */
+static std::filesystem::path farmTarget(const std::filesystem::path & dedupRoot, const std::string & key)
+{
+    return std::filesystem::path{dedupRoot.native() + (key == "/" ? std::string() : key)};
+}
+
+/* One dedup swap: hard-link the farm entry to a temp name, rename it
+   over the just-restored file. True when the file was replaced.
+
+   The temp link goes in the store root, never beside the file:
+   "<file>.dedup~" is a name the imported tree may itself contain, and
+   then this link races the restore thread's O_CREAT|O_EXCL for it and
+   whichever loses aborts the whole import. It would also leave junk
+   *inside* a store path if we died between link and rename, which
+   breaks that path's hash. optimisePath_ places its own temp link in
+   the store root for exactly these reasons.
+
+   Callable from any thread: the temp name carries an atomic counter, and
+   two swaps never name the same file. */
+static bool swapForFarmLink(
+    const std::filesystem::path & link,
+    const std::filesystem::path & file,
+    const std::filesystem::path & storeRoot)
+{
+    static std::atomic<uint32_t> tmpCounter(std::random_device{}());
+    /* getpid() is a real syscall since glibc 2.25 dropped its cache,
+       and it cannot change under us: resolve once. */
+    static const std::string tmpPart = "/.tmp-dedup-" + std::to_string(getpid()) + "-";
+    std::filesystem::path tmp{
+        storeRoot.native() + tmpPart + std::to_string(tmpCounter.fetch_add(1, std::memory_order_relaxed))};
+    if (::link(link.c_str(), tmp.c_str()) == -1)
+        return false;
+    if (::rename(tmp.c_str(), file.c_str()) == -1) {
+        /* A leftover temp link is inert in the store root, but it is
+           still a leak and it means the rename failed for a reason worth
+           hearing about: the mode/mtime ordering trap this code has hit
+           before shows up here first. */
+        if (::unlink(tmp.c_str()) == -1)
+            warn("dedup: cannot unlink %s: %s", PathFmt(tmp), strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+/* The dedup swaps of an import, off the hashing thread.
+
+   Hashing is one thread and stays one thread: a NAR is one stream and
+   the digest that names the store path is a serial SHA-256 over it, so
+   there is nothing there to fan out (measured, see the DISCARDED entry
+   in bench/BASELINE). The swap is different work with a different
+   bound. It is `link` plus `rename`, two journaled metadata operations
+   whose cost is a round trip to the device, not CPU, and on a re-commit
+   nearly every file takes it: 30,209 of 38,431 on the generation tree.
+   Serialised behind the digests, that latency was the hashing thread's
+   whole day; issued from a few threads, the device sees them
+   concurrently.
+
+   One queue, N consumers, because unlike the per-file event stream
+   these jobs are independent and unordered. Bounded, so a fast hasher
+   cannot balloon it. Opportunistic like the swap itself: a job that
+   fails leaves the copy for optimisePath() to farm, and nothing here
+   ever throws into the import.
+
+   The pool must be drained before the deferred directory
+   canonicalisation runs, since a swap bumps the containing directory's
+   mtime; `AsyncFileHasher::finish` joins the hashing thread first and
+   this second, which is exactly that order. */
+class DedupSwapPool
+{
+    struct Job
+    {
+        std::filesystem::path link;
+        std::string key;
+        uint64_t size;
+    };
+
+    const std::filesystem::path & dedupRoot;
+    const std::filesystem::path & storeRoot;
+    std::vector<std::thread> workers;
+    std::mutex mtx;
+    std::condition_variable cvPush, cvPop;
+    std::deque<Job> jobs;
+    bool closed = false;
+    static constexpr size_t maxQueued = 64;
+    /* summed into the caller's totals by finish() */
+    std::atomic<uint64_t> swappedFiles{0};
+    std::atomic<uint64_t> swappedBytes{0};
+
+    void run()
+    {
+        std::unique_lock lk(mtx);
+        while (true) {
+            cvPush.wait(lk, [&] { return closed || !jobs.empty(); });
+            if (jobs.empty())
+                return;
+            auto job = std::move(jobs.front());
+            jobs.pop_front();
+            /* only a pop off a full queue can release the producer */
+            bool wake = jobs.size() == maxQueued - 1;
+            lk.unlock();
+            if (wake)
+                cvPop.notify_one();
+            try {
+                if (swapForFarmLink(job.link, farmTarget(dedupRoot, job.key), storeRoot)) {
+                    swappedFiles.fetch_add(1, std::memory_order_relaxed);
+                    swappedBytes.fetch_add(job.size, std::memory_order_relaxed);
+                }
+            } catch (...) {
+                /* opportunistic */
+            }
+            lk.lock();
+        }
+    }
+
+public:
+    DedupSwapPool(size_t threads, const std::filesystem::path & dedupRoot, const std::filesystem::path & storeRoot)
+        : dedupRoot(dedupRoot)
+        , storeRoot(storeRoot)
+    {
+        for (size_t i = 0; i < threads; i++)
+            workers.emplace_back([this] { run(); });
+    }
+
+    void post(Job job)
+    {
+        std::unique_lock lk(mtx);
+        cvPop.wait(lk, [&] { return jobs.size() < maxQueued; });
+        jobs.push_back(std::move(job));
+        /* a consumer only ever waits after observing an empty queue
+           under this mutex, so waking one per non-empty edge cannot
+           race one to sleep; with N consumers the edge has to wake all
+           of them, or a burst leaves workers asleep beside a full
+           queue */
+        bool wake = jobs.size() <= workers.size();
+        lk.unlock();
+        if (wake)
+            cvPush.notify_all();
+    }
+
+    /* Drains, joins, and adds what it replaced to the caller's totals.
+       Idempotent: finish() and ~DedupSwapPool both call it, and the
+       counters are moved out rather than copied so a second call adds
+       nothing twice. */
+    void finish(uint64_t & files, uint64_t & bytes)
+    {
+        {
+            std::lock_guard<std::mutex> lk(mtx);
+            closed = true;
+        }
+        cvPush.notify_all();
+        for (auto & w : workers)
+            if (w.joinable())
+                w.join();
+        files += swappedFiles.exchange(0);
+        bytes += swappedBytes.exchange(0);
+    }
+
+    ~DedupSwapPool()
+    {
+        try {
+            uint64_t files = 0, bytes = 0;
+            finish(files, bytes);
+        } catch (...) {
+            ignoreExceptionInDestructor();
+        }
+    }
+};
+
 /* Hashes each regular file's single-file NAR serialisation (same
    framing SourceAccessor::dumpPath emits, so the digest equals what
    hashPath() would recompute from disk) on a worker thread, fed a
@@ -995,6 +1011,9 @@ class AsyncFileHasher
        restored */
     std::filesystem::path storeRootPath;
     const std::filesystem::path * storeRoot = nullptr;
+    /* declared after storeRootPath so it is destroyed before the path
+       it holds a reference to; null means swap inline, as before */
+    std::unique_ptr<DedupSwapPool> swaps;
 
     bool threaded;
     std::thread worker;
@@ -1014,6 +1033,8 @@ class AsyncFileHasher
     std::string key;
     std::unique_ptr<HashSink> hash;
     uint64_t size = 0;
+    /* scratch for tryDedup's farm probe, reused across files */
+    std::string linkBuf;
     /* every content byte the import has hashed, across all files:
        what keeps the counter moving through a single large blob */
     uint64_t bytesDone = 0;
@@ -1021,7 +1042,7 @@ class AsyncFileHasher
     void begin(std::string k)
     {
         key = std::move(k);
-        hash = std::make_unique<HashSink>(HashAlgorithm::SHA256);
+        hash = std::make_unique<HashSink>();
         *hash << narVersionMagic1 << "(" << "type" << "regular";
     }
 
@@ -1068,49 +1089,42 @@ class AsyncFileHasher
        canonical (0444/0555, mtime 1) and apply the same values.
        Opportunistic: any failure leaves the copy for optimisePath() to
        farm; never throws into the import. Empty files are skipped, same
-       rule (and reason) as optimise. */
+       rule (and reason) as optimise.
+
+       Split in two: the farm probe below stays on this thread (one
+       lstat against a dentry the farm keeps warm, and it is what
+       decides whether there is any work at all), while the swap itself
+       goes to `swaps` when there is one. The swap is two journaled
+       metadata operations, so on a re-commit where most files are
+       duplicates it was tens of thousands of round trips serialised
+       behind the digests. See bench/BASELINE, "the dedup swap, handed
+       off". */
     void tryDedup(const Hash & h)
     {
         if (!dedupRoot || !linksDir || size == 0)
             return;
         try {
-            std::filesystem::path link{
-                linksDir->native() + '/' + h.to_string(HashFormat::Nix32, false)};
+            /* built into a buffer this worker keeps: on a first commit
+               every probe misses (only the optimise pass creates farm
+               entries), so a path object per file was allocated,
+               concatenated and discarded. The path is only materialised
+               on a hit, below. */
+            linkBuf.assign(linksDir->native());
+            linkBuf += '/';
+            linkBuf += h.to_string(HashFormat::Nix32, false);
             struct stat stLink;
-            if (::lstat(link.c_str(), &stLink) == -1
+            if (::lstat(linkBuf.c_str(), &stLink) == -1
                 || uint64_t(stLink.st_size) != size)
                 return;
-            std::filesystem::path file{
-                dedupRoot->native() + (key == "/" ? std::string() : key)};
-            /* The temp link goes in the store root, never beside the
-               file: "<file>.dedup~" is a name the imported tree may
-               itself contain, and then this link races the restore
-               thread's O_CREAT|O_EXCL for it and whichever loses aborts
-               the whole import. It would also leave junk *inside* a
-               store path if we died between link and rename, which
-               breaks that path's hash. optimisePath_ places its own
-               temp link in the store root for exactly these reasons. */
-            static std::atomic<uint32_t> tmpCounter(std::random_device{}());
-            /* getpid() is a real syscall since glibc 2.25 dropped its
-               cache, and it cannot change under us: resolve once. */
-            static const std::string tmpPart =
-                "/.tmp-dedup-" + std::to_string(getpid()) + "-";
-            std::filesystem::path tmp{
-                storeRoot->native() + tmpPart
-                + std::to_string(tmpCounter.fetch_add(1, std::memory_order_relaxed))};
-            if (::link(link.c_str(), tmp.c_str()) == -1)
-                return;
-            if (::rename(tmp.c_str(), file.c_str()) == -1) {
-                /* A leftover temp link is inert in the store root, but
-                   it is still a leak and it means the rename failed for
-                   a reason worth hearing about: the mode/mtime ordering
-                   trap this code has hit before shows up here first. */
-                if (::unlink(tmp.c_str()) == -1)
-                    warn("dedup: cannot unlink %s: %s", PathFmt(tmp), strerror(errno));
+            std::filesystem::path link{linkBuf};
+            if (swaps) {
+                swaps->post({std::move(link), key, size});
                 return;
             }
-            out.dedupedFiles++;
-            out.dedupedBytes += size;
+            if (swapForFarmLink(link, farmTarget(*dedupRoot, key), *storeRoot)) {
+                out.dedupedFiles++;
+                out.dedupedBytes += size;
+            }
         } catch (...) {
             /* opportunistic */
         }
@@ -1128,7 +1142,7 @@ class AsyncFileHasher
        hashes that do not describe them. */
     void symlink(std::string k, const std::string & target)
     {
-        HashSink h{HashAlgorithm::SHA256};
+        HashSink h;
         h << narVersionMagic1 << "(" << "type" << "symlink" << "target" << target << ")";
         out.files.insert_or_assign(std::move(k), h.finish().hash);
         out.symlinks++;
@@ -1212,7 +1226,8 @@ public:
     AsyncFileHasher(
         LocalStore::ImportFileHashes & out,
         const std::filesystem::path * dedupRoot,
-        const std::filesystem::path * linksDir)
+        const std::filesystem::path * linksDir,
+        size_t dedupThreads)
         : out(out)
         , dedupRoot(dedupRoot)
         , linksDir(linksDir)
@@ -1222,6 +1237,11 @@ public:
             storeRootPath = linksDir->parent_path();
             storeRoot = &storeRootPath;
         }
+        /* nothing to hand off without a farm to link from, and on a
+           single-core machine the hashing is inline anyway: an extra
+           thread there is the overhead without the overlap */
+        if (threaded && dedupThreads && dedupRoot && linksDir)
+            swaps = std::make_unique<DedupSwapPool>(dedupThreads, *dedupRoot, storeRootPath);
         if (threaded)
             worker = std::thread([this] { run(); });
     }
@@ -1290,6 +1310,12 @@ public:
         cvPush.notify_one();
         if (worker.joinable())
             worker.join();
+        /* the hashing thread is the only producer of swap jobs, so it
+           has to be joined before the pool is drained; the caller's
+           deferred directory canonicalisation runs after both, which is
+           what a swap's mtime bump needs */
+        if (swaps)
+            swaps->finish(out.dedupedFiles, out.dedupedBytes);
     }
 
     /* after this, `out` is complete and owned by the caller */
@@ -1397,19 +1423,18 @@ struct FileHashingSink : FileSystemObjectSink
     }
 };
 
-/* restorePath(), optionally capturing per-file hashes. Only NAR dumps
-   carry the per-file structure; Flat dumps fall back unrecorded. */
+/* restorePath(), optionally capturing per-file hashes. */
 static void restorePathCapturingHashes(
     const std::filesystem::path & path,
     Source & source,
-    FileSerialisationMethod method,
     bool startFsync,
     LocalStore::ImportFileHashes * fileHashes,
     const std::filesystem::path * linksDir,
-    bool canonical)
+    bool canonical,
+    size_t dedupThreads)
 {
-    if (!fileHashes || method != FileSerialisationMethod::NixArchive) {
-        restorePath(path, source, method, startFsync, canonical);
+    if (!fileHashes) {
+        restorePath(path, source, startFsync, canonical);
         return;
     }
     RestoreSink inner{startFsync, canonical};
@@ -1419,10 +1444,10 @@ static void restorePathCapturingHashes(
        just-stamped mtime of the containing directory. Children land
        in the list before parents, the root last (finishCanonical
        below). */
-    std::vector<std::filesystem::path> dirs;
+    std::vector<CanonPath> dirs;
     if (canonical)
         inner.deferCanonicalDirs = &dirs;
-    AsyncFileHasher hasher{*fileHashes, linksDir ? &path : nullptr, linksDir};
+    AsyncFileHasher hasher{*fileHashes, linksDir ? &path : nullptr, linksDir, dedupThreads};
     FileHashingSink sink{inner, CanonPath::root, hasher};
     parseDump(sink, source);
     hasher.finish();
@@ -1430,138 +1455,75 @@ static void restorePathCapturingHashes(
        across parents (moveFile out of the temp dir) needs write
        permission on the moved directory itself, so the caller
        canonicalises the root once it reaches its final path */
+    /* through the sink's root descriptor, which is still open: a bare
+       chmod(path) was the one write in an import that followed symlinks
+       (every openat2 here carries RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH),
+       and this costs the same two syscalls it did. */
     for (auto & dir : dirs) {
-        chmod(dir, 0755);
-        setWriteTime(dir, mtimeStore, mtimeStore, false);
+        fchmodatTryNoFollow(inner.dirFd.get(), dir, 0755);
+        setWriteTimeAt(inner.dirFd.get(), dir, mtimeStore, mtimeStore);
     }
 }
 
-StorePath LocalStore::addToStoreFromDump(
-    Source & source0,
-    std::string_view name,
-    FileSerialisationMethod dumpMethod,
-    ContentAddressMethod hashMethod,
-    HashAlgorithm hashAlgo,
-    const StorePathSet & references,
-    RepairFlag repair)
+StorePath
+LocalStore::addToStoreFromDump(Source & source0, std::string_view name)
 {
-    return addToStoreFromDump(source0, name, dumpMethod, hashMethod, hashAlgo, references, repair, nullptr);
+    return addToStoreFromDump(source0, name, nullptr);
 }
 
 StorePath LocalStore::addToStoreFromDump(
-    Source & source0,
-    std::string_view name,
-    FileSerialisationMethod dumpMethod,
-    ContentAddressMethod hashMethod,
-    HashAlgorithm hashAlgo,
-    const StorePathSet & references,
-    RepairFlag repair,
-    ImportFileHashes * fileHashes)
+    Source & source0, std::string_view name, ImportFileHashes * fileHashes)
 {
     /* For computing the store path; hashed off-thread so it overlaps
        with the restore below. */
-    auto hashSink = std::make_unique<AsyncHashSink>(hashAlgo);
+    auto hashSink = std::make_unique<AsyncHashSink>();
     TeeSource source{source0, *hashSink};
     const LocalSettings & localSettings = config->getLocalSettings();
 
-    /* Read the source path into memory, but only if it's up to
-       narBufferSize bytes. If it's larger, write it to a temporary
-       location in the Nix store. If the subsequently computed
-       destination store path is already valid, we just delete the
-       temporary path. Otherwise, we move it to the destination store
-       path. */
-    bool inMemory = false;
-
-    struct Free
-    {
-        void operator()(void * v)
-        {
-            free(v);
-        }
-    };
-
-    std::unique_ptr<char, Free> dumpBuffer(nullptr);
-    std::string_view dump;
-
-    /* Fill out buffer, and decide whether we are working strictly in
-       memory based on whether we break out because the buffer is full
-       or the original source is empty */
-    /* Grow geometrically rather than in fixed 64 KiB steps: a rootfs
-       NAR always runs this to the full narBufferSize, and stepping
-       there took ~512 reallocs of a buffer that spends most of its life
-       above the mmap threshold. Doubling gets there in ~9. */
-    size_t chunkSize = 65536;
-    while (dump.size() < localSettings.narBufferSize) {
-        auto oldSize = dump.size();
-        auto want = std::min(chunkSize, localSettings.narBufferSize - oldSize);
-        chunkSize = std::min(chunkSize * 2, localSettings.narBufferSize);
-        if (auto tmp = realloc(dumpBuffer.get(), oldSize + want)) {
-            dumpBuffer.release();
-            dumpBuffer.reset((char *) tmp);
-        } else {
-            throw std::bad_alloc();
-        }
-        auto got = 0;
-        Finally cleanup([&]() { dump = {dumpBuffer.get(), dump.size() + got}; });
-        try {
-            got = source.read(dumpBuffer.get() + oldSize, want);
-        } catch (EndOfFile &) {
-            inMemory = true;
-            break;
-        }
-    }
-
+    /* Every dump goes through a temporary path in the store: it is
+       restored there, hashed as it streams, and moved into place once
+       the hash names it. The old in-memory shortcut kept the first
+       narBufferSize (32 MiB) of the dump in a heap buffer so a small
+       NAR could skip the temp dir, but a generation is orders of
+       magnitude larger than that, so the buffer was filled, spilled and
+       thrown away on every real commit: 67% of the import's heap, and
+       ~745 reallocs growing it. What it bought was skipping the restore
+       when a small path turns out to be valid already; that case now
+       restores into the temp dir and deletes it, which is what every
+       large import has always done. */
     std::unique_ptr<AutoDelete> delTempDir;
     std::filesystem::path tempPath;
     std::filesystem::path tempDir;
     AutoCloseFD tempDirFd;
 
-    bool methodsMatch = static_cast<FileIngestionMethod>(dumpMethod) == hashMethod.getFileIngestionMethod();
-
-    /* If the methods don't match, our streaming hash of the dump is the
-       wrong sort, and we need to rehash. */
-    bool inMemoryAndDontNeedRestore = inMemory && methodsMatch;
-
     /* NAR restores create every node themselves, so the sink can stamp
        store-canonical metadata as it goes and the canonicalise walk
        below becomes redundant; both restore targets (temp dir and real
        path) live under realStoreDir, so one ACL check covers them */
-    bool canonicalRestore = dumpMethod == FileSerialisationMethod::NixArchive
-        && !dirGrantsDefaultAcl(config->realStoreDir);
+    bool canonicalRestore = !dirGrantsDefaultAcl(config->realStoreDir);
 
-    if (!inMemoryAndDontNeedRestore) {
-        /* Drain what we pulled so far, and then keep on pulling */
-        StringSource dumpSource{dump};
-        ChainSource bothSource{dumpSource, source};
+    std::tie(tempDir, tempDirFd) = createTempDirInStore();
+    delTempDir = std::make_unique<AutoDelete>(tempDir);
+    tempPath = tempDir / "x";
 
-        std::tie(tempDir, tempDirFd) = createTempDirInStore();
-        delTempDir = std::make_unique<AutoDelete>(tempDir);
-        tempPath = tempDir / "x";
+    restorePathCapturingHashes(
+        tempPath,
+        source,
+        localSettings.fsyncStorePaths,
+        fileHashes,
+        &linksDir,
+        canonicalRestore,
+        localSettings.dedupThreads);
 
-        restorePathCapturingHashes(
-            tempPath, bothSource, dumpMethod, localSettings.fsyncStorePaths, fileHashes, &linksDir,
-            canonicalRestore);
-
-        dumpBuffer.reset();
-        dump = {};
-    }
-
+    /* The dump is a NAR hashed with SHA-256, which is exactly the
+       store path's content address: no second pass over the restored
+       tree to hash it a different way. */
     auto [dumpHash, size] = hashSink->finish();
 
-    auto desc = ContentAddressWithReferences::fromParts(
-        hashMethod,
-        methodsMatch ? dumpHash
-                     : hashPath(makeFSSourceAccessor(tempPath), hashMethod.getFileIngestionMethod(), hashAlgo).first,
-        {
-            .others = references,
-            // caller is not capable of creating a self-reference, because this is content-addressed without modulus
-            .self = false,
-        });
-
-    auto dstPath = makeFixedOutputPathFromCA(name, desc);
+    auto dstPath = makeContentAddressedPath(name, dumpHash);
 
 
-    if (repair || !isValidPath(dstPath)) {
+    if (!isValidPath(dstPath)) {
 
         /* The first check above is an optimisation to prevent
            unnecessary lock acquisition. */
@@ -1571,41 +1533,13 @@ StorePath LocalStore::addToStoreFromDump(
         PathLocks outputLock({realPath});
 
         /* The path may have been created by another process in the meantime, so check again. */
-        if (repair || !isValidPathUncached(dstPath)) {
+        if (!isValidPath(dstPath)) {
 
             deletePath(realPath);
 
 
-            if (inMemoryAndDontNeedRestore) {
-                StringSource dumpSource{dump};
-                /* Restore from the buffer in memory. */
-                auto fim = hashMethod.getFileIngestionMethod();
-                switch (fim) {
-                case FileIngestionMethod::Flat:
-                case FileIngestionMethod::NixArchive:
-                    restorePathCapturingHashes(
-                        realPath,
-                        dumpSource,
-                        (FileSerialisationMethod) fim,
-                        localSettings.fsyncStorePaths,
-                        fileHashes,
-                        &linksDir,
-                        canonicalRestore);
-                    break;
-                }
-            } else {
-                /* Move the temporary path we restored above. */
-                moveFile(tempPath, realPath);
-            }
-
-            /* For computing the nar hash. In recursive SHA-256 mode, this
-               is the same as the store hash, so no need to do it again. */
-            HashResult narHash = {dumpHash, size};
-            if (dumpMethod != FileSerialisationMethod::NixArchive || hashAlgo != HashAlgorithm::SHA256) {
-                HashSink narSink{HashAlgorithm::SHA256};
-                dumpPath(realPath, narSink);
-                narHash = narSink.finish();
-            }
+            /* Move the temporary path we restored above. */
+            moveFile(tempPath, realPath);
 
             /* merged into restorePath: the canonical restore stamps
                every node as it is created, so the full walk (lstat +
@@ -1620,15 +1554,15 @@ StorePath LocalStore::addToStoreFromDump(
                 canonicalisePathMetaData(
                     realPath, {NIX_WHEN_SUPPORT_ACLS(localSettings.ignoredAcls)});
 
-            optimisePath(realPath, repair);
+            optimisePath(realPath);
 
             if (localSettings.fsyncStorePaths) {
                 recursiveSync(realPath);
                 syncParent(realPath);
             }
 
-            auto info = ValidPathInfo::makeFromCA(*this, name, std::move(desc), narHash.hash);
-            info.narSize = narHash.numBytesDigested;
+            auto info = ValidPathInfo::makeFromCA(*this, name, dumpHash);
+            info.narSize = size;
             registerValidPath(info);
         }
 
@@ -1640,6 +1574,26 @@ StorePath LocalStore::addToStoreFromDump(
 
 /* Create a temporary directory in the store that won't be
    garbage-collected until the returned FD is closed. */
+/* A store object's files, as an accessor rooted at its physical
+   path. There is no whole-store accessor: nothing here walks the
+   store as one tree. */
+std::shared_ptr<SourceAccessor> LocalStore::getFSAccessor(const StorePath & path, bool requireValidPath)
+{
+    auto absPath = std::filesystem::path{config->realStoreDir} / path.to_string();
+    if (requireValidPath) {
+        /* Only return non-null if the store object is a fully-valid
+           member of the store. */
+        if (!isValidPath(path))
+            return nullptr;
+    } else {
+        /* Return non-null as long as the some file system data exists,
+           even if the store object is not fully registered. */
+        if (!pathExists(absPath))
+            return nullptr;
+    }
+    return makeFSSourceAccessor(std::move(absPath));
+}
+
 std::pair<std::filesystem::path, AutoCloseFD> LocalStore::createTempDirInStore()
 {
     std::filesystem::path tmpDirFn;
@@ -1691,13 +1645,10 @@ void LocalStore::invalidatePathChecked(const StorePath & path)
     });
 }
 
-bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
+/* Detect, never heal: repairPath went with the substituter
+   machinery, so there is nothing to heal a bad path from. */
+bool LocalStore::verifyStore(bool checkContents)
 {
-    /* repairPath went with the substituter machinery: verify can
-       detect, not heal. Refuse instead of silently ignoring the flag */
-    if (repair)
-        throw Unsupported("repair is not supported by this store extraction");
-
     printInfo("reading the Nix store...");
 
     /* Acquire the global GC lock to get a consistent snapshot of
@@ -1705,7 +1656,7 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
     auto fdGCLock = openGCLock();
     FdLock gcLock(fdGCLock.get(), ltRead, true, "waiting for the big garbage collector lock...");
 
-    auto [errors, validPaths] = verifyAllValidPaths(repair);
+    auto [errors, validPaths] = verifyAllValidPaths();
 
     /* Optionally, check the content hashes (slow). */
     if (checkContents) {
@@ -1717,23 +1668,18 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
             auto name = link.path().filename();
             printMsg(lvlTalkative, "checking contents of %s", PathFmt(name));
             std::string hash =
-                hashPath(makeFSSourceAccessor(link.path()), FileIngestionMethod::NixArchive, HashAlgorithm::SHA256)
-                    .first.to_string(HashFormat::Nix32, false);
+                hashPath(makeFSSourceAccessor(link.path()))
+                    .hash.to_string(HashFormat::Nix32, false);
             if (hash != name.string()) {
                 printError(
                     "link %s was modified! expected hash %s, got '%s'", PathFmt(link.path()), name.string(), hash);
-                if (repair) {
-                    unlinkIfExists(link.path());
-                    printInfo("removed link %s", PathFmt(link.path()));
-                } else {
-                    errors = true;
-                }
+                errors = true;
             }
         }
 
         printInfo("checking store hashes...");
 
-        Hash nullHash(HashAlgorithm::SHA256);
+        Hash nullHash;
 
         for (auto & i : validPaths) {
             try {
@@ -1743,7 +1689,7 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
                 /* Check the content hash (optionally - slow). */
                 printMsg(lvlTalkative, "checking contents of '%s'", printStorePath(i));
 
-                auto hashSink = HashSink(info->narHash.algo);
+                auto hashSink = HashSink();
 
                 dumpPath(toRealPath(i), hashSink);
                 auto current = hashSink.finish();
@@ -1792,7 +1738,7 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
     return errors;
 }
 
-LocalStore::VerificationResult LocalStore::verifyAllValidPaths(RepairFlag repair)
+LocalStore::VerificationResult LocalStore::verifyAllValidPaths()
 {
     StorePathSet storePathsInStoreDir;
     /* Why aren't we using `queryAllValidPaths`? Because that would
@@ -1823,7 +1769,7 @@ LocalStore::VerificationResult LocalStore::verifyAllValidPaths(RepairFlag repair
     StorePathSet validPaths;
 
     for (auto & i : queryAllValidPaths())
-        verifyPath(i, existsInStoreDir, done, validPaths, repair, errors);
+        verifyPath(i, existsInStoreDir, done, validPaths, errors);
 
     return {
         .errors = errors,
@@ -1836,7 +1782,6 @@ void LocalStore::verifyPath(
     fun<bool(const StorePath &)> existsInStoreDir,
     StorePathSet & done,
     StorePathSet & validPaths,
-    RepairFlag repair,
     bool & errors)
 {
     checkInterrupt();
@@ -1851,10 +1796,10 @@ void LocalStore::verifyPath(
         queryReferrers(path, referrers);
         for (auto & i : referrers)
             if (i != path)
-                verifyPath(i, existsInStoreDir, done, validPaths, repair, errors);
+                verifyPath(i, existsInStoreDir, done, validPaths, errors);
 
-        /* Report, never heal. `repair` is refused at entry, and
-           dropping the registration here would destroy the very record
+        /* Report, never heal: dropping the registration here would
+           destroy the very record
            the operator ran verify to find: the basename is what a GRUB
            entry and a gcroot name, and reporting "consistent"
            afterwards would be a lie. Prune deliberately with rm-path
@@ -1869,12 +1814,7 @@ void LocalStore::verifyPath(
 }
 
 
-std::optional<std::string> LocalStore::getVersion()
-{
-    return nixVersion;
-}
-
-ref<Store> openStore(const std::filesystem::path & root, bool mustExist)
+ref<LocalStore> openStore(const std::filesystem::path & root, bool mustExist)
 {
     if (!root.is_absolute())
         throw UsageError("store root '%s' must be an absolute path", root.string());
@@ -1884,9 +1824,7 @@ ref<Store> openStore(const std::filesystem::path & root, bool mustExist)
        an empty store it has already made one. */
     if (mustExist && !std::filesystem::exists(config->stateDir / "db" / "db.sqlite"))
         throw Error("no store at '%s': no database", root.string());
-    auto store = config->openStore();
-    store->init();
-    return store;
+    return config->openStore();
 }
 
 } // namespace nix

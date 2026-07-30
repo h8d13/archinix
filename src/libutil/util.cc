@@ -17,8 +17,6 @@ namespace nix {
 
 void FormatError::anchor() {}
 
-bad_ref_cast::~bad_ref_cast() {}
-
 void initLibUtil()
 {
     // Check that exception handling works. Exception handling has been observed
@@ -91,29 +89,7 @@ std::optional<N> string2Int(const std::string_view s)
 }
 
 // Explicitly instantiated in one place for faster compilation
-template std::optional<unsigned char> string2Int<unsigned char>(const std::string_view s);
-template std::optional<unsigned short> string2Int<unsigned short>(const std::string_view s);
-template std::optional<unsigned int> string2Int<unsigned int>(const std::string_view s);
-template std::optional<unsigned long> string2Int<unsigned long>(const std::string_view s);
-template std::optional<unsigned long long> string2Int<unsigned long long>(const std::string_view s);
-template std::optional<signed char> string2Int<signed char>(const std::string_view s);
-template std::optional<signed short> string2Int<signed short>(const std::string_view s);
 template std::optional<signed int> string2Int<signed int>(const std::string_view s);
-template std::optional<signed long> string2Int<signed long>(const std::string_view s);
-template std::optional<signed long long> string2Int<signed long long>(const std::string_view s);
-
-template<class N>
-std::optional<N> string2Float(const std::string_view s)
-{
-    try {
-        return boost::lexical_cast<N>(s.data(), s.size());
-    } catch (const boost::bad_lexical_cast &) {
-        return std::nullopt;
-    }
-}
-
-template std::optional<double> string2Float<double>(const std::string_view s);
-template std::optional<float> string2Float<float>(const std::string_view s);
 
 static const int64_t conversionNumber = 1024;
 
@@ -192,44 +168,6 @@ void ignoreExceptionExceptInterrupt(Verbosity lvl)
     } catch (std::exception & e) {
         printMsg(lvl, ANSI_RED "error (ignored):" ANSI_NORMAL " %s", e.what());
     }
-}
-
-std::string stripIndentation(std::string_view s)
-{
-    size_t minIndent = 10000;
-    size_t curIndent = 0;
-    bool atStartOfLine = true;
-
-    for (auto & c : s) {
-        if (atStartOfLine && c == ' ')
-            curIndent++;
-        else if (c == '\n') {
-            if (atStartOfLine)
-                minIndent = std::max(minIndent, curIndent);
-            curIndent = 0;
-            atStartOfLine = true;
-        } else {
-            if (atStartOfLine) {
-                minIndent = std::min(minIndent, curIndent);
-                atStartOfLine = false;
-            }
-        }
-    }
-
-    std::string res;
-
-    size_t pos = 0;
-    while (pos < s.size()) {
-        auto eol = s.find('\n', pos);
-        if (eol == s.npos)
-            eol = s.size();
-        if (eol - pos > minIndent)
-            res.append(s.substr(pos + minIndent, eol - pos - minIndent));
-        res.push_back('\n');
-        pos = eol + 1;
-    }
-
-    return res;
 }
 
 } // namespace nix

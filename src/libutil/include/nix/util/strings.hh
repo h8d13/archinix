@@ -28,8 +28,6 @@ template<class C>
 C tokenizeString(std::string_view s, std::string_view separators = " \t\n\r");
 
 extern template std::list<std::string> tokenizeString(std::string_view s, std::string_view separators);
-extern template StringSet tokenizeString(std::string_view s, std::string_view separators);
-extern template std::vector<std::string> tokenizeString(std::string_view s, std::string_view separators);
 
 /**
  * Split a string, preserving empty strings between separators, as well as at the start and end.
@@ -41,9 +39,6 @@ C basicSplitString(std::basic_string_view<CharT> s, std::basic_string_view<CharT
 template<typename C>
 C splitString(std::string_view s, std::string_view separators);
 
-extern template std::list<std::string> splitString(std::string_view s, std::string_view separators);
-extern template StringSet splitString(std::string_view s, std::string_view separators);
-extern template std::vector<std::string> splitString(std::string_view s, std::string_view separators);
 
 /**
  * Concatenate the given strings with a separator between the elements.
@@ -51,10 +46,11 @@ extern template std::vector<std::string> splitString(std::string_view s, std::st
 template<class C>
 std::string concatStringsSep(const std::string_view sep, const C & ss);
 
-extern template std::string concatStringsSep(std::string_view, const std::list<std::string> &);
-extern template std::string concatStringsSep(std::string_view, const StringSet &);
-extern template std::string concatStringsSep(std::string_view, const std::vector<std::string> &);
-extern template std::string concatStringsSep(std::string_view, const boost::container::small_vector<std::string, 64> &);
+/* concatMapStringsSep below collects into this, so it is the one
+   container form worth instantiating once rather than per caller. */
+extern template std::string
+concatStringsSep(std::string_view, const boost::container::small_vector<std::string, 64> &);
+
 
 /**
  * Apply a function to the `iterable`'s items and concat them with `separator`.
@@ -82,47 +78,6 @@ template<class C>
     "Consider removing the empty string dropping behavior. If acceptable, use concatStringsSep instead.")]] std::string
 dropEmptyInitThenConcatStringsSep(const std::string_view sep, const C & ss);
 
-extern template std::string dropEmptyInitThenConcatStringsSep(std::string_view, const std::list<std::string> &);
-extern template std::string dropEmptyInitThenConcatStringsSep(std::string_view, const StringSet &);
-extern template std::string dropEmptyInitThenConcatStringsSep(std::string_view, const std::vector<std::string> &);
-
-/**
- * Conditionally wrap a string with prefix and suffix brackets.
- *
- * If `content` is empty, returns an empty string.
- * Otherwise, returns `prefix + content + suffix`.
- *
- * Example:
- *   optionalBracket(" (", "foo", ")") == " (foo)"
- *   optionalBracket(" (", "", ")") == ""
- *
- * Design note: this would have been called `optionalParentheses`, except this
- * function is more general and more explicit. Parentheses typically *also* need
- * to be prefixed with a space in order to fit nicely in a piece of natural
- * language.
- */
-std::string optionalBracket(std::string_view prefix, std::string_view content, std::string_view suffix);
-
-/**
- * Overload for optional content.
- *
- * If `content` is nullopt or contains an empty string, returns an empty string.
- * Otherwise, returns `prefix + *content + suffix`.
- *
- * Example:
- *   optionalBracket(" (", std::optional<std::string>("foo"), ")") == " (foo)"
- *   optionalBracket(" (", std::nullopt, ")") == ""
- *   optionalBracket(" (", std::optional<std::string>(""), ")") == ""
- */
-template<typename T>
-    requires std::convertible_to<T, std::string_view>
-std::string optionalBracket(std::string_view prefix, const std::optional<T> & content, std::string_view suffix)
-{
-    if (!content || std::string_view(*content).empty()) {
-        return "";
-    }
-    return optionalBracket(prefix, std::string_view(*content), suffix);
-}
 
 /**
  * Hash implementation that can be used for zero-copy heterogenous lookup from

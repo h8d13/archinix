@@ -5,7 +5,7 @@
 
 #include "nix/store/pathlocks.hh"
 #include "nix/store/store-api.hh"
-#include "nix/store/local-fs-store.hh"
+#include "nix/store/gc-store.hh"
 #include "nix/store/local-settings.hh"
 #include "nix/util/sync.hh"
 
@@ -19,14 +19,13 @@
 namespace nix {
 
 class ThreadPool;
+class LocalStore;
 
 /**
- * Nix store and database schema version.
- *
- * Version 1 (or 0) was Nix <=
- * 0.7.  Version 2 was Nix 0.8 and 0.9.  Version 3 is Nix 0.10.
- * Version 4 is Nix 0.11.  Version 5 is Nix 0.12-0.16.  Version 6 is
- * Nix 1.0.  Version 7 is Nix 1.3. Version 10 is 2.0.
+ * The schema this store creates and the only one it opens. Written to
+ * `<state>/db/schema` when the store is minted, compared on every open:
+ * a store carrying anything else was made by something else. Bump it
+ * when `schema.sql` changes and rebuild the stores.
  */
 const int nixSchemaVersion = 10;
 
@@ -43,12 +42,50 @@ struct OptimiseStats
     uint64_t filesVisited = 0;
 };
 
-struct LocalBuildStoreConfig : virtual LocalFSStoreConfig
+/**
+ * The store's configuration: plain fields, filled in from the root
+ * path. One store type means one config type, so nothing here is
+ * virtual and nothing is settable through a URI: arch/ owns the layout
+ * above this point, and store knobs are defaults in `LocalSettings`
+ * that you change by editing and recompiling.
+ */
+struct LocalStoreConfig : std::enable_shared_from_this<LocalStoreConfig>, StoreDirConfig
 {
-private:
-    void anchor() override;
+    /**
+     * The store is opened with a root path and nothing else:
+     * `stateDir` and `realStoreDir` are derived from it.
+     */
+    LocalStoreConfig(const std::filesystem::path & rootDir);
 
-public:
+    /**
+     * The logical store directory (`/nix/store`). Baked in: the
+     * initramfs and GRUB entries spell it out, so it cannot move.
+     */
+    static const std::string & logicalStoreDir();
+
+    /**
+     * Directory prefixed to all other paths.
+     */
+    std::filesystem::path rootDir;
+
+    /**
+     * Directory where the store keeps its state (`<root>/nix/var/nix`).
+     */
+    std::filesystem::path stateDir;
+
+    /**
+     * Physical path of the store (`<root>/nix/store`). The *logical*
+     * store path stays `storeDir`; only the physical half moves with
+     * the root.
+     */
+    std::filesystem::path realStoreDir;
+
+    /**
+     * Warn when adding a path larger than this many bytes (by NAR
+     * size). 0 disables the warning.
+     */
+    uint64_t warnLargePathThreshold = 0;
+
     /**
      * Per-store knobs. These used to be read off a global `settings`
      * singleton fed by nix.conf; they are now genuinely per-store,
@@ -56,22 +93,6 @@ public:
      */
     LocalSettings localSettings;
 
-    const LocalSettings & getLocalSettings() const
-    {
-        return localSettings;
-    }
-};
-
-struct LocalStoreConfig : std::enable_shared_from_this<LocalStoreConfig>,
-                          virtual LocalFSStoreConfig,
-                          virtual LocalBuildStoreConfig
-{
-    LocalStoreConfig(const std::filesystem::path & path);
-
-private:
-    void anchor() override;
-
-public:
     /**
      * Open the store even though its database is on a read-only
      * filesystem: no locking, and SQLite opened `immutable`.
@@ -84,20 +105,24 @@ public:
      */
     bool ignoreGcDeleteFailure = false;
 
-    static const std::string name()
+    const LocalSettings & getLocalSettings() const
     {
-        return "Local Store";
+        return localSettings;
     }
 
-    ref<Store> openStore() const override;
+    ref<LocalStore> openStore() const;
 };
 
 MakeError(PathInUse, Error);
 
-class LocalStore : public virtual LocalFSStore, public virtual GcStore
+/**
+ * The store. Local filesystem, SQLite database, hard-link farm: the
+ * only store this extraction has, so the class is concrete and its
+ * methods are not virtual (upstream's Store/LocalFSStore/GcStore
+ * interface split existed to hold remote and chroot stores as well).
+ */
+class LocalStore : public std::enable_shared_from_this<LocalStore>, public StoreDirConfig
 {
-    void anchor() override;
-
 public:
 
     using Config = LocalStoreConfig;
@@ -105,11 +130,6 @@ public:
     ref<const LocalStoreConfig> config;
 
 private:
-
-    /**
-     * Lock file used for upgrading.
-     */
-    AutoCloseFD globalLock;
 
     struct State
     {
@@ -141,23 +161,77 @@ private:
 public:
 
     /**
-     * Hack for build-remote.cc.
-     */
-    PathSet locksHeld;
-
-    /**
-     * Initialise the local store, upgrading the schema if
-     * necessary.
+     * Open the local store, creating its skeleton and database if the
+     * root does not hold one yet.
      */
     LocalStore(ref<const Config> params);
 
     ~LocalStore();
 
     /**
-     * Implementations of abstract store API methods.
+     * Physical path of a store object.
      */
+    std::filesystem::path toRealPath(const StorePath & storePath)
+    {
+        return config->realStoreDir / storePath.to_string();
+    }
 
-    bool isValidPathUncached(const StorePath & path) override;
+    /**
+     * Check whether a path is valid.
+     */
+    bool isValidPath(const StorePath & path);
+
+    /**
+     * Query information about a valid path. It is permitted to omit
+     * the name part of the store path.
+     */
+    ref<const ValidPathInfo> queryPathInfo(const StorePath & path);
+
+    /**
+     * Copy the contents of a path to the store and register the
+     * validity of the resulting path.
+     *
+     * @param filter This function can be used to exclude files (see
+     * libutil/archive.hh).
+     */
+    StorePath addToStore(
+        std::string_view name,
+        const SourcePath & path,
+        PathFilter & filter = defaultPathFilter);
+
+    /**
+     * Write a NAR dump of a store path.
+     */
+    void narFromPath(const StorePath & path, Sink & sink);
+
+    /**
+     * @return An object to access files for a specific store object,
+     * or nullptr if the store contains no such object.
+     */
+    std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath = true);
+
+    /**
+     * Like `getFSAccessor`, but throws instead of returning null.
+     *
+     * @throws InvalidPath if the store object doesn't exist or (if
+     * requireValidPath = true) is invalid.
+     */
+    [[nodiscard]] ref<SourceAccessor> requireStoreObjectAccessor(const StorePath & path, bool requireValidPath = true)
+    {
+        auto accessor = getFSAccessor(path, requireValidPath);
+        if (!accessor) {
+            throw InvalidPath(
+                requireValidPath ? "path '%1%' is not a valid store path" : "store path '%1%' does not exist",
+                printStorePath(path));
+        }
+        return ref<SourceAccessor>{accessor};
+    }
+
+    /**
+     * Name part a store path may carry when only its hash is known.
+     */
+    constexpr static const char * MissingName = "x";
+
 
 
     /**
@@ -173,22 +247,20 @@ public:
      */
     StorePathSet queryPathsByHashPrefix(const std::string & hashPrefix);
 
-    StorePathSet queryAllValidPaths() override;
+    StorePathSet queryAllValidPaths();
 
-    std::shared_ptr<const ValidPathInfo> queryPathInfoUncached(const StorePath & path) override;
+    std::shared_ptr<const ValidPathInfo> queryPathInfoUnchecked(const StorePath & path);
 
-    void queryReferrers(const StorePath & path, StorePathSet & referrers) override;
+    void queryReferrers(const StorePath & path, StorePathSet & referrers);
 
-    void addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair) override;
+    void addToStore(const ValidPathInfo & info, Source & source);
 
-    StorePath addToStoreFromDump(
-        Source & dump,
-        std::string_view name,
-        FileSerialisationMethod dumpMethod,
-        ContentAddressMethod hashMethod,
-        HashAlgorithm hashAlgo,
-        const StorePathSet & references,
-        RepairFlag repair) override;
+    /**
+     * Take a NAR stream into the store. The path it lands at follows
+     * from its SHA-256 hash: the one ingestion route this store has,
+     * so there is no method to pick and no references to declare.
+     */
+    StorePath addToStoreFromDump(Source & dump, std::string_view name);
 
     /**
      * Per-file NAR hashes captured while restoring an import (the
@@ -221,15 +293,8 @@ public:
         uint64_t symlinks = 0;
     };
 
-    StorePath addToStoreFromDump(
-        Source & dump,
-        std::string_view name,
-        FileSerialisationMethod dumpMethod,
-        ContentAddressMethod hashMethod,
-        HashAlgorithm hashAlgo,
-        const StorePathSet & references,
-        RepairFlag repair,
-        ImportFileHashes * fileHashes);
+    StorePath
+    addToStoreFromDump(Source & dump, std::string_view name, ImportFileHashes * fileHashes);
 
     /**
      * The global GC lock.
@@ -244,7 +309,7 @@ public:
      * gcroots/auto indirection layer is gone.
      */
     std::filesystem::path
-    addPermRoot(const StorePath & storePath, const std::filesystem::path & gcRoot) override;
+    addPermRoot(const StorePath & storePath, const std::filesystem::path & gcRoot);
 
 private:
 
@@ -254,29 +319,12 @@ private:
 
 public:
 
-    void collectGarbage(const GCOptions & options, GCResults & results) override;
-
-    /**
-     * Called by `collectGarbage` to trace in reverse.
-     *
-     * Using this rather than `queryReferrers` directly allows us to
-     * fine-tune which referrers we consider for garbage collection;
-     * some store implementations take advantage of this.
-     */
-    virtual void queryGCReferrers(const StorePath & path, StorePathSet & referrers)
-    {
-        return queryReferrers(path, referrers);
-    }
+    void collectGarbage(const GCOptions & options, GCResults & results);
 
     /**
      * Called by `collectGarbage` to recursively delete a path.
-     * The default implementation simply calls `deletePath`, but it can be
-     * overridden by stores that wish to provide their own deletion behaviour.
-     *
-     * @param isKnownPath true if this is a known store path, false if it's
-     *        garbage/unknown content found in the store directory
      */
-    virtual void deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed, bool isKnownPath);
+    void deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed);
 
     /**
      * Optimise the disk space usage of the Nix store by hard-linking
@@ -288,7 +336,7 @@ public:
      * Optimise a single store path. Optionally, test the encountered
      * symlinks for corruption.
      */
-    void optimisePath(const std::filesystem::path & path, RepairFlag repair);
+    void optimisePath(const std::filesystem::path & path);
 
     /**
      * Optimise a single (typically freshly imported) store path: the
@@ -298,7 +346,7 @@ public:
      */
     void optimisePath(const StorePath & path, OptimiseStats & stats, const ImportFileHashes * fileHashes = nullptr);
 
-    bool verifyStore(bool checkContents, RepairFlag repair) override;
+    bool verifyStore(bool checkContents);
 
 protected:
 
@@ -322,7 +370,7 @@ protected:
     /**
      * First, unconditional step of `verifyStore`
      */
-    virtual VerificationResult verifyAllValidPaths(RepairFlag repair);
+    VerificationResult verifyAllValidPaths();
 
 public:
 
@@ -336,11 +384,9 @@ public:
      */
     void registerValidPath(const ValidPathInfo & info);
 
-    virtual void registerValidPaths(const ValidPathInfos & infos);
+    void registerValidPaths(const ValidPathInfos & infos);
 
 
-
-    std::optional<std::string> getVersion() override;
 
 protected:
 
@@ -349,7 +395,6 @@ protected:
         fun<bool(const StorePath &)> existsInStoreDir,
         StorePathSet & done,
         StorePathSet & validPaths,
-        RepairFlag repair,
         bool & errors);
 
 private:
@@ -361,13 +406,6 @@ private:
     int getSchema();
 
     void openDB(State & state, bool create);
-
-    /**
-     * Perform or check if a database schema upgrade is needed.
-     * @param dryRun only check if an upgrade is needed.
-     * @return true if an upgrade is needed or was performed, false otherwise.
-     */
-    bool upgradeDBSchema(State & state, bool dryRun);
 
     void requireWritableStore();
 
@@ -387,9 +425,6 @@ private:
     void updatePathInfo(State & state, const ValidPathInfo & info);
 
     void findRoots(const std::filesystem::path & path, std::filesystem::file_type type, Roots & roots);
-
-    void findRootsNoTemp(Roots & roots);
-
 
     std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
 
@@ -445,10 +480,8 @@ private:
     std::vector<OptimiseEnt>
     readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
     void optimisePath_(
-        Activity * act,
         OptimiseCtx & ctx,
         const std::filesystem::path & path,
-        RepairFlag repair,
         bool * parentToggled = nullptr,
         ThreadPool * pool = nullptr);
 
@@ -456,9 +489,6 @@ private:
     bool isValidPath_(State & state, const StorePath & path);
     void queryReferrers(State & state, const StorePath & path, StorePathSet & referrers);
 
-
-    /* Only used for createTempDirInStore. */
-    friend class DerivationBuilderImpl;
 };
 
 } // namespace nix

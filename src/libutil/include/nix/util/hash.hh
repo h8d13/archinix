@@ -9,28 +9,16 @@ namespace nix {
 
 MakeError(BadHash, Error);
 
-enum struct HashAlgorithm : char { MD5 = 42, SHA1, SHA256, SHA512 };
-
 /**
- * @return the size of a hash for the given algorithm
+ * SHA-256 is the only hash this store computes: store paths, the `ca`
+ * assertion, the NAR hash in the db and the link farm's keys are all
+ * it, and there is no place left where a caller could name another
+ * (the fixed-output derivations that could are gone). It stays spelled
+ * out in the rendered forms below, so what is already written on disk
+ * still reads back.
  */
-constexpr inline size_t regularHashSize(HashAlgorithm type)
-{
-    switch (type) {
-    case HashAlgorithm::MD5:
-        return 16;
-    case HashAlgorithm::SHA1:
-        return 20;
-    case HashAlgorithm::SHA256:
-        return 32;
-    case HashAlgorithm::SHA512:
-        return 64;
-    default:
-        assert(false);
-    }
-}
-
-extern const StringSet hashAlgorithms;
+inline constexpr std::string_view hashAlgoName = "sha256";
+inline constexpr size_t hashSizeSha256 = 32;
 
 /**
  * @brief Enumeration representing the hash formats.
@@ -43,63 +31,48 @@ enum struct HashFormat : int {
     Nix32,
     /// @brief Lowercase hexadecimal encoding. @see base16Chars
     Base16,
-    /// @brief "<hash algo>:<Base 64 hash>", format of the SRI integrity attribute.
+    /// @brief "<hash algo>-<Base 64 hash>", format of the SRI integrity attribute.
     /// @see W3C recommendation [Subresource Integrity](https://www.w3.org/TR/SRI/).
     SRI
 };
 
-extern const StringSet hashFormats;
-
 struct Hash
 {
     /** Opaque handle type for the hash calculation state. */
-    union Ctx;
+    struct Ctx;
 
-    constexpr static size_t maxHashSize = 64;
-    size_t hashSize = 0;
+    constexpr static size_t maxHashSize = hashSizeSha256;
+
+    /**
+     * Not always the digest length: `compressHash` folds a digest down
+     * to a shorter one for store path names.
+     */
+    size_t hashSize = hashSizeSha256;
     uint8_t hash[maxHashSize] = {};
 
-    HashAlgorithm algo;
-
     /**
-     * Create a zero-filled hash object.
+     * A zero-filled hash, which is also how "hash not known" is
+     * spelled in the db.
      */
-    explicit Hash(HashAlgorithm algo);
+    Hash() = default;
 
     /**
-     * Parse a hash from a string representation like the above, except the
-     * type prefix is mandatory is there is no separate argument.
+     * Parse a hash that carries its algorithm, as `sha256:<hash>` or
+     * (SRI) `sha256-<hash>`. The base encoding follows from the
+     * length.
      */
     static Hash parseAnyPrefixed(std::string_view s);
 
     /**
-     * Parse a plain hash that musst not have any prefix indicating the type.
-     * The type is passed in to disambiguate.
+     * Parse a bare hash, no algorithm prefix. The base encoding
+     * follows from the length.
      */
-    static Hash parseNonSRIUnprefixed(std::string_view s, HashAlgorithm algo);
+    static Hash parseNonSRIUnprefixed(std::string_view s);
 
-    /**
-     * Like `parseNonSRIUnprefixed`, but the hash format has been
-     * explicitly given.
-     *
-     * @param explicitFormat cannot be SRI, but must be one of the
-     * "bases".
-     */
-    static Hash parseExplicitFormatUnprefixed(std::string_view s, HashAlgorithm algo, HashFormat explicitFormat);
-
-    static Hash
-    parseSRI(std::string_view original);
-
-public:
     /**
      * Check whether two hashes are equal.
      */
     bool operator==(const Hash & h2) const noexcept;
-
-    /**
-     * Compare how two hashes are ordered.
-     */
-    std::strong_ordering operator<=>(const Hash & h2) const noexcept;
 
     /**
      * Return a string representation of the hash, in base-16, base-32
@@ -107,35 +80,12 @@ public:
      * (e.g. "sha256:").
      */
     [[nodiscard]] std::string to_string(HashFormat hashFormat, bool includeAlgo) const;
-
-    [[nodiscard]] std::string gitRev() const
-    {
-        return to_string(HashFormat::Base16, false);
-    }
-
-    [[nodiscard]] std::string gitShortRev() const
-    {
-        return std::string(to_string(HashFormat::Base16, false), 0, 7);
-    }
-
-    static Hash dummy;
-
-    /**
-     * @return a random hash with hash algorithm `algo`
-     */
-    static Hash random(HashAlgorithm algo);
 };
 
 /**
  * Compute the hash of the given string.
  */
-Hash hashString(HashAlgorithm ha, std::string_view s);
-
-/**
- * Compute the hash of the given file, hashing its contents directly.
- *
- * (Metadata, such as the executable permission bit, is ignored.)
- */
+Hash hashString(std::string_view s);
 
 /**
  * The final hash and the number of bytes digested.
@@ -152,46 +102,19 @@ struct HashResult
  */
 Hash compressHash(const Hash & hash, unsigned int newSize);
 
-/**
- * Parse a string representing a hash algorithm.
- */
-HashAlgorithm
-parseHashAlgo(std::string_view s);
-
-/**
- * Will return nothing on parse error
- */
-std::optional<HashAlgorithm>
-parseHashAlgoOpt(std::string_view s);
-
-/**
- * And the reverse.
- */
-std::string_view printHashAlgo(HashAlgorithm ha);
-
-struct AbstractHashSink : virtual Sink
+class HashSink : public BufferedSink
 {
 private:
-    void anchor() override;
-public:
-    virtual HashResult finish() = 0;
-};
-
-class HashSink : public BufferedSink, public AbstractHashSink
-{
-private:
-    HashAlgorithm ha;
     Hash::Ctx * ctx;
     uint64_t bytes;
 
     void anchor() override;
 
 public:
-    HashSink(HashAlgorithm ha);
-    HashSink(const HashSink & h);
+    HashSink();
     ~HashSink();
     void writeUnbuffered(std::string_view data) override;
-    HashResult finish() override;
+    HashResult finish();
     HashResult currentHash();
 };
 

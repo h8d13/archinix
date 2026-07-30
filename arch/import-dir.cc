@@ -11,10 +11,15 @@
 // The imported path is registered as a GC root under
 // <root>/nix/var/nix/gcroots/<basename>, so the store db itself knows
 // generations are alive; rm-path drops the root before deleting.
+// The import's writer thread runs at real-time round-robin priority
+// (see src/libutil/scheduling.cc for which thread and why): the box
+// grants the capability for it in arch/iso/setup-boot.sh, and where it
+// is not granted the thread carries on at normal priority.
 // usage: import-dir <store-root> <name> <dir>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -25,6 +30,7 @@
 #include <nix/store/store-open.hh>
 #include <nix/util/archive.hh>
 #include <nix/util/progress.hh>
+#include <nix/util/scheduling.hh>
 #include <nix/util/serialise.hh>
 #include <nix/util/source-accessor.hh>
 
@@ -38,10 +44,17 @@ try {
 	}
 
 	initLibStore();
-	verbosity = lvlError;
+	/* lvlWarn, not lvlError: a refused real-time priority and the
+	   dedup's unlink complaint are warnings, and a commit that
+	   silently ran at normal priority is indistinguishable from one
+	   that could not. Everything below lvlWarn (the import's own
+	   progress, notices) stays quiet, which is what this was for. */
+	verbosity = lvlWarn;
+
+	/* read before the import: the writer thread applies it at start */
+	realtimeWriter = true;
 
 	auto store = openStore(std::filesystem::absolute(argv[1]));
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 	auto dir = std::filesystem::absolute(argv[3]);
 
 	/* imported trees carry secrets (shadow, ssh host keys) at
@@ -52,9 +65,9 @@ try {
 	   store as root or offline (GRUB), so close it to everyone
 	   else. Runs on every import: heals stores created before this
 	   gate existed. */
-	if (::chmod(local->config->realStoreDir.c_str(), 0700) == -1) {
+	if (::chmod(store->config->realStoreDir.c_str(), 0700) == -1) {
 		fprintf(stderr, "import-dir: chmod 0700 %s: %s\n",
-			local->config->realStoreDir.c_str(), strerror(errno));
+			store->config->realStoreDir.c_str(), strerror(errno));
 		return 1;
 	}
 
@@ -65,10 +78,7 @@ try {
 	std::optional<StorePath> imported;
 	{
 		auto sink = sourceToSink([&](Source & source) {
-			imported = local->addToStoreFromDump(source, argv[2],
-				FileSerialisationMethod::NixArchive,
-				ContentAddressMethod::Raw::NixArchive,
-				HashAlgorithm::SHA256, {}, NoRepair, &fileHashes);
+			imported = store->addToStoreFromDump(source, argv[2], &fileHashes);
 		});
 		/* sockets/fifos are skipped by dumpPath itself (NAR has no
 		   representation for them; see archive.cc), which replaced
@@ -96,13 +106,13 @@ try {
 
 	/* the generation is now db-visible as alive, not just a name in
 	   entries.cfg; deletion goes through rm-path, which unroots first */
-	local->addPermRoot(path,
-		local->config->stateDir / "gcroots"
+	store->addPermRoot(path,
+		store->config->stateDir / "gcroots"
 			/ std::string(path.to_string()));
 
 	OptimiseStats stats;
 	auto t2 = std::chrono::steady_clock::now();
-	local->optimisePath(path, stats, &fileHashes);
+	store->optimisePath(path, stats, &fileHashes);
 	auto t3 = std::chrono::steady_clock::now();
 	progressEnd();
 	fprintf(stderr, "optimise: linked %lu files, freed %.1f MiB (%.1f s)\n",
@@ -110,7 +120,7 @@ try {
 		std::chrono::duration<double>(t3 - t2).count());
 
 	/* real (root-prefixed) path: callers use it as a directory */
-	printf("%s\n", local->toRealPath(path).c_str());
+	printf("%s\n", store->toRealPath(path).c_str());
 	return 0;
 } catch (std::exception & e) {
 	/* a full store (ENOSPC) etc. must not end in std::terminate: the

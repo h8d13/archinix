@@ -33,30 +33,12 @@ public:
     }
 };
 
-/**
- * Just throws away data.
- */
-class NullSink : public Sink
-{
-    void anchor() override;
-
-public:
-    void operator()(std::string_view data) override {}
-};
-
-class FinishSink : public virtual Sink
-{
-    void anchor() override;
-
-public:
-    virtual void finish() = 0;
-};
 
 /**
  * A buffered abstract sink. Warning: a BufferedSink should not be
  * used from multiple threads concurrently.
  */
-class BufferedSink : public virtual Sink
+class BufferedSink : public Sink
 {
     void anchor() override;
 
@@ -99,7 +81,6 @@ public:
      * an error if it is not going to be available.
      */
     void operator()(char * data, size_t len);
-    void operator()(std::string_view data);
 
     /**
      * Store up to ‘len’ in the buffer pointed to by ‘data’, and
@@ -134,7 +115,7 @@ public:
  * A buffered abstract source. Warning: a BufferedSource should not be
  * used from multiple threads concurrently.
  */
-class BufferedSource : public virtual Source
+class BufferedSource : public Source
 {
     void anchor() override;
 
@@ -160,14 +141,22 @@ protected:
 };
 
 /**
- * Source type that can be restarted.
+ * Just throws away data.
  */
-class RestartableSource : public virtual Source
+class NullSink : public Sink
 {
     void anchor() override;
 
 public:
-    virtual void restart() = 0;
+    void operator()(std::string_view data) override {}
+};
+
+class FinishSink : public BufferedSink
+{
+    void anchor() override;
+
+public:
+    virtual void finish() = 0;
 };
 
 /**
@@ -219,7 +208,7 @@ private:
 /**
  * A source that reads data from a file descriptor.
  */
-struct FdSource : BufferedSource, RestartableSource
+struct FdSource : BufferedSource
 {
 private:
     void anchor() override;
@@ -247,8 +236,6 @@ public:
     ~FdSource() = default;
 
     bool good() override;
-    void restart() override;
-
     void skip(size_t len) override;
 
 protected:
@@ -282,7 +269,7 @@ public:
 /**
  * A source that reads data from a string.
  */
-class StringSource : public RestartableSource
+class StringSource : public Source
 {
     void anchor() override;
 
@@ -316,11 +303,6 @@ public:
     size_t read(char * data, size_t len) override;
 
     void skip(size_t len) override;
-
-    void restart() override
-    {
-        pos = 0;
-    }
 };
 
 /**
@@ -372,49 +354,6 @@ public:
 };
 
 /**
- * A reader that consumes the original Source until 'size'.
- */
-class SizedSource : public Source
-{
-    void anchor() override;
-
-public:
-    Source & orig;
-    size_t remain;
-
-    SizedSource(Source & orig, size_t size)
-        : orig(orig)
-        , remain(size)
-    {
-    }
-
-    size_t read(char * data, size_t len) override
-    {
-        if (this->remain <= 0) {
-            throw EndOfFile("sized: unexpected end-of-file");
-        }
-        len = std::min(len, this->remain);
-        size_t n = this->orig.read(data, len);
-        this->remain -= n;
-        return n;
-    }
-
-    /**
-     * Consume the original source until no remain data is left to consume.
-     */
-    size_t drainAll()
-    {
-        std::vector<char> buf(8192);
-        size_t sum = 0;
-        while (this->remain > 0) {
-            size_t n = read(buf.data(), buf.size());
-            sum += n;
-        }
-        return sum;
-    }
-};
-
-/**
  * A wrapper source that counts the number of bytes read from it.
  */
 class LengthSource : public Source
@@ -440,43 +379,6 @@ public:
 };
 
 /**
- * Convert a function into a sink.
- */
-class LambdaSink : public Sink
-{
-    void anchor() override;
-
-public:
-    typedef fun<void(std::string_view data)> data_t;
-    typedef fun<void()> cleanup_t;
-
-    data_t dataFun;
-    cleanup_t cleanupFun;
-
-    LambdaSink(
-        const data_t & dataFun, const cleanup_t & cleanupFun = []() {})
-        : dataFun(dataFun)
-        , cleanupFun(cleanupFun)
-    {
-    }
-
-    LambdaSink(LambdaSink &&) = delete;
-    LambdaSink(const LambdaSink &) = delete;
-    LambdaSink & operator=(LambdaSink &&) = delete;
-    LambdaSink & operator=(const LambdaSink &) = delete;
-
-    ~LambdaSink()
-    {
-        cleanupFun();
-    }
-
-    void operator()(std::string_view data) override
-    {
-        dataFun(data);
-    }
-};
-
-/**
  * Convert a function into a source.
  */
 class LambdaSource : public Source
@@ -497,27 +399,6 @@ public:
     {
         return lambda(data, len);
     }
-};
-
-/**
- * Chain two sources together so after the first is exhausted, the second is
- * used
- */
-class ChainSource : public Source
-{
-    void anchor() override;
-
-public:
-    Source &source1, &source2;
-    bool useSecond = false;
-
-    ChainSource(Source & s1, Source & s2)
-        : source1(s1)
-        , source2(s2)
-    {
-    }
-
-    size_t read(char * data, size_t len) override;
 };
 
 std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader);
@@ -561,11 +442,7 @@ inline Sink & operator<<(Sink & sink, uint64_t n)
     return sink;
 }
 
-Sink & operator<<(Sink & in, const Error & ex);
 Sink & operator<<(Sink & sink, std::string_view s);
-Sink & operator<<(Sink & sink, const Strings & s);
-Sink & operator<<(Sink & sink, const StringSet & s);
-
 MakeError(SerialisationError, Error);
 
 template<typename T>
@@ -597,13 +474,7 @@ inline uint64_t readLongLong(Source & source)
  * SerialisationError if any padding byte is non-zero.
  */
 void readPadding(size_t len, Source & source);
-size_t readString(char * buf, size_t max, Source & source);
 std::string readString(Source & source, size_t max = std::numeric_limits<size_t>::max());
-template<class T>
-T readStrings(Source & source);
-
-Source & operator>>(Source & in, std::string & s);
-
 template<typename T>
 Source & operator>>(Source & in, T & n)
 {
@@ -617,170 +488,5 @@ Source & operator>>(Source & in, bool & b)
     b = readNum<uint64_t>(in);
     return in;
 }
-
-/**
- * A source that reads a distinct format of concatenated chunks back into its
- * logical form, in order to guarantee a known state to the original stream,
- * even in the event of errors.
- *
- * Use with FramedSink, which also allows the logical stream to be terminated
- * in the event of an exception.
- */
-class FramedSource : public Source
-{
-    Source & from;
-    bool eof = false;
-    std::vector<char> pending;
-    size_t pos = 0;
-
-    void anchor() override;
-
-public:
-    FramedSource(Source & from)
-        : from(from)
-    {
-    }
-
-    FramedSource(FramedSource &&) = delete;
-    FramedSource(const FramedSource &) = delete;
-    FramedSource & operator=(FramedSource &&) = delete;
-    FramedSource & operator=(const FramedSource &) = delete;
-
-    ~FramedSource()
-    {
-        try {
-            if (!eof) {
-                while (true) {
-                    auto n = readInt(from);
-                    if (!n)
-                        break;
-                    pending.resize(n);
-                    from(pending.data(), n);
-                }
-            }
-        } catch (...) {
-            ignoreExceptionInDestructor();
-        }
-    }
-
-    size_t read(char * data, size_t len) override
-    {
-        if (eof)
-            throw EndOfFile("reached end of FramedSource");
-
-        if (pos >= pending.size()) {
-            size_t len = readInt(from);
-            if (!len) {
-                eof = true;
-                return 0;
-            }
-            pending.resize(len);
-            pos = 0;
-            from(pending.data(), len);
-        }
-
-        assert(pending.size() > pos); /* Sanity check. */
-        auto n = std::min(len, pending.size() - pos);
-        memcpy(data, pending.data() + pos, n);
-        pos += n;
-        return n;
-    }
-};
-
-/**
- * Write as chunks in the format expected by FramedSource.
- *
- * The `checkError` function can be used to terminate the stream when you
- * detect that an error has occurred. It does so by throwing an exception.
- */
-class FramedSink : public nix::BufferedSink
-{
-    BufferedSink & to;
-    fun<void()> checkError;
-
-    void anchor() override;
-
-public:
-    FramedSink(BufferedSink & to, fun<void()> && checkError)
-        : to(to)
-        , checkError(checkError)
-    {
-    }
-
-    FramedSink(FramedSink &&) = delete;
-    FramedSink(const FramedSink &) = delete;
-    FramedSink & operator=(FramedSink &&) = delete;
-    FramedSink & operator=(const FramedSink &) = delete;
-
-    ~FramedSink()
-    {
-        try {
-            to << 0;
-            to.flush();
-        } catch (...) {
-            ignoreExceptionInDestructor();
-        }
-    }
-
-    void writeUnbuffered(std::string_view data) override
-    {
-        /* Don't send more data if an error has occurred. */
-        checkError();
-
-        to << data.size();
-        to(data);
-    };
-};
-
-/**
- * A wrapper source that ensures that at least a specified number of bytes are read from the underlying source.
- */
-class EnsureRead : public Source
-{
-    Source & source;
-    uint64_t bytesRead = 0, bytesExpected;
-
-    void anchor() override;
-
-public:
-    EnsureRead(Source & source, uint64_t bytesExpected)
-        : source(source)
-        , bytesExpected(bytesExpected)
-    {
-    }
-
-    ~EnsureRead()
-    {
-        try {
-            finish();
-        } catch (...) {
-            ignoreExceptionInDestructor();
-        }
-    }
-
-    void finish()
-    {
-        if (bytesRead < bytesExpected)
-            skip(bytesExpected - bytesRead);
-    }
-
-    size_t read(char * data, size_t len) override
-    {
-        auto n = source.read(data, len);
-        bytesRead += n;
-        return n;
-    }
-
-    bool good() override
-    {
-        return source.good();
-    }
-
-    void skip(size_t len) override
-    {
-        source.skip(len);
-        bytesRead += len;
-    }
-};
 
 } // namespace nix

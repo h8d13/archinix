@@ -4,8 +4,11 @@
 #include "nix/util/types.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/fs-sink.hh"
+#include "nix/util/hash.hh"
 
 namespace nix {
+
+struct SourcePath;
 
 /**
  * dumpPath creates a Nix archive of the specified path.
@@ -59,13 +62,20 @@ void dumpPath(const std::filesystem::path & path, Sink & sink, PathFilter & filt
 
 void parseDump(FileSystemObjectSink & sink, Source & source);
 
+/**
+ * Hash of the NAR of `path`, plus the number of bytes hashed.
+ *
+ * The NAR is the only serialisation this fork has (flat-file ingestion
+ * went with the fixed-output derivations that needed it), so the hash
+ * of a path means this and nothing else.
+ */
+HashResult hashPath(const SourcePath & path, PathFilter & filter = defaultPathFilter);
+
 /* canonical: restore with store-canonical metadata baked in (see
    RestoreSink::canonical), making a post-restore canonicalise walk
    redundant */
 void restorePath(const std::filesystem::path & path, Source & source, bool startFsync = false, bool canonical = false);
 
 inline constexpr std::string_view narVersionMagic1 = "nix-archive-1";
-
-inline constexpr std::string_view caseHackSuffix = "~nix~case~hack~";
 
 } // namespace nix

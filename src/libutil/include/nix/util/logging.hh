@@ -11,37 +11,6 @@
 
 namespace nix {
 
-typedef enum {
-    actUnknown = 0,
-    actCopyPath = 100,
-    actFileTransfer = 101,
-    actRealise = 102,
-    actCopyPaths = 103,
-    actBuilds = 104,
-    actBuild = 105,
-    actOptimiseStore = 106,
-    actVerifyPaths = 107,
-    actSubstitute = 108,
-    actQueryPathInfo = 109,
-    actPostBuildHook = 110,
-    actBuildWaiting = 111,
-    actFetchTree = 112,
-} ActivityType;
-
-typedef enum {
-    resFileLinked = 100,
-    resBuildLogLine = 101,
-    resUntrustedPath = 102,
-    resCorruptedPath = 103,
-    resSetPhase = 104,
-    resProgress = 105,
-    resSetExpected = 106,
-    resPostBuildLogLine = 107,
-    resFetchStatus = 108,
-} ResultType;
-
-typedef uint64_t ActivityId;
-
 struct LoggerSettings
 {
     /**
@@ -52,63 +21,30 @@ struct LoggerSettings
 
 extern LoggerSettings loggerSettings;
 
+/**
+ * stderr logger. One implementation, so no vtable: `logger` is the
+ * process-wide instance the printMsg/logError macros write through.
+ *
+ * `systemd` prefixes lines with a syslog level (<3>..<7>) when running
+ * under a unit, which is how nixgen-*.service lines get their priority
+ * in the journal; `tty` decides whether ANSI escapes survive.
+ */
 class Logger
 {
-    friend struct Activity;
-
 public:
 
-    struct Field
-    {
-        // FIXME: use std::variant.
-        enum { tInt = 0, tString = 1 } type;
+    bool systemd, tty;
 
-        uint64_t i = 0;
-        std::string s;
+    Logger();
 
-        Field(const std::string & s)
-            : type(tString)
-            , s(s)
-        {
-        }
-
-        Field(const char * s)
-            : type(tString)
-            , s(s)
-        {
-        }
-
-        Field(const uint64_t & i)
-            : type(tInt)
-            , i(i)
-        {
-        }
-    };
-
-    typedef std::vector<Field> Fields;
-
-    virtual ~Logger();
-
-    virtual void stop() {};
-
-    
-    virtual void pause() {};
-    virtual void resume() {};
-
-    // Whether the logger prints the whole build log
-    virtual bool isVerbose()
-    {
-        return false;
-    }
-
-    virtual void log(Verbosity lvl, std::string_view s) = 0;
+    void log(Verbosity lvl, std::string_view s);
 
     void log(std::string_view s)
     {
         log(lvlInfo, s);
     }
 
-    virtual void logEI(const ErrorInfo & ei) = 0;
+    void logEI(const ErrorInfo & ei);
 
     void logEI(Verbosity lvl, ErrorInfo ei)
     {
@@ -116,119 +52,11 @@ public:
         logEI(ei);
     }
 
-    virtual void warn(const std::string & msg);
+    void warn(const std::string & msg);
 
-    virtual void startActivity(
-        ActivityId act,
-        Verbosity lvl,
-        ActivityType type,
-        const std::string & s,
-        const Fields & fields,
-        ActivityId parent) {};
-
-    virtual void stopActivity(ActivityId act) {};
-
-    virtual void result(ActivityId act, ResultType type, const Fields & fields) {};
-
-    virtual void writeToStdout(std::string_view s);
-
-    template<typename... Args>
-    inline void cout(const Args &... args)
-    {
-        writeToStdout(fmt(args...));
-    }
-
-    virtual std::optional<char> ask(std::string_view s)
-    {
-        return {};
-    }
-
-    virtual void setPrintBuildLogs(bool printBuildLogs) {}
-};
-
-/**
- * A variadic template that does nothing.
- *
- * Useful to call a function with each argument in a parameter pack.
- */
-struct nop
-{
-    template<typename... T>
-    nop(T...)
-    {
-    }
-};
-
-ActivityId getCurActivity();
-void setCurActivity(const ActivityId activityId);
-
-struct Activity
-{
-    Logger & logger;
-
-    const ActivityId id;
-
-    Activity(
-        Logger & logger,
-        Verbosity lvl,
-        ActivityType type,
-        const std::string & s = "",
-        const Logger::Fields & fields = {},
-        ActivityId parent = getCurActivity());
-
-    Activity(
-        Logger & logger, ActivityType type, const Logger::Fields & fields = {}, ActivityId parent = getCurActivity())
-        : Activity(logger, lvlError, type, "", fields, parent) {};
-
-    Activity(const Activity & act) = delete;
-
-    ~Activity();
-
-    void progress(uint64_t done = 0, uint64_t expected = 0, uint64_t running = 0, uint64_t failed = 0) const
-    {
-        result(resProgress, done, expected, running, failed);
-    }
-
-    void setExpected(ActivityType type2, uint64_t expected) const
-    {
-        result(resSetExpected, type2, expected);
-    }
-
-    template<typename... Args>
-    void result(ResultType type, const Args &... args) const
-    {
-        Logger::Fields fields;
-        nop{(fields.emplace_back(Logger::Field(args)), 1)...};
-        result(type, fields);
-    }
-
-    void result(ResultType type, const Logger::Fields & fields) const
-    {
-        logger.result(id, type, fields);
-    }
-
-    friend class Logger;
-};
-
-struct PushActivity
-{
-    const ActivityId prevAct;
-
-    PushActivity(ActivityId act)
-        : prevAct(getCurActivity())
-    {
-        setCurActivity(act);
-    }
-
-    ~PushActivity()
-    {
-        setCurActivity(prevAct);
-    }
 };
 
 extern Logger * logger;
-
-std::unique_ptr<Logger> makeSimpleLogger(bool printBuildLogs = true);
 
 /**
  * suppress msgs > this

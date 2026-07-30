@@ -76,16 +76,12 @@ int main(int argc, char ** argv)
 
 	auto run = [&](const char * tag, bool capture) {
 		auto store = openStore(std::filesystem::path(root) / tag);
-		auto local = store.dynamic_pointer_cast<LocalStore>();
 
 		LocalStore::ImportFileHashes fileHashes;
 		std::optional<StorePath> imported;
 		timed(fmt("import (capture %s)", tag).c_str(), [&] {
 			auto sink = sourceToSink([&](Source & source) {
-				imported = local->addToStoreFromDump(source, "bench",
-					FileSerialisationMethod::NixArchive,
-					ContentAddressMethod::Raw::NixArchive,
-					HashAlgorithm::SHA256, {}, NoRepair,
+				imported = store->addToStoreFromDump(source, "bench",
 					capture ? &fileHashes : nullptr);
 			});
 			SourcePath{acc, CanonPath::root}.dumpPath(*sink);
@@ -94,7 +90,7 @@ int main(int argc, char ** argv)
 
 		OptimiseStats stats;
 		timed(fmt("optimise (capture %s)", tag).c_str(), [&] {
-			local->optimisePath(*imported, stats,
+			store->optimisePath(*imported, stats,
 				capture ? &fileHashes : nullptr);
 		});
 		printf("  linked %lu files, freed %.1f MiB\n",

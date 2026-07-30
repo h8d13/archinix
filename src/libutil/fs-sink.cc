@@ -12,55 +12,11 @@ namespace nix {
 
 void FileSystemObjectSink::anchor() {}
 
-void ExtendedFileSystemObjectSink::anchor() {}
-
 void NullFileSystemObjectSink::anchor() {}
-
-void RegularFileSink::anchor() {}
 
 void RestoreSink::anchor() {}
 
 void CreateRegularFileSink::anchor() {}
-
-void copyRecursive(SourceAccessor & accessor, const CanonPath & from, FileSystemObjectSink & sink, const CanonPath & to)
-{
-    auto stat = accessor.lstat(from);
-
-    switch (stat.type) {
-    case SourceAccessor::tSymlink: {
-        sink.createSymlink(to, accessor.readLink(from));
-        break;
-    }
-
-    case SourceAccessor::tRegular: {
-        sink.createRegularFile(to, [&](CreateRegularFileSink & crf) {
-            if (stat.isExecutable)
-                crf.isExecutable();
-            accessor.readFile(from, crf, [&](uint64_t size) { crf.preallocateContents(size); });
-        });
-        break;
-    }
-
-    case SourceAccessor::tDirectory: {
-        sink.createDirectory(to, [&](FileSystemObjectSink & dirSink, const CanonPath & relDirPathTo) {
-            accessor.readDirectory(from, [&](SourceAccessor & subdirAccessor, const CanonPath & relDirPathFrom) {
-                for (auto & [name, _] : subdirAccessor.readDirectory(relDirPathFrom)) {
-                    copyRecursive(subdirAccessor, relDirPathFrom / name, dirSink, relDirPathTo / name);
-                }
-            });
-        });
-        break;
-    }
-
-    case SourceAccessor::tChar:
-    case SourceAccessor::tBlock:
-    case SourceAccessor::tSocket:
-    case SourceAccessor::tFifo:
-    case SourceAccessor::tUnknown:
-    default:
-        throw Error("file '%1%' has an unsupported type of %2%", from, stat.typeString());
-    }
-}
 
 namespace {
 
@@ -168,6 +124,7 @@ void RestoreSink::createDirectory(const CanonPath & path, DirectoryCreatedCallba
 
     RestoreSink dirSink{startFsync, canonical};
     dirSink.deferCanonicalDirs = deferCanonicalDirs;
+    dirSink.relToRoot = relToRoot / path;
     dirSink.dstPath = append(dstPath, path);
     dirSink.dirFd = openFileEnsureBeneathNoSymlinks(
         dirFd.get(),
@@ -190,7 +147,7 @@ void RestoreSink::finishCanonical()
     if (!canonical || !dirFd)
         return;
     if (deferCanonicalDirs) {
-        deferCanonicalDirs->push_back(dstPath);
+        deferCanonicalDirs->push_back(relToRoot);
         return;
     }
     /* dirs are made 0777-masked so they stay populatable; canonical
@@ -222,30 +179,42 @@ void RestoreSink::createDirectory(const CanonPath & path)
     }
 };
 
-struct RestoreRegularFile : CreateRegularFileSink, FdSink
+struct RestoreRegularFile : CreateRegularFileSink
 {
     AutoCloseFD fd;
+    /* the buffered writer over `fd`; declared after it so the
+       descriptor exists when this is constructed */
+    FdSink sink;
     bool startFsync = false;
     bool canonical = false;
     bool madeExecutable = false;
 
     RestoreRegularFile(bool startFSync_, bool canonical_, AutoCloseFD fd_)
-        : FdSink(fd_.get())
-        , fd(std::move(fd_))
+        : fd(std::move(fd_))
+        , sink(fd.get())
         , startFsync(startFSync_)
         , canonical(canonical_)
     {
+    }
+
+    void operator()(std::string_view data) override
+    {
+        sink(data);
+    }
+
+    void flush()
+    {
+        sink.flush();
     }
 
     void anchor() override;
 
     ~RestoreRegularFile()
     {
-        /* Flush the sink before FdSink destructor has a chance to run and we've
-           closed the file descriptor. */
+        /* Flush the writer before the descriptor it holds is closed. */
         if (fd) {
             try {
-                FdSink::flush();
+                sink.flush();
             } catch (...) {
                 ignoreExceptionInDestructor();
             }
@@ -338,28 +307,6 @@ void RestoreSink::createSymlink(const CanonPath & path, const std::string & targ
     if (canonical
         && utimensat(fd, name.rel_c_str(), canonicalTimes, AT_SYMLINK_NOFOLLOW) == -1)
         throw SysError("setting mtime of %1%", PathFmt(append(dstPath, path)));
-}
-
-void RegularFileSink::createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)> func)
-{
-    struct CRF : CreateRegularFileSink
-    {
-        RegularFileSink & back;
-
-        CRF(RegularFileSink & back)
-            : back(back)
-        {
-        }
-
-        void operator()(std::string_view data) override
-        {
-            back.sink(data);
-        }
-
-        void isExecutable() override {}
-    } crf{*this};
-
-    func(crf);
 }
 
 void NullFileSystemObjectSink::createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)> func)

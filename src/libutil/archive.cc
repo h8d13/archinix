@@ -12,17 +12,6 @@
 
 namespace nix {
 
-struct ArchiveSettings
-{
-    /**
-     * macOS-specific hack for file name case collisions. Off: this
-     * store only ever runs on Linux.
-     */
-    bool useCaseHack = false;
-};
-
-static ArchiveSettings archiveSettings;
-
 /* Maximum directory nesting depth for dumpPath()/parseDump(). Bounds
    stack usage so deep trees cannot overflow the (possibly coroutine)
    stack these run on. */
@@ -81,38 +70,24 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
                throws on specials as before: acceptable, since the
                skip-silently semantic is this fork's local-store
                policy, not something exotic filesystems must get. */
-            auto entries = accessor.readDirectory(path);
-            for (auto it = entries.begin(); it != entries.end();)
-                if (it->second == tFifo || it->second == tSocket)
-                    it = entries.erase(it);
-                else
-                    ++it;
+            accessor.readDirectory(
+                path,
+                [&](SourceAccessor & subdirAccessor,
+                    const CanonPath & subdirRelPath,
+                    SourceAccessor::DirEntries entries) {
+                    for (auto it = entries.begin(); it != entries.end();)
+                        if (it->second == tFifo || it->second == tSocket)
+                            it = entries.erase(it);
+                        else
+                            ++it;
 
-            /* If we're on a case-insensitive system like macOS, undo
-               the case hack applied by restorePath(). */
-            StringMap unhacked;
-            for (auto & i : entries)
-                if (archiveSettings.useCaseHack) {
-                    std::string name(i.first);
-                    size_t pos = i.first.find(caseHackSuffix);
-                    if (pos != std::string::npos) {
-                        debug("removing case hack suffix from '%s'", path / i.first);
-                        name.erase(pos);
-                    }
-                    if (!unhacked.emplace(name, i.first).second)
-                        throw Error(
-                            "file name collision between '%s' and '%s'", (path / unhacked[name]), (path / i.first));
-                } else
-                    unhacked.emplace(i.first, i.first);
-
-            accessor.readDirectory(path, [&](SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath) {
-                for (auto & i : unhacked)
-                    if (filter((filterPath / i.first).abs())) {
-                        sink << "entry" << "(" << "name" << i.first << "node";
-                        dump(subdirAccessor, subdirRelPath / i.second, filterPath / i.second, depth + 1);
-                        sink << ")";
-                    }
-            });
+                    for (auto & [name, type] : entries)
+                        if (filter((filterPath / name).abs())) {
+                            sink << "entry" << "(" << "name" << name << "node";
+                            dump(subdirAccessor, subdirRelPath / name, filterPath / name, depth + 1);
+                            sink << ")";
+                        }
+                });
         }
 
         else if (st.type == tSymlink)
@@ -128,7 +103,7 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
 
 void dumpPath(const std::filesystem::path & path, Sink & sink, PathFilter & filter)
 {
-    SourcePath path2 = makeFSSourceAccessor(absPath(path), /*trackLastModified=*/false);
+    SourcePath path2 = makeFSSourceAccessor(absPath(path));
     path2.dumpPath(sink, filter);
 }
 
@@ -160,14 +135,6 @@ static void parseContents(CreateRegularFileSink & sink, Source & source)
 
     readPadding(size, source);
 }
-
-struct CaseInsensitiveCompare
-{
-    bool operator()(const std::string & a, const std::string & b) const
-    {
-        return strcasecmp(a.c_str(), b.c_str()) < 0;
-    }
-};
 
 static void parse(FileSystemObjectSink & sink, Source & source, const CanonPath & path, size_t depth)
 {
@@ -223,8 +190,6 @@ static void parse(FileSystemObjectSink & sink, Source & source, const CanonPath 
 
     else if (type == "directory") {
         sink.createDirectory(path, [&](FileSystemObjectSink & dirSink, const CanonPath & relDirPath) {
-            std::map<std::string, int, CaseInsensitiveCompare> names;
-
             std::string prevName;
 
             while (1) {
@@ -247,22 +212,6 @@ static void parse(FileSystemObjectSink & sink, Source & source, const CanonPath 
                 if (name <= prevName)
                     throw badArchive("NAR directory is not sorted");
                 prevName = name;
-                if (archiveSettings.useCaseHack) {
-                    auto i = names.find(name);
-                    if (i != names.end()) {
-                        debug("case collision between '%1%' and '%2%'", i->first, name);
-                        name += caseHackSuffix;
-                        name += std::to_string(++i->second);
-                        auto j = names.find(name);
-                        if (j != names.end())
-                            throw badArchive(
-                                "NAR contains file name '%s' that collides with case-hacked file name '%s'",
-                                prevName,
-                                j->first);
-                    } else
-                        names[name] = 0;
-                }
-
                 expectTag("node");
 
                 parse(dirSink, source, relDirPath / name, depth + 1);
@@ -299,6 +248,13 @@ void parseDump(FileSystemObjectSink & sink, Source & source)
     if (version != narVersionMagic1)
         throw badArchive("input doesn't look like a Nix archive");
     parse(sink, source, CanonPath::root, 0);
+}
+
+HashResult hashPath(const SourcePath & path, PathFilter & filter)
+{
+    HashSink sink;
+    path.dumpPath(sink, filter);
+    return sink.finish();
 }
 
 void restorePath(const std::filesystem::path & path, Source & source, bool startFsync, bool canonical)

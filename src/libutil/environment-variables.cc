@@ -1,5 +1,7 @@
 #include "nix/util/environment-variables.hh"
 
+#include <cstdlib>
+
 namespace nix {
 
 std::optional<std::string> getEnv(const std::string & key)
@@ -10,10 +12,10 @@ std::optional<std::string> getEnv(const std::string & key)
     return std::string(value);
 }
 
-std::optional<OsString> getEnvOsNonEmpty(const OsString & key)
+std::optional<std::string> getEnvNonEmpty(const std::string & key)
 {
-    auto value = getEnvOs(key);
-    if (value == OS_STR(""))
+    auto value = getEnv(key);
+    if (value == "")
         return {};
     return value;
 }

@@ -8,11 +8,6 @@
 namespace nix {
 
 /**
- * The version of Nix itself.
- */
-extern std::string nixVersion;
-
-/**
  * Initialise the library. Must be called before any other libstore
  * function.
  */

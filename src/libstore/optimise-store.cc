@@ -1,4 +1,5 @@
 #include "nix/store/local-store.hh"
+#include "nix/util/archive.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/store/local-settings.hh"
 #include "nix/util/finally.hh"
@@ -25,7 +26,13 @@ namespace nix {
 static void makeWritable(const std::filesystem::path & path)
 {
     auto st = lstat(path);
-    chmod(path, st.st_mode | S_IWUSR);
+    /* dirs canonicalise to 0755 (posix-fs-canonicalise.cc), which
+       already carries S_IWUSR: without this guard the chmod writes back
+       the mode it just read, once per directory of every optimise walk.
+       Not deletable: a store written before the 0755 decision has 0555
+       dirs. */
+    if (!(st.st_mode & S_IWUSR))
+        chmod(path, st.st_mode | S_IWUSR);
 }
 
 struct MakeReadOnly
@@ -115,10 +122,8 @@ LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & path, cons
 }
 
 void LocalStore::optimisePath_(
-    Activity * act,
     OptimiseCtx & ctx,
     const std::filesystem::path & path,
-    RepairFlag repair,
     bool * parentToggled,
     ThreadPool * pool)
 {
@@ -160,11 +165,11 @@ void LocalStore::optimisePath_(
                that parent is inside the subtree the task owns. */
             if (pool && i.isDir) {
                 auto child = path / i.name;
-                pool->enqueue([this, act, &ctx, child, repair, pool] {
-                    optimisePath_(act, ctx, child, repair, nullptr, pool);
+                pool->enqueue([this, &ctx, child, pool] {
+                    optimisePath_(ctx, child, nullptr, pool);
                 });
             } else
-                optimisePath_(act, ctx, path / i.name, repair, &toggled, pool);
+                optimisePath_(ctx, path / i.name, &toggled, pool);
         }
         return;
     }
@@ -242,7 +247,7 @@ void LocalStore::optimisePath_(
             if (auto it = ctx.fileHashes->files.find(rel); it != ctx.fileHashes->files.end())
                 return it->second;
         }
-        return hashPath(makeFSSourceAccessor(path), FileSerialisationMethod::NixArchive, HashAlgorithm::SHA256).hash;
+        return hashPath(makeFSSourceAccessor(path)).hash;
     }();
     debug("%s has hash '%s'", PathFmt(path), hash.to_string(HashFormat::Nix32, true));
 
@@ -254,18 +259,10 @@ void LocalStore::optimisePath_(
 
     /* Maybe delete the link, if it has been corrupted. */
     if (stLink) {
-        if (st.st_size != stLink->st_size || (repair && hash != ({
-                                                  hashPath(
-                                                      makeFSSourceAccessor(linkPath),
-                                                      FileSerialisationMethod::NixArchive,
-                                                      HashAlgorithm::SHA256)
-                                                      .hash;
-                                              }))) {
+        if (st.st_size != stLink->st_size) {
             // XXX: Consider overwriting linkPath with our valid version.
             warn("removing corrupted link %s", PathFmt(linkPath));
-            warn(
-                "There may be more corrupted paths."
-                "\nYou should run `nix-store --verify --check-contents --repair` to fix them all");
+            warn("There may be more corrupted paths; verify-store --content names them all");
             unlinkIfExists(linkPath);
             stLink.reset();
         }
@@ -403,20 +400,14 @@ void LocalStore::optimisePath_(
     if (S_ISREG(st.st_mode))
         ctx.bytesFreed.fetch_add(st.st_size, std::memory_order_relaxed);
 
-    if (act)
-        act->result(resFileLinked, st.st_size, st.st_blocks);
 }
 
 void LocalStore::optimiseStore(OptimiseStats & stats)
 {
     std::lock_guard<std::mutex> runLock(optimiseStoreLock);
 
-    Activity act(*logger, actOptimiseStore);
-
     auto paths = queryAllValidPaths();
     InodeHash inodeHash = loadInodeHash();
-
-    act.progress(0, paths.size());
 
     /* Store paths are disjoint subtrees, so they can be deduplicated
        independently; the link farm races (create/unlink) are already
@@ -424,7 +415,6 @@ void LocalStore::optimiseStore(OptimiseStats & stats)
        One task per path: the pool is already saturated at this
        granularity, so the per-path walks stay serial (no `pool`
        argument below) rather than fanning out a second time. */
-    std::atomic<uint64_t> done{0};
     OptimiseCtx ctx(inodeHash);
     ThreadPool pool;
 
@@ -432,11 +422,8 @@ void LocalStore::optimiseStore(OptimiseStats & stats)
         if (!isValidPath(i))
             continue; /* path was GC'ed, probably */
         pool.enqueue([&, i] {
-            {
-                Activity act(*logger, lvlTalkative, actUnknown, fmt("optimising path '%s'", printStorePath(i)));
-                optimisePath_(&act, ctx, config->realStoreDir / i.to_string(), NoRepair);
-            }
-            act.progress(++done, paths.size());
+            printTalkative("optimising path '%s'", printStorePath(i));
+            optimisePath_(ctx, config->realStoreDir / i.to_string());
         });
     }
 
@@ -444,13 +431,13 @@ void LocalStore::optimiseStore(OptimiseStats & stats)
     ctx.into(stats);
 }
 
-void LocalStore::optimisePath(const std::filesystem::path & path, RepairFlag repair)
+void LocalStore::optimisePath(const std::filesystem::path & path)
 {
     InodeHash inodeHash;
     OptimiseCtx ctx(inodeHash);
 
     if (config->getLocalSettings().autoOptimiseStore)
-        optimisePath_(nullptr, ctx, path, repair);
+        optimisePath_(ctx, path);
 }
 
 void LocalStore::optimisePath(const StorePath & path, OptimiseStats & stats, const ImportFileHashes * fileHashes)
@@ -483,7 +470,7 @@ void LocalStore::optimisePath(const StorePath & path, OptimiseStats & stats, con
        this thread, which is then the only writer of the root's
        writable-toggle. */
     ThreadPool pool;
-    optimisePath_(nullptr, ctx, realPath, NoRepair, nullptr, &pool);
+    optimisePath_(ctx, realPath, nullptr, &pool);
     pool.process();
     ctx.into(stats);
 }

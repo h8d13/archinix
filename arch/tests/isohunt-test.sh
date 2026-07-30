@@ -22,7 +22,7 @@ rm -f build/tmp/isohunt-vmlinuz build/tmp/isohunt-initrd "$LOG"
 G1=
 for g in build/archstore/nix/store/*-nixarch-1; do
 	[ -d "$g" ] || continue
-	[ -z "$G1" ] || { echo "multiple nixarch-1 generations, REBUILD=1 mkiso" >&2; exit 1; }
+	[ -z "$G1" ] || { echo "multiple nixarch-1 generations: rerun arch/iso/mkiso.sh" >&2; exit 1; }
 	G1=$(basename "$g")
 done
 [ -n "$G1" ] || { echo "no nixarch generation: run arch/iso/mkiso.sh" >&2; exit 1; }

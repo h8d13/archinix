@@ -76,17 +76,18 @@ sources = [ config_priv_h ] + files(
   'canon-path.cc',
   'environment-variables.cc',
   'error.cc',
-  'file-content-address.cc',
   'file-descriptor.cc',
+  'file-system-at.cc',
   'file-system.cc',
   'fs-sink.cc',
   'hash.cc',
   'logging.cc',
   'memory-source-accessor.cc',
   'posix-source-accessor.cc',
-  'processes.cc',
   'progress.cc',
+  'scheduling.cc',
   'serialise.cc',
+  'signals.cc',
   'source-accessor.cc',
   'source-path.cc',
   'strings.cc',
@@ -97,9 +98,6 @@ sources = [ config_priv_h ] + files(
 )
 
 subdir('include/nix/util')
-
-subdir('linux')
-subdir('unix')
 
 this_library = library(
   'nixutil',

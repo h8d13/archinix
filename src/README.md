@@ -36,7 +36,7 @@ your translation unit regardless:
 | `addToStoreFromDump`, `exportPaths` | `Source`/`Sink` (`util/serialise.hh`) |
 | producing a NAR from disk | `SourceAccessor`, `SourcePath`, `CanonPath` (`util/source-accessor.hh`, `util/canon-path.hh`) |
 | reading one back | `parseDump`, `FileSystemObjectSink` (`util/archive.hh`, `util/fs-sink.hh`) |
-| `ValidPathInfo`, CA helpers | `Hash`, `HashAlgorithm` (`util/hash.hh`) |
+| `ValidPathInfo`, `ContentAddress` | `Hash` (`util/hash.hh`) |
 | quieting the library | `verbosity` (`util/logging.hh`) |
 
 ## What is left
@@ -128,27 +128,21 @@ succeed.
 Readers pass `mustExist = true`; writers leave it false so a
 blank disk gets its store on first import.
 
-Downcast for the concrete surfaces:
-
-```c++
-auto local = store.dynamic_pointer_cast<LocalStore>();  // local-store.hh
-auto & gc  = require<GcStore>(*store);                  // store-cast.hh
-auto & fs  = require<LocalFSStore>(*store);
-```
-
 ### Write
 
 ```c++
 // local-store.hh: stream a NAR in, get a content-addressed path back
 StorePath addToStoreFromDump(Source & dump, std::string_view name,
-	FileSerialisationMethod, ContentAddressMethod, HashAlgorithm,
-	const StorePathSet & references, RepairFlag repair,
 	ImportFileHashes * fileHashes = nullptr);
 
-// store-api.hh: register a path whose info you already have
-void addToStore(const ValidPathInfo & info, Source & narSource,
-	RepairFlag repair = NoRepair);
+// local-store.hh: register a path whose info you already have
+void addToStore(const ValidPathInfo & info, Source & narSource);
 ```
+
+No method, algorithm or reference arguments: a path is a NAR hashed
+with SHA-256 and referring to nothing, which is the only shape this
+store has. Flat-file ingestion and the `text:` addressing scheme went
+with the fixed-output derivations that used them.
 
 Produce the NAR with `SourcePath{...}.dumpPath(sink)`
 (`util/source-accessor.hh`). Sockets and fifos are skipped by the dumper
@@ -172,14 +166,15 @@ void          queryReferrers(const StorePath &, StorePathSet & out);
 ```
 
 `ValidPathInfo` (`path-info.hh`) carries `narHash`, `narSize`,
-`registrationTime`, `references`, `deriver`, `ca`.
+`registrationTime`, `references`, `ca`. No `deriver` or `ultimate`:
+nothing here builds a path, so both were null on every row.
 `queryPathsByHashPrefix` matches a hash-part prefix of any length
 through the db, so partial ids resolve without a directory glob.
 
 ### Roots
 
 ```c++
-// local-fs-store.hh
+// local-store.hh
 std::filesystem::path addPermRoot(const StorePath &,
                                   const std::filesystem::path & gcRoot);
 ```
@@ -212,18 +207,19 @@ differ in a few files hold one inode per distinct content between them.
 #include <nix/store/gc-store.hh>
 
 GCOptions opts;
-opts.action = GCOptions::gcDeleteSpecific;      // or gcDeleteDead,
-opts.pathsToDelete = GCOptions::SpecificPaths{  //    gcReturnLive/Dead
-	.paths = {path}, .deleteReferrers = false};
+opts.paths = {path};
 
 GCResults results;
-gcStore.collectGarbage(opts, results);          // results.bytesFreed
+store->collectGarbage(opts, results);           // results.bytesFreed
 ```
 
-Disk and db together, refusing anything still rooted or referenced, and
-pruning the farm. Drop the gcroot symlink first if you mean it. Never
-`rm -rf` inside a store: the tree goes, the registration stays, and
-`verifyStore` is where you find out.
+One mode: the paths you name go, or the call throws saying which is
+still rooted. There is no whole-store sweep and no live/dead query,
+because nothing becomes garbage on its own here (a generation stays
+rooted until `rm-path` unroots it) and rooted is the whole answer.
+Disk and db together, then the farm is pruned. Drop the gcroot symlink
+first if you mean it. Never `rm -rf` inside a store: the tree goes, the
+registration stays, and `verifyStore` is where you find out.
 
 ### Ship
 
@@ -232,20 +228,23 @@ pruning the farm. Drop the gcroot symlink first if you mean it. Never
 void exportPaths(Store &, const StorePathSet &, Sink &);
 ```
 
-`nix-store --export` wire format, topologically sorted, re-hashed
-against the db on the way out so local corruption cannot spread.
+One NAR per path plus a magic, the path name and its (empty)
+reference set, re-hashed against the db on the way out so local
+corruption cannot spread. No order is imposed: the paths refer to
+nothing. Close to `nix-store --export` but not it: the deriver and
+signature fields are gone, which is why the magic differs.
 
 There is no `importPaths` counterpart: it went with signing, and
 upstream's version trusted the path name the stream claimed. Receiving
 is a loop you write over `parseDump` and `addToStore`. With signatures
 gone, the identity check available to you is content addressing:
 re-hash the received NAR, recompute the path with
-`makeFixedOutputPathFromCA` (`store-dir-config.hh`), reject a mismatch.
+`makeContentAddressedPath` (`store-dir-config.hh`), reject a mismatch.
 
 ### Verify
 
 ```c++
-bool verifyStore(bool checkContents, RepairFlag repair);   // true == problems
+bool verifyStore(bool checkContents);              // true == problems
 ```
 
 Default level checks registrations are consistent (db paths exist,
@@ -253,16 +252,16 @@ referrers resolve). `checkContents` re-hashes every store path and every
 `.links` entry against the recorded NAR hash: slow, and the one that
 catches bitrot.
 
-Detect only: `verifyStore` refuses a `Repair` flag with `Unsupported`,
-since repairing meant re-fetching from a substituter. A missing or corrupt path is reported, not pruned; delete
-it deliberately through the GC.
+Detect only: there is no repair flag to pass, since repairing meant
+re-fetching from a substituter. A missing or corrupt path is reported,
+not pruned; delete it deliberately through the GC.
 
 ### Paths on disk
 
 ```c++
 std::filesystem::path toRealPath(const StorePath &);   // <root>/nix/store/<base>
-local->config->realStoreDir;                           // <root>/nix/store
-local->config->stateDir;                               // <root>/nix/var/nix
+store->config->realStoreDir;                           // <root>/nix/store
+store->config->stateDir;                               // <root>/nix/var/nix
 ```
 
 Callers pass a store root and never spell out `nix/store` or
@@ -291,24 +290,20 @@ try {
 	verbosity = lvlError;           // library logs to stderr otherwise
 
 	auto store = openStore(std::filesystem::absolute(argv[1]));
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	std::optional<StorePath> imported;
 	auto sink = sourceToSink([&](Source & source) {
-		imported = local->addToStoreFromDump(source, "mytree",
-			FileSerialisationMethod::NixArchive,
-			ContentAddressMethod::Raw::NixArchive,
-			HashAlgorithm::SHA256, {}, NoRepair);
+		imported = store->addToStoreFromDump(source, "mytree");
 	});
 	SourcePath{makeFSSourceAccessor(std::filesystem::absolute(argv[2])),
 		CanonPath::root}.dumpPath(*sink);
 	sink->finish();
 
-	for (auto & p : local->queryAllValidPaths())
+	for (auto & p : store->queryAllValidPaths())
 		printf("%s\t%lld\n", std::string(p.to_string()).c_str(),
-			(long long) local->queryPathInfo(p)->registrationTime);
+			(long long) store->queryPathInfo(p)->registrationTime);
 
-	printf("%s\n", local->toRealPath(*imported).c_str());
+	printf("%s\n", store->toRealPath(*imported).c_str());
 	return 0;
 } catch (std::exception & e) {
 	fprintf(stderr, "%s\n", e.what());   // nix::Error derives from it

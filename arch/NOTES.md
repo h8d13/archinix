@@ -1,10 +1,11 @@
 ## Gotchas / Notes
 
-- **Reruns of mkiso.sh reuse the nixarch generations** and only
-  reassemble the ISO. `REBUILD=1` discards them first; required after
-  changing setup-boot.sh or any `arch/iso/initcpio-*` file. After any ISO
-  rebuild, restart QEMU: a live VM's GRUB menu points at pre-rebuild
-  hashes.
+- **mkiso.sh rebuilds the nixarch generation every run**, discarding
+  existing `*-nixarch-1` paths first. Reuse was the old default (skip
+  pacman, only reassemble the ISO) but any edit to setup-boot.sh or an
+  `arch/iso/initcpio-*` file invalidates a kept generation without
+  saying so, so it re-runs unconditionally. After any ISO rebuild,
+  restart QEMU: a live VM's GRUB menu points at pre-rebuild hashes.
 - **Boot entries carry `rd.systemd.gpt_auto=0`.** Root comes from
   `nixgen=`, so systemd-gpt-auto-generator must not go hunting for a
   root partition and race the generated `sysroot.mount`. Entries written
@@ -120,10 +121,27 @@
   none, and sharing between them is the `.links` hardlink farm, which
   works on content below the store-path level. `import-path` now
   rejects a stream that claims references, so the invariant is
-  enforced rather than assumed, and the closure walk that existed for
-  a case that never occurs is gone. The `Refs` table and its `on
-  delete restrict` FK stay as backstop: bypass the door and a delete
-  fails loudly instead of losing data.
+  enforced rather than assumed. Everything the reference graph used to
+  hold up went with it: the topological sort on registration and on
+  export, the cycle check that needed edges to find one, and the
+  referrer walk the collector used to decide what a deletion drags in
+  (one path is now one decision). The `Refs` table and its `on delete
+  restrict` FK stay as backstop: bypass the door and a delete fails
+  loudly instead of losing data.
+- **one shape of path, one hash.** Every path is a NAR hashed with
+  SHA-256 and named from that hash, so `addToStoreFromDump` takes no
+  method, algorithm or reference arguments, and MD5/SHA-1/SHA-512, flat
+  ingestion and the `text:` scheme are gone with the fixed-output
+  derivations that used them. The `deriver` and `ultimate` columns went
+  with them, and an export bundle carries NAR + magic + path +
+  references and nothing else.
+- **schema changes mean rebuild, not migrate.** `<state>/db/schema`
+  holds one version; open compares it and refuses anything else rather
+  than rewriting a database it did not create. There is no migration
+  ladder and no `big-lock` serialising one. Bump `nixSchemaVersion`
+  when `schema.sql` changes, then re-bootstrap and re-import: a
+  generation is reproducible from its tree, so rebuilding is cheaper
+  than carrying the machinery that would avoid it.
 - **store layout stays in the library.** `store-paths` (list) and
   `store-resolve` (name / hash-prefix / full basename -> basename) ask
   the db, which is the only thing that knows what is registered;

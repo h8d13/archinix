@@ -11,7 +11,6 @@
 
 #include "nix/util/canon-path.hh"
 #include "nix/util/error.hh"
-#include "nix/util/os-string.hh"
 
 
 namespace nix {
@@ -219,28 +218,6 @@ public:
      */
     void startFsync() const;
 };
-
-class Pipe
-{
-public:
-    AutoCloseFD readSide, writeSide;
-
-    void create(
-        bool nonBlocking = false
-    );
-
-    void close();
-};
-
-namespace unix {
-
-/**
- * Set the close-on-exec flag for the given file descriptor.
- */
-void closeOnExec(Descriptor fd);
-
-
-} // namespace unix
 
 MakeError(EndOfFile, Error);
 
