@@ -29,6 +29,7 @@ run import-hashes build/tmp/import-hashes
 run nar-parse build/tmp/nar-parse
 run import-select sh -e tests/import-select.sh
 run gc-links sh -e tests/gc-links.sh
+run gc-roots sh -e tests/gc-roots.sh
 run export-roundtrip sh -e tests/export-roundtrip.sh
 run specials-skip sh -e tests/specials-skip.sh
 run tool-errors sh -e tests/tool-errors.sh

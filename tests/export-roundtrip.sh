@@ -13,7 +13,7 @@ P=$REPO/build/prefix
 mkdir -p "$1"
 ROOT=$(realpath "$1")
 
-for t in import-dir export-path import-path; do
+for t in import-dir export-path import-path verify-store; do
 	[ -x "build/$t" ] || g++ -std=c++23 -O2 "arch/$t.cc" -o "build/$t" \
 		$(PKG_CONFIG_PATH=$P/lib/pkgconfig pkg-config --cflags --libs nix-store nix-util)
 done
@@ -50,6 +50,15 @@ diff -r "$P1" "$P2"; ok $? "trees byte-identical"
 # receiving side dedups: duplicate content on one inode
 [ "$(stat -c %i "$P2/f1")" = "$(stat -c %i "$P2/sub/f1-dup")" ]
 ok $? "receiver deduplicated duplicate content"
+
+# arriving content is live before it has a GRUB entry, so import-path
+# roots it the way import-dir does; the receiving store must also pass
+# its own content check, since a bundle is the one path into a store
+# that never touched the source tree
+[ -L "$ROOT/b/nix/var/nix/gcroots/$(basename "$P2")" ]
+ok $? "import-path roots what it received"
+$RUN build/verify-store "$ROOT/b" --content > "$ROOT/log-verify" 2>&1
+ok $? "shipped store verifies against its own db (contents re-hashed)"
 
 # idempotent: same bundle again lands on the same path
 P3=$($RUN build/import-path "$ROOT/b" < "$ROOT/bundle" 2> "$ROOT/log-b2")
