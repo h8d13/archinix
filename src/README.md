@@ -225,7 +225,11 @@ registration stays, and `verifyStore` is where you find out.
 
 ```c++
 #include <nix/store/export-import.hh>
-void exportPaths(Store &, const StorePathSet &, Sink &);
+void exportPaths(LocalStore &, const StorePathSet &, Sink &);
+
+// the reference set that follows each path in the stream
+StorePathSet readStorePathSet(const StoreDirConfig &, Source &);
+void writeStorePathSet(const StoreDirConfig &, Sink &, const StorePathSet &);
 ```
 
 One NAR per path plus a magic, the path name and its (empty)
@@ -236,10 +240,16 @@ signature fields are gone, which is why the magic differs.
 
 There is no `importPaths` counterpart: it went with signing, and
 upstream's version trusted the path name the stream claimed. Receiving
-is a loop you write over `parseDump` and `addToStore`. With signatures
-gone, the identity check available to you is content addressing:
-re-hash the received NAR, recompute the path with
-`makeContentAddressedPath` (`store-dir-config.hh`), reject a mismatch.
+is a loop you write over `parseDump`, `readStorePathSet` and
+`addToStore`; `arch/import-path.cc` is that loop. With signatures gone,
+the identity check available to you is content addressing: re-hash the
+received NAR, recompute the path with `makeContentAddressedPath`
+(`store-dir-config.hh`), reject a mismatch.
+
+The pair above is all that is left of upstream's `CommonProto`
+serialiser table, which was parameterised over the worker and serve
+protocols and specialised for vector, set, tuple and map. One protocol
+and one container survived the extraction.
 
 ### Verify
 

@@ -156,10 +156,6 @@ public:
     const std::filesystem::path reservedPath;
     const std::filesystem::path schemaPath;
 
-private:
-
-public:
-
     /**
      * Open the local store, creating its skeleton and database if the
      * root does not hold one yet.
@@ -190,42 +186,8 @@ public:
     /**
      * Copy the contents of a path to the store and register the
      * validity of the resulting path.
-     *
-     * @param filter This function can be used to exclude files (see
-     * libutil/archive.hh).
      */
-    StorePath addToStore(
-        std::string_view name,
-        const SourcePath & path,
-        PathFilter & filter = defaultPathFilter);
-
-    /**
-     * Write a NAR dump of a store path.
-     */
-    void narFromPath(const StorePath & path, Sink & sink);
-
-    /**
-     * @return An object to access files for a specific store object,
-     * or nullptr if the store contains no such object.
-     */
-    std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath = true);
-
-    /**
-     * Like `getFSAccessor`, but throws instead of returning null.
-     *
-     * @throws InvalidPath if the store object doesn't exist or (if
-     * requireValidPath = true) is invalid.
-     */
-    [[nodiscard]] ref<SourceAccessor> requireStoreObjectAccessor(const StorePath & path, bool requireValidPath = true)
-    {
-        auto accessor = getFSAccessor(path, requireValidPath);
-        if (!accessor) {
-            throw InvalidPath(
-                requireValidPath ? "path '%1%' is not a valid store path" : "store path '%1%' does not exist",
-                printStorePath(path));
-        }
-        return ref<SourceAccessor>{accessor};
-    }
+    StorePath addToStore(std::string_view name, const SourcePath & path);
 
     /**
      * Name part a store path may carry when only its hash is known.
@@ -248,10 +210,6 @@ public:
     StorePathSet queryPathsByHashPrefix(const std::string & hashPrefix);
 
     StorePathSet queryAllValidPaths();
-
-    std::shared_ptr<const ValidPathInfo> queryPathInfoUnchecked(const StorePath & path);
-
-    void queryReferrers(const StorePath & path, StorePathSet & referrers);
 
     void addToStore(const ValidPathInfo & info, Source & source);
 
@@ -322,11 +280,6 @@ public:
     void collectGarbage(const GCOptions & options, GCResults & results);
 
     /**
-     * Called by `collectGarbage` to recursively delete a path.
-     */
-    void deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed);
-
-    /**
      * Optimise the disk space usage of the Nix store by hard-linking
      * files with the same contents.
      */
@@ -375,17 +328,13 @@ protected:
 public:
 
     /**
-     * Register the validity of a path, i.e., that `path` exists, that
-     * the paths referenced by it exists, and in the case of an output
-     * path of a derivation, that it has been produced by a successful
-     * execution of the derivation (or something equivalent).  Also
-     * register the hash of the file system contents of the path.  The
-     * hash must be a SHA-256 hash.
+     * Register the validity of a path: that `path` exists and that the
+     * paths it references exist. Also records the SHA-256 hash of its
+     * file system contents. Upstream's third clause, that an output
+     * path was produced by a successful derivation build, has nothing
+     * to assert here: nothing in this store builds.
      */
     void registerValidPath(const ValidPathInfo & info);
-
-    void registerValidPaths(const ValidPathInfos & infos);
-
 
 
 protected:
@@ -420,7 +369,16 @@ private:
      */
     void invalidatePathChecked(const StorePath & path);
 
+    std::shared_ptr<const ValidPathInfo> queryPathInfoUnchecked(const StorePath & path);
+
     std::shared_ptr<const ValidPathInfo> queryPathInfoInternal(State & state, const StorePath & path);
+
+    void queryReferrers(const StorePath & path, StorePathSet & referrers);
+
+    /**
+     * Called by `collectGarbage` to recursively delete a path.
+     */
+    void deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed);
 
     void updatePathInfo(State & state, const ValidPathInfo & info);
 

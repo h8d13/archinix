@@ -11,16 +11,6 @@
 
 namespace nix {
 
-struct LoggerSettings
-{
-    /**
-     * Whether to print a stack trace on error.
-     */
-    bool showTrace = false;
-};
-
-extern LoggerSettings loggerSettings;
-
 /**
  * stderr logger. One implementation, so no vtable: `logger` is the
  * process-wide instance the printMsg/logError macros write through.
@@ -116,7 +106,5 @@ inline void warn(const std::string & fs, const Args &... args)
         haveWarned = true;            \
         warn(args);                   \
     }
-
-void writeToStderr(std::string_view s);
 
 } // namespace nix

@@ -83,8 +83,8 @@ try {
 		/* sockets/fifos are skipped by dumpPath itself (NAR has no
 		   representation for them; see archive.cc), which replaced
 		   both the callers' destructive find -delete against live
-		   roots and the lstat-per-entry PathFilter that used to live
-		   here. */
+		   roots and the lstat-per-entry filter predicate that used
+		   to live here. dumpPath takes no filter at all now. */
 		SourcePath{makeFSSourceAccessor(dir), CanonPath::root}
 			.dumpPath(*sink);
 		sink->finish();

@@ -69,7 +69,8 @@ public:
           Any other node types that may be encountered on the file system, such as device nodes, sockets, named pipe,
           and possibly even more exotic things.
 
-          Responsible for `"unknown"` from `builtins.readFileType "/dev/null"`.
+          NAR cannot represent these, so dumpPath skips sockets and
+          fifos and throws on the rest.
 
           Unlike `DT_UNKNOWN`, this must not be used for deferring the lookup of types.
         */
@@ -142,7 +143,7 @@ public:
 
     virtual std::string readLink(const CanonPath & path) = 0;
 
-    virtual void dumpPath(const CanonPath & path, Sink & sink, PathFilter & filter = defaultPathFilter);
+    virtual void dumpPath(const CanonPath & path, Sink & sink);
 
     /**
      * Return a corresponding path in the root filesystem, if
@@ -199,7 +200,6 @@ public:
  *
  * Symlinks in parents of `root` are resolved. Final symlink is not.
  */
-ref<SourceAccessor>
-makeFSSourceAccessor(std::filesystem::path root, FinalSymlink finalSymlink = FinalSymlink::DontFollow);
+ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root);
 
 } // namespace nix

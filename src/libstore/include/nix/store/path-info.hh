@@ -111,6 +111,5 @@ static_assert(std::is_copy_assignable_v<ValidPathInfo>);
 static_assert(std::is_copy_constructible_v<ValidPathInfo>);
 static_assert(std::is_move_constructible_v<ValidPathInfo>);
 
-using ValidPathInfos = std::map<StorePath, ValidPathInfo>;
 
 } // namespace nix

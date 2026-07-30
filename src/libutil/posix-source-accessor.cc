@@ -5,7 +5,6 @@
 #include "nix/util/memory-source-accessor.hh"
 #include "nix/util/signals.hh"
 
-#include <boost/unordered/concurrent_flat_map.hpp>
 
 #include <atomic>
 
@@ -555,13 +554,16 @@ try {
 
 } // namespace
 
-ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root, FinalSymlink finalSymlink)
+/* The final component is never followed: every caller wanted the
+   symlink itself, so the FinalSymlink parameter upstream threaded here
+   only ever took its default and is gone. */
+ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root)
 {
     assert(root.is_absolute());
-    AutoCloseFD fd = openFileReadonly(root, finalSymlink);
+    AutoCloseFD fd = openFileReadonly(root, FinalSymlink::DontFollow);
 
     if (!fd) {
-        if (finalSymlink == FinalSymlink::Follow || errno != NIX_ERR_OPEN_SYMLINK)
+        if (errno != NIX_ERR_OPEN_SYMLINK)
             throw NativeSysError("opening file %1%", PathFmt(root));
 
         /* A helper class that holds the symlink destination in memory. */

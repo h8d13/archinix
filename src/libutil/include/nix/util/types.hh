@@ -44,42 +44,11 @@ using StringPairs = StringMap;
  */
 using StringSet = std::set<std::string, std::less<>>;
 
-typedef std::vector<std::pair<std::string, std::string>> Headers;
-
 /**
- * Helper class to run code at startup.
- */
-template<typename T>
-struct OnStartup
-{
-    OnStartup(T && t)
-    {
-        t();
-    }
-};
-
-/**
- * Wrap bools to prevent string literals (i.e. 'char *') from being
- * cast to a bool in Attr.
- */
-template<typename T>
-struct Explicit
-{
-    T t;
-
-    bool operator==(const Explicit<T> & other) const = default;
-
-    bool operator<(const Explicit<T> & other) const
-    {
-        return t < other.t;
-    }
-};
-
-/**
- * This wants to be a little bit like rust's Cow type.
- * Some parts of the evaluator benefit greatly from being able to reuse
- * existing allocations for strings, but have to be able to also use
- * newly allocated storage for values.
+ * This wants to be a little bit like rust's Cow type: hold either an
+ * owned string or a view of one, so a caller that usually has a
+ * literal does not allocate. `serialise.hh` uses it for a fixed
+ * end-of-file message.
  *
  * We do not define implicit conversions, even with ref qualifiers,
  * since those can easily become ambiguous to the reader and can degrade

@@ -2,11 +2,25 @@
 #include "nix/util/serialise.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/archive.hh"
-#include "nix/store/common-protocol.hh"
-#include "nix/store/common-protocol-impl.hh"
 
 
 namespace nix {
+
+StorePathSet readStorePathSet(const StoreDirConfig & store, Source & from)
+{
+    StorePathSet res;
+    auto size = readNum<size_t>(from);
+    while (size--)
+        res.insert(store.parseStorePath(readString(from)));
+    return res;
+}
+
+void writeStorePathSet(const StoreDirConfig & store, Sink & to, const StorePathSet & paths)
+{
+    to << paths.size();
+    for (auto & path : paths)
+        to << store.printStorePath(path);
+}
 
 static void exportPath(LocalStore & store, const StorePath & path, Sink & sink)
 {
@@ -15,7 +29,7 @@ static void exportPath(LocalStore & store, const StorePath & path, Sink & sink)
     HashSink hashSink;
     TeeSink teeSink(sink, hashSink);
 
-    store.narFromPath(path, teeSink);
+    dumpPath(store.toRealPath(path), teeSink);
 
     /* Refuse to export paths that have changed.  This prevents
        filesystem corruption from spreading to other machines.
@@ -34,7 +48,7 @@ static void exportPath(LocalStore & store, const StorePath & path, Sink & sink)
        empty field on every path this store has ever exported. The
        references field stays because it is what import-path checks. */
     teeSink << exportMagic << store.printStorePath(path);
-    CommonProto::write(store, CommonProto::WriteConn{.to = teeSink}, info->references);
+    writeStorePathSet(store, teeSink, info->references);
 }
 
 /* No topological sort on the way out: the paths are reference-free, so

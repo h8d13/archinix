@@ -58,7 +58,7 @@ struct SourcePath;
  *   `+` denotes string concatenation.
  * ```
  */
-void dumpPath(const std::filesystem::path & path, Sink & sink, PathFilter & filter = defaultPathFilter);
+void dumpPath(const std::filesystem::path & path, Sink & sink);
 
 void parseDump(FileSystemObjectSink & sink, Source & source);
 
@@ -69,7 +69,7 @@ void parseDump(FileSystemObjectSink & sink, Source & source);
  * went with the fixed-output derivations that needed it), so the hash
  * of a path means this and nothing else.
  */
-HashResult hashPath(const SourcePath & path, PathFilter & filter = defaultPathFilter);
+HashResult hashPath(const SourcePath & path);
 
 /* canonical: restore with store-canonical metadata baked in (see
    RestoreSink::canonical), making a post-restore canonicalise walk

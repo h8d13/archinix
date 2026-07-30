@@ -24,8 +24,6 @@
 #include <nix/util/archive.hh>
 #include <nix/util/fs-sink.hh>
 #include <nix/util/serialise.hh>
-#include <nix/store/common-protocol.hh>
-#include <nix/store/common-protocol-impl.hh>
 
 using namespace nix;
 
@@ -50,8 +48,7 @@ static StorePaths importVerified(LocalStore & store, Source & source)
 			throw Error("Nix archive cannot be imported; wrong format");
 
 		auto path = store.parseStorePath(readString(source));
-		auto references = CommonProto::Serialise<StorePathSet>::read(
-			store, CommonProto::ReadConn{.from = source});
+		auto references = readStorePathSet(store, source);
 		auto narHash = hashString(saved.s);
 
 		auto expected = store.makeContentAddressedPath(path.name(), narHash);

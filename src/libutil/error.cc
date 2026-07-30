@@ -38,23 +38,17 @@ void throwExceptionSelfCheck()
         "C++ exception handling is broken. This would appear to be a problem with the way Nix was compiled and/or linked and/or loaded.");
 }
 
-void BaseError::recalcWhat() const
-{
-    std::ostringstream oss;
-    showErrorInfo(oss, err, loggerSettings.showTrace);
-    what_ = oss.str();
-}
-
 // c++ std::exception descendants must have a 'const char* what()' function.
 // This stringifies the error and caches it for use by what(), or similarly by msg().
 const std::string & BaseError::calcWhat() const
 {
-    if (!what_.has_value())
-        recalcWhat();
+    if (!what_.has_value()) {
+        std::ostringstream oss;
+        showErrorInfo(oss, err);
+        what_ = oss.str();
+    }
     return *what_;
 }
-
-std::optional<std::string> ErrorInfo::programName = std::nullopt;
 
 std::ostream & operator<<(std::ostream & os, const HintFmt & hf)
 {
@@ -148,7 +142,7 @@ void printSkippedTracesMaybe(
     skippedTraces.clear();
 }
 
-std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo, bool showTrace)
+std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo)
 {
     std::string prefix;
     switch (einfo.level) {
@@ -161,10 +155,7 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo, bool s
         break;
     }
     case Verbosity::lvlWarn: {
-        if (einfo.isFromExpr)
-            prefix = ANSI_WARNING "evaluation warning";
-        else
-            prefix = ANSI_WARNING "warning";
+        prefix = ANSI_WARNING "warning";
         break;
     }
     case Verbosity::lvlInfo: {
@@ -173,10 +164,6 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo, bool s
     }
     case Verbosity::lvlTalkative: {
         prefix = ANSI_GREEN "talk";
-        break;
-    }
-    case Verbosity::lvlChatty: {
-        prefix = ANSI_GREEN "chat";
         break;
     }
     case Verbosity::lvlVomit: {
@@ -191,107 +178,16 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo, bool s
         assert(false);
     }
 
-    // FIXME: show the program name as part of the trace?
-    if (einfo.programName && einfo.programName != ErrorInfo::programName)
-        prefix += fmt(" [%s]:" ANSI_NORMAL " ", einfo.programName.value_or(""));
-    else
-        prefix += ":" ANSI_NORMAL " ";
+    prefix += ":" ANSI_NORMAL " ";
 
     std::ostringstream oss;
 
-    /*
-     * Traces
-     * ------
-     *
-     *  The semantics of traces is a bit weird. We have only one option to
-     *  print them and to make them verbose (--show-trace). In the code they
-     *  are always collected, but they are not printed by default. The code
-     *  also collects more traces when the option is on. This means that there
-     *  is no way to print the simplified traces at all.
-     *
-     *  I (layus) designed the code to attach positions to a restricted set of
-     *  messages. This means that we have  a lot of traces with no position at
-     *  all, including most of the base error messages. For example "type
-     *  error: found a string while a set was expected" has no position, but
-     *  will come with several traces detailing it's precise relation to the
-     *  closest know position. This makes erroring without printing traces
-     *  quite useless.
-     *
-     *  This is why I introduced the idea to always print a few traces on
-     *  error. The number 3 is quite arbitrary, and was selected so as not to
-     *  clutter the console on error. For the same reason, a trace with an
-     *  error position takes more space, and counts as two traces towards the
-     *  limit.
-     *
-     *  The rest is truncated, unless --show-trace is passed. This preserves
-     *  the same bad semantics of --show-trace to both show the trace and
-     *  augment it with new data. Not too sure what is the best course of
-     *  action.
-     *
-     *  The issue is that it is fundamentally hard to provide a trace for a
-     *  lazy language. The trace will only cover the current spine of the
-     *  evaluation, missing things that have been evaluated before. For
-     *  example, most type errors are hard to inspect because there is not
-     *  trace for the faulty value. These errors should really print the faulty
-     *  value itself.
-     *
-     *  In function calls, the --show-trace flag triggers extra traces for each
-     *  function invocation. These work as scopes, allowing to follow the
-     *  current spine of the evaluation graph. Without that flag, the error
-     *  trace should restrict itself to a restricted prefix of that trace,
-     *  until the first scope. If we ever get to such a precise error
-     *  reporting, there would be no need to add an arbitrary limit here. We
-     *  could always print the full trace, and it would just be small without
-     *  the flag.
-     *
-     *  One idea I had is for XxxError.addTrace() to perform nothing if one
-     *  scope has already been traced. Alternatively, we could stop here when
-     *  we encounter such a scope instead of after an arbitrary number of
-     *  traces. This however requires to augment traces with the notion of
-     *  "scope".
-     *
-     *  This is particularly visible in code like evalAttrs(...) where we have
-     *  to make a decision between the two following options.
-     *
-     *  ``` long traces
-     *  inline void EvalState::evalAttrs(Env & env, Expr * e, Value & v, const Pos & pos, std::string_view errorCtx)
-     *  {
-     *      try {
-     *          e->eval(*this, env, v);
-     *          if (v.type() != nAttrs)
-     *              error<TypeError>("expected a set but found %1%", v);
-     *      } catch (Error & e) {
-     *          e.addTrace(pos, errorCtx);
-     *          throw;
-     *      }
-     *  }
-     *  ```
-     *
-     *  ``` short traces
-     *  inline void EvalState::evalAttrs(Env & env, Expr * e, Value & v, const Pos & pos, std::string_view errorCtx)
-     *  {
-     *      e->eval(*this, env, v);
-     *      try {
-     *          if (v.type() != nAttrs)
-     *              error<TypeError>("expected a set but found %1%", v);
-     *      } catch (Error & e) {
-     *          e.addTrace(pos, errorCtx);
-     *          throw;
-     *      }
-     *  }
-     *  ```
-     *
-     *  The second example can be rewritten more concisely, but kept in this
-     *  form to highlight the symmetry. The first option adds more information,
-     *  because whatever caused an error down the line, in the generic eval
-     *  function, will get annotated with the code location that uses and
-     *  required it. The second option is less verbose, but does not provide
-     *  any context at all as to where and why a failing value was required.
-     *
-     *  Scopes would fix that, by adding context only when --show-trace is
-     *  passed, and keeping the trace terse otherwise.
-     *
-     */
+    /* Traces are capped at 3. Upstream made the cap conditional on
+       --show-trace, a flag that both lifted the cap and made the
+       evaluator collect more traces to begin with; neither the flag nor
+       an evaluator exists here, so the cap is unconditional. A trace
+       with a position counts as two towards it. `TracePrint::Always`
+       still overrides. */
 
     // Enough indent to align with with the `... `
     // prepended to each element of the trace
@@ -310,7 +206,7 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo, bool s
             if (trace.hint.str().empty())
                 continue;
 
-            if (!showTrace && count > 3) {
+            if (count > 3) {
                 truncate = true;
             }
 
@@ -334,10 +230,7 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo, bool s
         printSkippedTracesMaybe(oss, ellipsisIndent, count, skippedTraces, tracesSeen);
 
         if (truncate) {
-            oss << "\n"
-                << ANSI_WARNING
-                "(stack trace truncated; use '--show-trace' to show the full, detailed trace)" ANSI_NORMAL
-                << "\n";
+            oss << "\n" << ANSI_WARNING "(stack trace truncated)" ANSI_NORMAL << "\n";
         }
 
         oss << "\n" << prefix;

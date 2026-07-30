@@ -93,7 +93,6 @@ sources = [ config_priv_h ] + files(
   'strings.cc',
   'terminal.cc',
   'thread-pool.cc',
-  'url.cc',
   'util.cc',
 )
 

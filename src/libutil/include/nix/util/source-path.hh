@@ -8,7 +8,6 @@
 #include "nix/util/ref.hh"
 #include "nix/util/canon-path.hh"
 #include "nix/util/source-accessor.hh"
-#include "nix/util/std-hash.hh"
 
 namespace nix {
 
@@ -42,7 +41,7 @@ struct SourcePath
     /**
      * Dump this `SourcePath` to `sink` as a NAR archive.
      */
-    void dumpPath(Sink & sink, PathFilter & filter = defaultPathFilter) const;
+    void dumpPath(Sink & sink) const;
 
     std::string to_string() const;
 };

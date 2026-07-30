@@ -164,7 +164,6 @@ LocalStore::LocalStore(ref<const Config> config)
     createDirs(dbDir);
     auto gcRootsDir = config->stateDir / "gcroots";
     const auto & localSettings = config->getLocalSettings();
-    const auto & gcSettings = localSettings.getGCSettings();
     createDirs(gcRootsDir);
 
     for (auto & perUserDir : {profilesDir / "per-user", gcRootsDir / "per-user"}) {
@@ -197,7 +196,7 @@ LocalStore::LocalStore(ref<const Config> config)
        before doing a garbage collection. */
     try {
         auto st = maybeStat(reservedPath);
-        if (!st || st->st_size != gcSettings.reservedSize) {
+        if (!st || st->st_size != localSettings.reservedSize) {
             AutoCloseFD fd = (open(
                 reservedPath.string().c_str(),
                 O_WRONLY | O_CREAT
@@ -206,13 +205,13 @@ LocalStore::LocalStore(ref<const Config> config)
                 0600));
             int res = -1;
 #if HAVE_POSIX_FALLOCATE
-            res = posix_fallocate(fd.get(), 0, gcSettings.reservedSize);
+            res = posix_fallocate(fd.get(), 0, localSettings.reservedSize);
 #endif
             if (res != 0) {
-                writeFull(fd.get(), std::string(gcSettings.reservedSize, 'X'));
+                writeFull(fd.get(), std::string(localSettings.reservedSize, 'X'));
                 [[gnu::unused]] auto res2 =
 
-                    ftruncate(fd.get(), gcSettings.reservedSize)
+                    ftruncate(fd.get(), localSettings.reservedSize)
                     ;
             }
         }
@@ -535,12 +534,11 @@ void LocalStore::queryReferrers(const StorePath & path, StorePathSet & referrers
     return retrySQLite<void>([&]() { queryReferrers(*_state->lock(), path, referrers); });
 }
 
+/* Upstream took a `ValidPathInfos` map here so the daemon could
+   register a whole closure in one transaction. Every caller left
+   registers exactly one path, so the map, its two loops and the
+   typedef are gone. */
 void LocalStore::registerValidPath(const ValidPathInfo & info)
-{
-    registerValidPaths({{info.path, info}});
-}
-
-void LocalStore::registerValidPaths(const ValidPathInfos & infos)
 {
     /* SQLite will fsync by default, but the new valid paths may not
        be fsync-ed.  So some may want to fsync them before registering
@@ -554,22 +552,18 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
 
         SQLiteTxn txn(state->db);
 
-        for (auto & [_, i] : infos) {
-            if (isValidPath_(*state, i.path))
-                updatePathInfo(*state, i);
-            else
-                addValidPath(*state, i);
-        }
+        if (isValidPath_(*state, info.path))
+            updatePathInfo(*state, info);
+        else
+            addValidPath(*state, info);
 
         /* Refs rows, for a reference set that the import door keeps
-           empty: the loop is what would make a bypass visible to the
+           empty: this is what would make a bypass visible to the
            `on delete restrict` FK. No cycle check follows it, since a
            cycle needs edges this store does not have. */
-        for (auto & [_, i] : infos) {
-            if (i.references.empty())
-                continue;
-            auto referrer = queryValidPathId(*state, i.path);
-            for (auto & j : i.references)
+        if (!info.references.empty()) {
+            auto referrer = queryValidPathId(*state, info.path);
+            for (auto & j : info.references)
                 state->stmts->AddReference.use().apply(referrer).apply(queryValidPathId(*state, j)).exec();
         }
 
@@ -1574,26 +1568,6 @@ StorePath LocalStore::addToStoreFromDump(
 
 /* Create a temporary directory in the store that won't be
    garbage-collected until the returned FD is closed. */
-/* A store object's files, as an accessor rooted at its physical
-   path. There is no whole-store accessor: nothing here walks the
-   store as one tree. */
-std::shared_ptr<SourceAccessor> LocalStore::getFSAccessor(const StorePath & path, bool requireValidPath)
-{
-    auto absPath = std::filesystem::path{config->realStoreDir} / path.to_string();
-    if (requireValidPath) {
-        /* Only return non-null if the store object is a fully-valid
-           member of the store. */
-        if (!isValidPath(path))
-            return nullptr;
-    } else {
-        /* Return non-null as long as the some file system data exists,
-           even if the store object is not fully registered. */
-        if (!pathExists(absPath))
-            return nullptr;
-    }
-    return makeFSSourceAccessor(std::move(absPath));
-}
-
 std::pair<std::filesystem::path, AutoCloseFD> LocalStore::createTempDirInStore()
 {
     std::filesystem::path tmpDirFn;

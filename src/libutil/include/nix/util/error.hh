@@ -32,17 +32,15 @@
 
 namespace nix {
 
-typedef enum { lvlError = 0, lvlWarn, lvlNotice, lvlInfo, lvlTalkative, lvlChatty, lvlDebug, lvlVomit } Verbosity;
+typedef enum { lvlError = 0, lvlWarn, lvlNotice, lvlInfo, lvlTalkative, lvlDebug, lvlVomit } Verbosity;
 
 /**
  * When a stack frame is printed.
  */
 enum struct TracePrint {
-    /**
-     * The default behavior; always printed when `--show-trace` is set.
-     */
+    /** Subject to the 3-trace cap in `showErrorInfo`. */
     Default,
-    /** Always printed. Produced by `builtins.addErrorContext`. */
+    /** Always printed, cap or not. */
     Always,
 };
 
@@ -59,21 +57,9 @@ struct ErrorInfo
     Verbosity level;
     HintFmt msg;
     std::list<Trace> traces;
-    /**
-     * Some messages are generated directly by expressions; notably `builtins.warn`, `abort`, `throw`.
-     * These may be rendered differently, so that users can distinguish them.
-     */
-    bool isFromExpr = false;
-
-    /**
-     * Exit status.
-     */
-    unsigned int status = 1;
-
-    static std::optional<std::string> programName;
 };
 
-std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo, bool showTrace);
+std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo);
 
 /**
  * BaseError should generally not be caught, as it has Interrupted as
@@ -101,12 +87,6 @@ public:
     BaseError(const BaseError &) = default;
     BaseError & operator=(const BaseError &) = default;
     BaseError & operator=(BaseError &&) noexcept = default;
-
-    template<typename... Args>
-    BaseError(unsigned int status, Args &&... args)
-        : err{.level = lvlError, .msg = HintFmt(std::forward<Args>(args)...), .status = status}
-    {
-    }
 
     template<typename... Args>
     explicit BaseError(const std::string & fs, Args &&... args)
@@ -151,16 +131,6 @@ public:
         return err;
     }
 
-    void withExitStatus(unsigned int status)
-    {
-        err.status = status;
-    }
-
-    void pushTrace(Trace trace)
-    {
-        err.traces.push_front(trace);
-    }
-
     /**
      * Prepends an item to the error trace, as is usual for extra context.
      *
@@ -180,28 +150,6 @@ public:
      * @param print Optional, whether to always print (used by `addErrorContext`)
      */
     void addTrace(HintFmt hint, TracePrint print = TracePrint::Default);
-
-    bool hasTrace() const
-    {
-        return !err.traces.empty();
-    }
-
-    /**
-     * Returns a mutable reference to the error info.
-     *
-     * @warning After modifying the returned ErrorInfo, you must call
-     * recalcWhat() to update the cached formatted message.
-     */
-    ErrorInfo & unsafeInfo()
-    {
-        return err;
-    }
-
-    /**
-     * Recalculate the cached formatted error message.
-     * Must be called after modifying the error info via unsafeInfo().
-     */
-    void recalcWhat() const;
 
     [[noreturn]] virtual void throwClone() const = 0;
 };

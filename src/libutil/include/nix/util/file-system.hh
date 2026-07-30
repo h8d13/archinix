@@ -357,15 +357,6 @@ std::filesystem::path defaultTempDir();
 std::filesystem::path makeTempPath(const std::filesystem::path & root, const std::string & suffix = ".tmp");
 
 /**
- * Used in various places.
- *
- * @todo type
- */
-typedef fun<bool(const std::string & path)> PathFilter;
-
-extern PathFilter defaultPathFilter;
-
-/**
  * Change permissions of a file only if necessary.
  *
  * @details

@@ -277,18 +277,7 @@ public:
         return (i != path.end()) <=> (j != x.path.end());
     }
 
-    /**
-     * Return true if `this` is equal to `parent` or a child of
-     * `parent`.
-     */
-    bool isWithin(const CanonPath & parent) const;
-
     CanonPath removePrefix(const CanonPath & prefix) const;
-
-    /**
-     * Append another path to this one.
-     */
-    void extend(const CanonPath & x);
 
     /**
      * Concatenate two paths.
@@ -303,6 +292,19 @@ public:
     CanonPath operator/(std::string_view c) const;
 
     friend std::size_t hash_value(const CanonPath &);
+
+private:
+
+    /**
+     * Return true if `this` is equal to `parent` or a child of
+     * `parent`. Only `removePrefix` asserts on it.
+     */
+    bool isWithin(const CanonPath & parent) const;
+
+    /**
+     * Append another path to this one. Only `operator/` builds on it.
+     */
+    void extend(const CanonPath & x);
 };
 
 static_assert(std::ranges::forward_range<CanonPath>);

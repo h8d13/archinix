@@ -45,6 +45,20 @@ private:
         lru.splice(/*pos=*/lru.end(), /*other=*/lru, it);
     }
 
+    /**
+     * Drop an item. Only `upsert` needs it, to replace in place.
+     */
+    template<typename K>
+    bool erase(const K & key)
+    {
+        auto i = data.find(key);
+        if (i == data.end())
+            return false;
+        lru.erase(i->second.first.it);
+        data.erase(i);
+        return true;
+    }
+
 public:
 
     LRUCache(size_t capacity)
@@ -81,17 +95,6 @@ public:
         i->second.first.it = j;
     }
 
-    template<typename K>
-    bool erase(const K & key)
-    {
-        auto i = data.find(key);
-        if (i == data.end())
-            return false;
-        lru.erase(i->second.first.it);
-        data.erase(i);
-        return true;
-    }
-
     /**
      * Look up an item in the cache. If it exists, it becomes the most
      * recently used item.
@@ -108,25 +111,6 @@ public:
         auto & [it, value] = i->second;
         promote(it.it);
         return value;
-    }
-
-    /**
-     * Look up an item in the cache. If it exists, it becomes the most
-     * recently used item.
-     *
-     * @returns mutable pointer to the corresponding cache entry, nullptr if
-     * it's not in the cache
-     */
-    template<typename K>
-    Value * getOrNullptr(const K & key)
-    {
-        auto i = data.find(key);
-        if (i == data.end())
-            return nullptr;
-
-        auto & [it, value] = i->second;
-        promote(it.it);
-        return &value;
     }
 
     size_t size() const noexcept

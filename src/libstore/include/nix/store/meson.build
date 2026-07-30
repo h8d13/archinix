@@ -10,13 +10,10 @@ config_pub_h = configure_file(
 )
 
 headers = [ config_pub_h ] + files(
-  'common-protocol-impl.hh',
-  'common-protocol.hh',
   'content-address.hh',
   'export-import.hh',
   'gc-store.hh',
   'globals.hh',
-  'length-prefixed-protocol-helper.hh',
   'local-settings.hh',
   'local-store.hh',
   'path-info.hh',

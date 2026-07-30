@@ -36,8 +36,7 @@ std::pair<StorePath, CanonPath> StoreDirConfig::toStorePath(std::string_view pat
         return {parseStorePath(path.substr(0, slash)), CanonPath{path.substr(slash)}};
 }
 
-StorePath
-LocalStore::addToStore(std::string_view name, const SourcePath & path, PathFilter & filter)
+StorePath LocalStore::addToStore(std::string_view name, const SourcePath & path)
 {
     std::optional<StorePath> storePath;
     auto sink = sourceToSink([&](Source & source) {
@@ -46,16 +45,9 @@ LocalStore::addToStore(std::string_view name, const SourcePath & path, PathFilte
         if (config->warnLargePathThreshold && lengthSource.total >= config->warnLargePathThreshold)
             warn("copied large path '%s' to the store (%s)", path, renderSize(lengthSource.total));
     });
-    path.dumpPath(*sink, filter);
+    path.dumpPath(*sink);
     sink->finish();
     return storePath.value();
-}
-
-
-void LocalStore::narFromPath(const StorePath & path, Sink & sink)
-{
-    auto accessor = requireStoreObjectAccessor(path);
-    SourcePath{accessor}.dumpPath(sink);
 }
 
 

@@ -43,16 +43,6 @@ void _interrupted();
  */
 void startSignalHandlerThread();
 
-static inline void setInterrupted(bool isInterrupted)
-{
-    _isInterrupted = isInterrupted;
-}
-
-static inline bool getInterrupted()
-{
-    return _isInterrupted;
-}
-
 static inline bool isInterrupted()
 {
     return _isInterrupted || (interruptCheck && interruptCheck());

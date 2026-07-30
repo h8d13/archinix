@@ -24,9 +24,6 @@ inline constexpr size_t hashSizeSha256 = 32;
  * @brief Enumeration representing the hash formats.
  */
 enum struct HashFormat : int {
-    /// @brief Base 64 encoding.
-    /// @see [IETF RFC 4648, section 4](https://datatracker.ietf.org/doc/html/rfc4648#section-4).
-    Base64,
     /// @brief Nix-specific base-32 encoding. @see BaseNix32
     Nix32,
     /// @brief Lowercase hexadecimal encoding. @see base16Chars
@@ -64,20 +61,15 @@ struct Hash
     static Hash parseAnyPrefixed(std::string_view s);
 
     /**
-     * Parse a bare hash, no algorithm prefix. The base encoding
-     * follows from the length.
-     */
-    static Hash parseNonSRIUnprefixed(std::string_view s);
-
-    /**
      * Check whether two hashes are equal.
      */
     bool operator==(const Hash & h2) const noexcept;
 
     /**
-     * Return a string representation of the hash, in base-16, base-32
-     * or base-64. By default, this is prefixed by the hash algo
-     * (e.g. "sha256:").
+     * Return a string representation of the hash, in base-32, base-16
+     * or SRI (`sha256-<base64>`). Prefixed by the hash algo
+     * (e.g. "sha256:") unless `includeAlgo` says otherwise; SRI always
+     * carries it. Bare base-64 was a fourth choice no caller made.
      */
     [[nodiscard]] std::string to_string(HashFormat hashFormat, bool includeAlgo) const;
 };

@@ -156,24 +156,6 @@ std::string drainFD(Descriptor fd, DrainFdOpts opts = {});
 void drainFD(Descriptor fd, Sink & sink, DrainFdSinkOpts opts = {});
 
 /**
- * Get [Standard Input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
- */
-[[gnu::always_inline]]
-inline Descriptor getStandardInput()
-{
-    return STDIN_FILENO;
-}
-
-/**
- * Get [Standard Output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
- */
-[[gnu::always_inline]]
-inline Descriptor getStandardOutput()
-{
-    return STDOUT_FILENO;
-}
-
-/**
  * Get [Standard Error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
  */
 [[gnu::always_inline]]

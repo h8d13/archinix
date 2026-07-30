@@ -17,30 +17,19 @@ namespace nix {
  * else, and arch/ is the operator surface. Change a default here and
  * recompile; there is deliberately no file, env var or URI parameter
  * that can reach them at runtime.
+ *
+ * Held by the store's config, so these are genuinely per-store rather
+ * than the global pretence they used to be.
  */
-struct GCSettings
+struct LocalSettings
 {
     /**
      * Amount of reserved disk space for the garbage collector.
+     * Upstream split this into a `GCSettings` base reached through
+     * `getGCSettings()`, for a collector that was its own store
+     * capability; there is one settings struct and one reader.
      */
     off_t reservedSize = 8 * 1024 * 1024;
-};
-
-/**
- * Settings for a local store. Held by the store's config, so these are
- * genuinely per-store rather than the global pretence they used to be.
- */
-struct LocalSettings : GCSettings
-{
-    GCSettings & getGCSettings()
-    {
-        return *this;
-    }
-
-    const GCSettings & getGCSettings() const
-    {
-        return *this;
-    }
 
     /**
      * Whether changes to the store metadata (in `nix/var/nix/db`) are

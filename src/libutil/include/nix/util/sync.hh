@@ -3,17 +3,13 @@
 
 #include <cstdlib>
 #include <mutex>
-#include <shared_mutex>
 #include <condition_variable>
 #include <cassert>
-
-#include "nix/util/error.hh"
 
 namespace nix {
 
 /**
- * This template class ensures synchronized access to a value of type
- * T. It is used as follows:
+ * Ensures synchronized access to a value of type T. Used as follows:
  *
  *   struct Data { int x; ... };
  *
@@ -26,51 +22,53 @@ namespace nix {
  *
  * Here, "data" is automatically unlocked when "data_" goes out of
  * scope.
+ *
+ * Upstream parameterised this over the mutex and lock types so a
+ * `SharedSync` could hand out shared read locks. Nothing here ever
+ * took a read lock, so there is one mutex type and `lock()` is the
+ * only way in.
  */
-template<class T, class M, class WL, class RL, class CV>
-class SyncBase
+template<class T>
+class Sync
 {
 private:
-    M mutex;
+    std::mutex mutex;
     T data;
 
 public:
 
-    using element_type = T;
+    Sync() {}
 
-    SyncBase() {}
-
-    SyncBase(const T & data)
+    Sync(const T & data)
         : data(data)
     {
     }
 
-    SyncBase(T && data) noexcept
+    Sync(T && data) noexcept
         : data(std::move(data))
     {
     }
 
     template<typename... Ts>
-    SyncBase(Ts &&... args)
+    Sync(Ts &&... args)
         requires requires { T{std::forward<Ts>(args)...}; }
         : data(std::forward<Ts>(args)...)
     {
     }
 
-    SyncBase(SyncBase && other) noexcept
+    Sync(Sync && other) noexcept
         : data(std::move(*other.lock()))
     {
     }
 
-    template<class L>
     class Lock
     {
-    protected:
-        SyncBase * s;
-        L lk;
-        friend SyncBase;
+    private:
+        Sync * s;
+        std::unique_lock<std::mutex> lk;
+        friend Sync;
 
-        Lock(SyncBase * s)
+        Lock(Sync * s)
             : s(s)
             , lk(s->mutex)
         {
@@ -83,99 +81,37 @@ public:
 
         ~Lock() {}
 
-        void wait(CV & cv)
+        void wait(std::condition_variable & cv)
         {
             assert(s);
             cv.wait(lk);
         }
 
         template<class Predicate>
-        void wait(CV & cv, Predicate pred)
+        void wait(std::condition_variable & cv, Predicate pred)
         {
             assert(s);
             cv.wait(lk, std::move(pred));
         }
 
-        template<class Rep, class Period>
-        std::cv_status wait_for(CV & cv, const std::chrono::duration<Rep, Period> & duration)
-        {
-            assert(s);
-            return cv.wait_for(lk, duration);
-        }
-
-        template<class Rep, class Period, class Predicate>
-        bool wait_for(CV & cv, const std::chrono::duration<Rep, Period> & duration, Predicate pred)
-        {
-            assert(s);
-            return cv.wait_for(lk, duration, pred);
-        }
-
-        template<class Clock, class Duration>
-        std::cv_status wait_until(CV & cv, const std::chrono::time_point<Clock, Duration> & duration)
-        {
-            assert(s);
-            return cv.wait_until(lk, duration);
-        }
-    };
-
-    struct WriteLock : Lock<WL>
-    {
-        using Lock<WL>::Lock;
-
         T * operator->()
         {
-            return &WriteLock::s->data;
+            return &s->data;
         }
 
         T & operator*()
         {
-            return WriteLock::s->data;
+            return s->data;
         }
     };
 
     /**
-     * Acquire write (exclusive) access to the inner value.
+     * Acquire exclusive access to the inner value.
      */
-    WriteLock lock()
+    Lock lock()
     {
-        return WriteLock(this);
-    }
-
-    struct ReadLock : Lock<RL>
-    {
-        using Lock<RL>::Lock;
-
-        const T * operator->()
-        {
-            return &ReadLock::s->data;
-        }
-
-        const T & operator*()
-        {
-            return ReadLock::s->data;
-        }
-    };
-
-    /**
-     * Acquire read access to the inner value. When using
-     * `std::shared_mutex`, this will use a shared lock.
-     */
-    ReadLock readLock() const
-    {
-        return ReadLock(const_cast<SyncBase *>(this));
+        return Lock(this);
     }
 };
-
-template<class T>
-using Sync =
-    SyncBase<T, std::mutex, std::unique_lock<std::mutex>, std::unique_lock<std::mutex>, std::condition_variable>;
-
-template<class T>
-using SharedSync = SyncBase<
-    T,
-    std::shared_mutex,
-    std::unique_lock<std::shared_mutex>,
-    std::shared_lock<std::shared_mutex>,
-    std::condition_variable>;
 
 } // namespace nix

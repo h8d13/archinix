@@ -17,9 +17,7 @@ namespace nix {
    stack these run on. */
 static constexpr size_t narMaxDepth = 64;
 
-PathFilter defaultPathFilter = [](const std::string &) { return true; };
-
-void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & filter)
+void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink)
 {
     auto dumpContents = [&sink](SourceAccessor & accessor, const CanonPath & path) {
         sink << "contents";
@@ -34,12 +32,8 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
 
     sink << narVersionMagic1;
 
-    [&sink, &filter, &dumpContents](
-        this const auto & dump,
-        SourceAccessor & accessor,
-        const CanonPath & path,
-        const CanonPath & filterPath,
-        size_t depth) -> void {
+    [&sink, &dumpContents](
+        this const auto & dump, SourceAccessor & accessor, const CanonPath & path, size_t depth) -> void {
         checkInterrupt();
 
         if (depth >= narMaxDepth)
@@ -62,10 +56,12 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
             /* NAR cannot represent sockets or fifos, and a live root
                always has some (gpg-agent under /etc/pacman.d/gnupg).
                Skip them here, from the type readdir already returned:
-               callers used to pass a PathFilter doing its own lstat
-               per entry, doubling the stat traffic of a whole import
-               (66k -> 33k on arch-base) to learn what d_type said for
-               free. Entries without a d_type (filesystems that return
+               callers used to pass a filter predicate doing its own
+               lstat per entry, doubling the stat traffic of a whole
+               import (66k -> 33k on arch-base) to learn what d_type
+               said for free. That predicate is gone entirely now, and
+               with it the absolute path built per entry to feed it.
+               Entries without a d_type (filesystems that return
                DT_UNKNOWN) fall through to dump()'s own lstat, which
                throws on specials as before: acceptable, since the
                skip-silently semantic is this fork's local-store
@@ -81,12 +77,11 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
                         else
                             ++it;
 
-                    for (auto & [name, type] : entries)
-                        if (filter((filterPath / name).abs())) {
-                            sink << "entry" << "(" << "name" << name << "node";
-                            dump(subdirAccessor, subdirRelPath / name, filterPath / name, depth + 1);
-                            sink << ")";
-                        }
+                    for (auto & [name, type] : entries) {
+                        sink << "entry" << "(" << "name" << name << "node";
+                        dump(subdirAccessor, subdirRelPath / name, depth + 1);
+                        sink << ")";
+                    }
                 });
         }
 
@@ -97,14 +92,14 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
             throw Error("file '%s' has an unsupported type", path);
 
         sink << ")";
-    }(*this, path, path, 0);
+    }(*this, path, 0);
 }
 
 
-void dumpPath(const std::filesystem::path & path, Sink & sink, PathFilter & filter)
+void dumpPath(const std::filesystem::path & path, Sink & sink)
 {
     SourcePath path2 = makeFSSourceAccessor(absPath(path));
-    path2.dumpPath(sink, filter);
+    path2.dumpPath(sink);
 }
 
 template<typename... Args>
@@ -250,10 +245,10 @@ void parseDump(FileSystemObjectSink & sink, Source & source)
     parse(sink, source, CanonPath::root, 0);
 }
 
-HashResult hashPath(const SourcePath & path, PathFilter & filter)
+HashResult hashPath(const SourcePath & path)
 {
     HashSink sink;
-    path.dumpPath(sink, filter);
+    path.dumpPath(sink);
     return sink.finish();
 }
 

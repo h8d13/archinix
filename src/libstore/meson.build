@@ -182,7 +182,6 @@ subdir('nix-meson-build-support/common')
 # .drv realisation machinery (build/, derivations) and their deps
 # (curl, seccomp) are cut; anything they alone referenced went too.
 sources = files(
-  'common-protocol.cc',
   'content-address.cc',
   'export-import.cc',
   'gc.cc',

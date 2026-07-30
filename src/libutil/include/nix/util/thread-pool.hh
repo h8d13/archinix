@@ -6,10 +6,8 @@
 #include "nix/util/sync.hh"
 
 #include <queue>
-#include <set>
-#include <functional>
+#include <vector>
 #include <thread>
-#include <map>
 #include <atomic>
 
 namespace nix {
@@ -81,92 +79,5 @@ private:
 
     void doWork(bool mainThread);
 };
-
-/**
- * Process in parallel a set of items of type T that have a partial
- * ordering between them. Thus, any item is only processed after all
- * its dependencies have been processed.
- */
-template<typename T>
-void processGraph(const std::set<T> & nodes, fun<std::set<T>(const T &)> getEdges, fun<void(const T &)> processNode)
-{
-    struct Graph
-    {
-        std::set<T> left;
-        std::map<T, std::set<T>> refs, rrefs;
-    };
-
-    Sync<Graph> graph_(Graph{nodes, {}, {}});
-
-    std::function<void(const T &)> worker;
-
-    /* Create pool last to ensure threads are stopped before other destructors
-     * run */
-    ThreadPool pool;
-
-    worker = [&](const T & node) {
-        {
-            auto graph(graph_.lock());
-            auto i = graph->refs.find(node);
-            if (i == graph->refs.end())
-                goto getRefs;
-            goto doWork;
-        }
-
-    getRefs: {
-        auto refs = getEdges(node);
-        refs.erase(node);
-
-        {
-            auto graph(graph_.lock());
-            for (auto & ref : refs)
-                if (graph->left.count(ref)) {
-                    graph->refs[node].insert(ref);
-                    graph->rrefs[ref].insert(node);
-                }
-            if (graph->refs[node].empty())
-                goto doWork;
-        }
-    }
-
-        return;
-
-    doWork:
-        processNode(node);
-
-        /* Enqueue work for all nodes that were waiting on this one
-           and have no unprocessed dependencies. */
-        {
-            auto graph(graph_.lock());
-            for (auto & rref : graph->rrefs[node]) {
-                auto & refs(graph->refs[rref]);
-                auto i = refs.find(node);
-                assert(i != refs.end());
-                refs.erase(i);
-                if (refs.empty())
-                    pool.enqueue(std::bind(worker, rref));
-            }
-            graph->left.erase(node);
-            graph->refs.erase(node);
-            graph->rrefs.erase(node);
-        }
-    };
-
-    for (auto & node : nodes) {
-        try {
-            pool.enqueue(std::bind(worker, std::ref(node)));
-        } catch (ThreadPoolShutDown &) {
-            /* Stop if the thread pool is shutting down. It means a
-               previous work item threw an exception, so process()
-               below will rethrow it. */
-            break;
-        }
-    }
-
-    pool.process();
-
-    if (!graph_.lock()->left.empty())
-        throw Error("graph processing incomplete (cyclic reference?)");
-}
 
 } // namespace nix

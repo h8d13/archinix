@@ -7,8 +7,6 @@
 
 namespace nix {
 
-LoggerSettings loggerSettings;
-
 Verbosity verbosity = lvlInfo;
 
 /**
@@ -35,7 +33,7 @@ static void writeFullLogging(Descriptor fd, std::string_view s)
     }
 }
 
-void writeToStderr(std::string_view s)
+static void writeToStderr(std::string_view s)
 {
     writeFullLogging(getStandardError(), s);
 }
@@ -61,7 +59,6 @@ void Logger::log(Verbosity lvl, std::string_view s)
             c = '5';
             break;
         case lvlTalkative:
-        case lvlChatty:
             c = '6';
             break;
         case lvlDebug:
@@ -81,7 +78,7 @@ void Logger::log(Verbosity lvl, std::string_view s)
 void Logger::logEI(const ErrorInfo & ei)
 {
     std::ostringstream oss;
-    showErrorInfo(oss, ei, loggerSettings.showTrace);
+    showErrorInfo(oss, ei);
 
     log(ei.level, oss.view());
 }

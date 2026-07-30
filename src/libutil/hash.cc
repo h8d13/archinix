@@ -45,7 +45,6 @@ std::string Hash::to_string(HashFormat hashFormat, bool includeAlgo) const
     case HashFormat::Nix32:
         s += BaseNix32::encode(bytes);
         break;
-    case HashFormat::Base64:
     case HashFormat::SRI:
         s += base64::encode(bytes);
         break;
@@ -123,11 +122,6 @@ Hash Hash::parseAnyPrefixed(std::string_view original)
 
     /* SRI is always Base64; otherwise the length says which base. */
     return parseLowLevel(rest, isSRI ? DecodeNamePair{base64::decode, "SRI"} : baseFromSize(rest));
-}
-
-Hash Hash::parseNonSRIUnprefixed(std::string_view s)
-{
-    return parseLowLevel(s, baseFromSize(s));
 }
 
 struct Hash::Ctx

@@ -2,9 +2,9 @@
 
 namespace nix {
 
-void SourcePath::dumpPath(Sink & sink, PathFilter & filter) const
+void SourcePath::dumpPath(Sink & sink) const
 {
-    return accessor->dumpPath(path, sink, filter);
+    return accessor->dumpPath(path, sink);
 }
 
 std::string SourcePath::to_string() const

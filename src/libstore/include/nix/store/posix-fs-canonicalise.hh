@@ -17,7 +17,7 @@ typedef std::set<Inode> InodesSeen;
 
 /**
  * The mtime every node in the store is canonicalised to. Callers that
- * stamp or check it were open-coding the literal with a `/* mtimeStore *\/`
+ * stamp or check it were open-coding the literal with a "mtimeStore"
  * comment beside it, in two files, which is one edit away from drift.
  */
 extern const time_t mtimeStore;

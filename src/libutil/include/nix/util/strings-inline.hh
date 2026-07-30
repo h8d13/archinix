@@ -38,12 +38,6 @@ void basicSplitStringInto(C & accum, std::basic_string_view<CharT> s, std::basic
     }
 }
 
-template<typename C>
-void splitStringInto(C & accum, std::string_view s, std::string_view separators)
-{
-    basicSplitStringInto<C, char>(accum, s, separators);
-}
-
 template<class C, class CharT>
 C basicSplitString(std::basic_string_view<CharT> s, std::basic_string_view<CharT> separators)
 {
@@ -86,32 +80,6 @@ template<class C>
 std::string concatStringsSep(const std::string_view sep, const C & ss)
 {
     return basicConcatStringsSep<char, C>(sep, ss);
-}
-
-template<class C>
-std::string dropEmptyInitThenConcatStringsSep(const std::string_view sep, const C & ss)
-{
-    size_t size = 0;
-
-    // TODO? remove to make sure we don't rely on the empty item ignoring behavior,
-    //       or just get rid of this function by understanding the remaining calls.
-    // for (auto & i : ss) {
-    //     // Make sure we don't rely on the empty item ignoring behavior
-    //     assert(!i.empty());
-    //     break;
-    // }
-
-    // need a cast to string_view since this is also called with Symbols
-    for (const auto & s : ss)
-        size += sep.size() + std::string_view(s).size();
-    std::string s;
-    s.reserve(size);
-    for (auto & i : ss) {
-        if (s.size() != 0)
-            s += sep;
-        s += i;
-    }
-    return s;
 }
 
 } // namespace nix

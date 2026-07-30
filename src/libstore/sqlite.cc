@@ -1,7 +1,6 @@
 #include "nix/store/sqlite.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/util.hh"
-#include "nix/util/url.hh"
 #include "nix/util/signals.hh"
 
 #ifdef __linux__
@@ -13,6 +12,27 @@
 #include <thread>
 
 namespace nix {
+
+/* Percent-encode for the `file:` URI handed to sqlite3_open_v2. This
+   was libutil's url.cc, a URL module kept for this one call after the
+   store-URI parsing it served was cut. */
+static std::string percentEncode(std::string_view s)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    std::string res;
+    res.reserve(s.size());
+    for (unsigned char c : s) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.'
+            || c == '_' || c == '~')
+            res += c;
+        else {
+            res += '%';
+            res += hex[c >> 4];
+            res += hex[c & 0xf];
+        }
+    }
+    return res;
+}
 
 SQLiteError::SQLiteError(
     const char * path, const char * errMsg, int errNo, int extendedErrNo, int offset, HintFmt && hf)

@@ -175,11 +175,6 @@ public:
     {
     }
 
-    static HintFmt fromFormatString(const std::string & format)
-    {
-        return HintFmt(boost::format(format));
-    }
-
     /**
      * Interpolate the given arguments into the format string.
      */
