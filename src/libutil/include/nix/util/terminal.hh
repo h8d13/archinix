@@ -1,21 +1,14 @@
 #pragma once
 ///@file
 
-#include <string>
-
 namespace nix {
 
 /**
- * Determine whether ANSI escape sequences are appropriate for the
- * present output.
+ * Whether stderr is an interactive terminal. Gates the in-place
+ * progress counter, which would otherwise scribble into a log file or
+ * the journal. Upstream also consulted TERM/NO_COLOR/NOCOLOR here,
+ * which were about colour; nothing emits colour.
  */
 bool isTTY();
-
-/**
- * Strip ANSI escape sequences from a string. If 'filterAll' is true,
- * all of them are removed. Otherwise colour-setting sequences are
- * kept. Tabs are expanded to spaces.
- */
-std::string filterANSIEscapes(std::string_view s, bool filterAll = false);
 
 } // namespace nix

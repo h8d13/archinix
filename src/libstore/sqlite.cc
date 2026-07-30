@@ -1,5 +1,4 @@
 #include "nix/store/sqlite.hh"
-#include "nix/util/environment-variables.hh"
 #include "nix/util/util.hh"
 #include "nix/util/signals.hh"
 
@@ -46,7 +45,7 @@ SQLiteError::SQLiteError(
     auto offsetStr = (offset == -1) ? "" : "at offset " + std::to_string(offset) + ": ";
     err.msg = HintFmt(
         "%s: %s%s, %s (in '%s')",
-        Uncolored(hf.str()),
+        hf.str(),
         offsetStr,
         sqlite3_errstr(extendedErrNo),
         errMsg,
@@ -75,15 +74,6 @@ void SQLiteBusy::anchor() {}
     } else
         throw SQLiteError(path, errMsg, err, exterr, offset, std::move(hf));
 }
-
-static void traceSQL(void * x, const char * sql)
-{
-    // wacky delimiters:
-    //   so that we're quite unambiguous without escaping anything
-    // notice instead of trace:
-    //   so that this can be enabled without getting the firehose in our face.
-    notice("SQL<[%1%]>", sql);
-};
 
 SQLite::SQLite(const std::filesystem::path & path, Settings && settings)
 {
@@ -126,11 +116,6 @@ SQLite::SQLite(const std::filesystem::path & path, Settings && settings)
 
     if (sqlite3_busy_timeout(db, 60 * 60 * 1000) != SQLITE_OK)
         SQLiteError::throw_(db, "setting timeout");
-
-    if (getEnv("NIX_DEBUG_SQLITE_TRACES") == "1") {
-        // To debug sqlite statements; trace all of them
-        sqlite3_trace(db, &traceSQL, nullptr);
-    }
 
     exec("pragma foreign_keys = 1");
 }

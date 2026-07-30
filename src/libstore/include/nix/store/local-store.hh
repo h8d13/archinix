@@ -325,19 +325,18 @@ protected:
      */
     VerificationResult verifyAllValidPaths();
 
-public:
-
     /**
      * Register the validity of a path: that `path` exists and that the
      * paths it references exist. Also records the SHA-256 hash of its
      * file system contents. Upstream's third clause, that an output
      * path was produced by a successful derivation build, has nothing
      * to assert here: nothing in this store builds.
+     *
+     * Not public: the two ingestion routes (`addToStore`,
+     * `addToStoreFromDump`) call it, and a caller registering a path
+     * the store did not itself write is how the db drifts from disk.
      */
     void registerValidPath(const ValidPathInfo & info);
-
-
-protected:
 
     void verifyPath(
         const StorePath & path,

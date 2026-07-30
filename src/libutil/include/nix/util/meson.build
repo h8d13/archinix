@@ -9,14 +9,12 @@ config_pub_h = configure_file(
 
 headers = [ config_pub_h ] + files(
   'alignment.hh',
-  'ansicolor.hh',
   'archive.hh',
   'array-from-string-literal.hh',
   'base-n.hh',
   'base-nix-32.hh',
   'canon-path.hh',
   'deleter.hh',
-  'environment-variables.hh',
   'error.hh',
   'file-descriptor.hh',
   'file-path-impl.hh',

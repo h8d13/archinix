@@ -40,7 +40,7 @@ static void checkPathName(std::string_view path, std::string_view name)
     try {
         checkName(name);
     } catch (BadStorePathName & e) {
-        throw BadStorePath("path '%s' is not a valid store path: %s", path, Uncolored(e.message()));
+        throw BadStorePath("path '%s' is not a valid store path: %s", path, e.message());
     }
 }
 

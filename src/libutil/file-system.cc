@@ -20,9 +20,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include "nix/util/file-system-at.hh"
-#include "nix/util/environment-variables.hh"
 #include "util-config-private.hh"
-
 
 
 
@@ -382,7 +380,7 @@ std::filesystem::path makeTempPath(const std::filesystem::path & root, const std
     // start the counter at a random value to minimize issues with preexisting temp paths
     static std::atomic<uint32_t> counter(std::random_device{}());
     assert(!std::filesystem::path(suffix).is_absolute());
-    auto tmpRoot = canonPath(root.empty() ? defaultTempDir() : root, true);
+    auto tmpRoot = canonPath(root, true);
     return tmpRoot / fmt("%s-%s-%s", suffix, getpid(), counter.fetch_add(1, std::memory_order_relaxed));
 }
 
@@ -548,11 +546,6 @@ std::filesystem::path descriptorToPath(Descriptor fd)
 
     /* Fallback for unknown fd or unsupported platform */
     return "<fd " + std::to_string(fd) + ">";
-}
-
-std::filesystem::path defaultTempDir()
-{
-    return getEnvNonEmpty("TMPDIR").value_or("/tmp");
 }
 
 PosixStat lstat(const std::filesystem::path & path)

@@ -10,7 +10,6 @@
 #include <vector>
 #include <ranges>
 
-#include <boost/container_hash/hash.hpp>
 
 namespace nix {
 
@@ -291,8 +290,6 @@ public:
 
     CanonPath operator/(std::string_view c) const;
 
-    friend std::size_t hash_value(const CanonPath &);
-
 private:
 
     /**
@@ -311,21 +308,4 @@ static_assert(std::ranges::forward_range<CanonPath>);
 
 std::ostream & operator<<(std::ostream & stream, const CanonPath & path);
 
-inline std::size_t hash_value(const CanonPath & path)
-{
-    boost::hash<std::string_view> hasher;
-    return hasher(path.path);
-}
-
 } // namespace nix
-
-template<>
-struct std::hash<nix::CanonPath>
-{
-    using is_avalanching = std::true_type;
-
-    std::size_t operator()(const nix::CanonPath & path) const noexcept
-    {
-        return nix::hash_value(path);
-    }
-};

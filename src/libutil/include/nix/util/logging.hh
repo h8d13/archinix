@@ -15,17 +15,13 @@ namespace nix {
  * stderr logger. One implementation, so no vtable: `logger` is the
  * process-wide instance the printMsg/logError macros write through.
  *
- * `systemd` prefixes lines with a syslog level (<3>..<7>) when running
- * under a unit, which is how nixgen-*.service lines get their priority
- * in the journal; `tty` decides whether ANSI escapes survive.
+ * Lines go out plain. Upstream prefixed a syslog level (<3>..<7>) when
+ * `IN_SYSTEMD=1`, a variable it set from its own unit files and that
+ * nothing here ever set, so the branch never once ran.
  */
 class Logger
 {
 public:
-
-    bool systemd, tty;
-
-    Logger();
 
     void log(Verbosity lvl, std::string_view s);
 

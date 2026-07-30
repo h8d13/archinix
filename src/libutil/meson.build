@@ -74,7 +74,6 @@ sources = [ config_priv_h ] + files(
   'base-n.cc',
   'base-nix-32.cc',
   'canon-path.cc',
-  'environment-variables.cc',
   'error.cc',
   'file-descriptor.cc',
   'file-system-at.cc',

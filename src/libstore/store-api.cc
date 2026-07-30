@@ -7,7 +7,6 @@
 #include "nix/util/archive.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/signals.hh"
-#include "nix/util/environment-variables.hh"
 #include "nix/util/file-system.hh"
 
 #include "store-config-private.hh"

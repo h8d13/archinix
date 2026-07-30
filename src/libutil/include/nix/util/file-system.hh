@@ -340,13 +340,7 @@ typedef std::unique_ptr<DIR, Deleter<closedir>> AutoCloseDir;
  * Create a temporary directory.
  */
 std::filesystem::path
-createTempDir(const std::filesystem::path & tmpRoot = "", const std::string & prefix = "nix", mode_t mode = 0755);
-
-/**
- * Return `TMPDIR`, or the default temporary directory if unset or empty.
- * Does not resolve symlinks and the returned path might not be directory or exist at all.
- */
-std::filesystem::path defaultTempDir();
+createTempDir(const std::filesystem::path & tmpRoot, const std::string & prefix = "nix", mode_t mode = 0755);
 
 /**
  * Return temporary path constructed by appending a suffix to a root path.

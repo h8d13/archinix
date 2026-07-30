@@ -222,7 +222,7 @@ protected:
      * capturing errno/GetLastError().
      */
     SystemError(DisambigHintFmt, std::error_code errorCode, std::string_view errorDetails, const HintFmt & hf)
-        : CloneableError(HintFmt{"%s: %s", Uncolored(hf.str()), errorDetails})
+        : CloneableError(HintFmt{"%s: %s", hf.str(), errorDetails})
         , errorCode(errorCode)
         , errorDetails(errorDetails)
     {

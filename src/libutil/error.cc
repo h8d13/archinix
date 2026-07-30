@@ -1,9 +1,7 @@
 #include <algorithm>
 
 #include "nix/util/error.hh"
-#include "nix/util/environment-variables.hh"
 #include "nix/util/signals.hh"
-#include "nix/util/terminal.hh"
 #include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
 
@@ -106,7 +104,7 @@ void printSkippedTracesMaybe(
             }
         } else {
             output << "\n"
-                   << ANSI_WARNING "(" << skippedTraces.size() << " duplicate frames omitted)" ANSI_NORMAL << "\n";
+                   << "(" << skippedTraces.size() << " duplicate frames omitted)" << "\n";
             // Clear the set of "seen" traces after printing a chunk of
             // `duplicate frames omitted`.
             //
@@ -147,38 +145,38 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo)
     std::string prefix;
     switch (einfo.level) {
     case Verbosity::lvlError: {
-        prefix = ANSI_RED "error";
+        prefix = "error";
         break;
     }
     case Verbosity::lvlNotice: {
-        prefix = ANSI_RED "note";
+        prefix = "note";
         break;
     }
     case Verbosity::lvlWarn: {
-        prefix = ANSI_WARNING "warning";
+        prefix = "warning";
         break;
     }
     case Verbosity::lvlInfo: {
-        prefix = ANSI_GREEN "info";
+        prefix = "info";
         break;
     }
     case Verbosity::lvlTalkative: {
-        prefix = ANSI_GREEN "talk";
+        prefix = "talk";
         break;
     }
     case Verbosity::lvlVomit: {
-        prefix = ANSI_GREEN "vomit";
+        prefix = "vomit";
         break;
     }
     case Verbosity::lvlDebug: {
-        prefix = ANSI_WARNING "debug";
+        prefix = "debug";
         break;
     }
     default:
         assert(false);
     }
 
-    prefix += ":" ANSI_NORMAL " ";
+    prefix += ": ";
 
     std::ostringstream oss;
 
@@ -230,7 +228,7 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo)
         printSkippedTracesMaybe(oss, ellipsisIndent, count, skippedTraces, tracesSeen);
 
         if (truncate) {
-            oss << "\n" << ANSI_WARNING "(stack trace truncated)" ANSI_NORMAL << "\n";
+            oss << "\n" << "(stack trace truncated)" << "\n";
         }
 
         oss << "\n" << prefix;
@@ -238,7 +236,7 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo)
 
     oss << einfo.msg << "\n";
 
-    out << indent(prefix, std::string(filterANSIEscapes(prefix, true).size(), ' '), chomp(oss.str()));
+    out << indent(prefix, std::string(prefix.size(), ' '), chomp(oss.str()));
 
     return out;
 }
@@ -262,7 +260,7 @@ static void writeErr(std::string_view buf)
 
 void panic(std::string_view msg)
 {
-    writeErr("\n\n" ANSI_RED "terminating due to unexpected unrecoverable internal error: " ANSI_NORMAL);
+    writeErr("\n\nterminating due to unexpected unrecoverable internal error: ");
     writeErr(msg);
     writeErr("\n");
     std::terminate();

@@ -4,7 +4,6 @@
 #include <boost/format.hpp>
 #include <string>
 #include <filesystem>
-#include "nix/util/ansicolor.hh"
 
 namespace nix {
 
@@ -89,24 +88,6 @@ inline std::string fmt(const std::string & fs, const Args &... args)
 }
 
 /**
- * Values wrapped in this struct are printed in magenta.
- *
- * By default, arguments to `HintFmt` are printed in magenta. To avoid this,
- * either wrap the argument in `Uncolored` or add a specialization of
- * `HintFmt::operator%`.
- */
-template<class T>
-struct Magenta
-{
-    Magenta(const T & s)
-        : value(s)
-    {
-    }
-
-    const T & value;
-};
-
-/**
  * All std::filesystem::path values must be wrapped in this class when formatting via HintFmt
  * or fmt(). This avoids accidentail double-quoting due to the standard operator<< implementation
  * for std::filesystem::path.
@@ -121,44 +102,17 @@ struct PathFmt
     std::string value;
 };
 
-template<class T>
-std::ostream & operator<<(std::ostream & out, const Magenta<T> & y)
-{
-    return out << ANSI_WARNING << y.value << ANSI_NORMAL;
-}
-
 inline std::ostream & operator<<(std::ostream & out, const PathFmt & y)
 {
     return out << "\"" << y.value << "\"";
 }
 
 /**
- * Values wrapped in this class are printed without coloring.
+ * A wrapper around `boost::format` carrying an error message.
  *
- * Specifically, the color is reset to normal before printing the value.
- *
- * By default, arguments to `HintFmt` are printed in magenta (see `Magenta`).
- */
-template<class T>
-struct Uncolored
-{
-    Uncolored(const T & s)
-        : value(s)
-    {
-    }
-
-    const T & value;
-};
-
-template<class T>
-std::ostream & operator<<(std::ostream & out, const Uncolored<T> & y)
-{
-    return out << ANSI_NORMAL << y.value;
-}
-
-/**
- * A wrapper around `boost::format` which colors interpolated arguments in
- * magenta by default.
+ * Upstream wrapped every interpolated argument in `Magenta`, with an
+ * `Uncolored` wrapper to opt back out. Nothing here wants per-argument
+ * colour, so both are gone and `operator%` interpolates plainly.
  */
 class HintFmt
 {
@@ -171,7 +125,7 @@ public:
      * placeholders.
      */
     HintFmt(const std::string & literal)
-        : HintFmt("%s", Uncolored(literal))
+        : HintFmt("%s", literal)
     {
     }
 
@@ -203,14 +157,7 @@ public:
     template<class T>
     HintFmt & operator%(const T & value)
     {
-        fmt % Magenta(value);
-        return *this;
-    }
-
-    template<class T>
-    HintFmt & operator%(const Uncolored<T> & value)
-    {
-        fmt % value.value;
+        fmt % value;
         return *this;
     }
 
