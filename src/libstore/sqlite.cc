@@ -35,7 +35,7 @@ static std::string percentEncode(std::string_view s)
 
 SQLiteError::SQLiteError(
     const char * path, const char * errMsg, int errNo, int extendedErrNo, int offset, HintFmt && hf)
-    : CloneableError("")
+    : Error("")
     , path(path)
     , errMsg(errMsg)
     , errNo(errNo)

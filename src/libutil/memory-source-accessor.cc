@@ -6,8 +6,6 @@ namespace nix {
 
 void MemorySink::anchor() {}
 
-void MemorySourceAccessor::anchor() {}
-
 MemorySourceAccessor::File * MemorySourceAccessor::open(const CanonPath & path, std::optional<File> create)
 {
     bool hasRoot = root.has_value();
@@ -64,7 +62,7 @@ MemorySourceAccessor::File * MemorySourceAccessor::open(const CanonPath & path, 
     }
 
     if (newF && create)
-        *cur = std::move(*create);
+        *cur = *create;
 
     return cur;
 }
@@ -85,11 +83,6 @@ void MemorySourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<voi
             [&](const File::Symlink &) { throw SymlinkNotAllowed(path, "file '%s' is a symlink", showPath(path)); },
         },
         f->raw);
-}
-
-bool MemorySourceAccessor::pathExists(const CanonPath & path)
-{
-    return open(path, std::nullopt);
 }
 
 template<>
@@ -158,7 +151,7 @@ std::string MemorySourceAccessor::readLink(const CanonPath & path)
         throw NotASymlink("file '%s' is not a symbolic link", showPath(path));
 }
 
-SourcePath MemorySourceAccessor::addFile(CanonPath path, std::string && contents)
+SourcePath MemorySourceAccessor::addFile(const CanonPath & path, std::string && contents)
 {
     // Create root directory automatically if necessary as a convenience.
     if (!root && !path.isRoot())

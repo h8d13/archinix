@@ -160,7 +160,7 @@ public:
      * Open the local store, creating its skeleton and database if the
      * root does not hold one yet.
      */
-    LocalStore(ref<const Config> params);
+    LocalStore(const ref<const Config> & params);
 
     ~LocalStore();
 
@@ -340,7 +340,7 @@ protected:
 
     void verifyPath(
         const StorePath & path,
-        fun<bool(const StorePath &)> existsInStoreDir,
+        const fun<bool(const StorePath &)> & existsInStoreDir,
         StorePathSet & done,
         StorePathSet & validPaths,
         bool & errors);

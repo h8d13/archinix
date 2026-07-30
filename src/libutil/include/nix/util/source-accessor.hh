@@ -25,11 +25,6 @@ MakeError(NotARegularFile, SourceAccessorError);
  */
 struct SourceAccessor : std::enable_shared_from_this<SourceAccessor>
 {
-private:
-    /* VTable anchor to avoid weak linkage of the vtable - it breaks
-     * dynamic_cast across shared libraries on Darwin. */
-    virtual void anchor() = 0;
-public:
     const size_t number;
 
     std::string displayPrefix, displaySuffix;
@@ -43,23 +38,10 @@ public:
      * called with the size of the file before any data is written to
      * the sink.
      *
-     * @note Like the other `readFile`, this method should *not* follow
-     * symlinks.
-     *
-     * @note subclasses of `SourceAccessor` need to implement at least
-     * one of the `readFile()` variants.
+     * @note This method should *not* follow symlinks.
      */
     virtual void
     readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback = [](uint64_t size) {}) = 0;
-
-    /**
-     * @brief Check whether a file exists at @p path.
-     *
-     * @todo Consider making this non-virtual, since the evaluator uses
-     * maybeLstat as an indication that a file exists always (for positive
-     * caching purposes).
-     */
-    virtual bool pathExists(const CanonPath & path);
 
     enum Type {
         tRegular,
@@ -105,7 +87,7 @@ public:
 
     };
 
-    virtual Stat lstat(const CanonPath & path);
+    Stat lstat(const CanonPath & path);
 
     virtual std::optional<Stat> maybeLstat(const CanonPath & path) = 0;
 
@@ -135,25 +117,15 @@ public:
      */
     virtual void readDirectory(
         const CanonPath & dirPath,
-        std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath, DirEntries entries)>
-            callback)
+        const std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath, DirEntries entries)>
+            & callback)
     {
         callback(*this, dirPath, readDirectory(dirPath));
     }
 
     virtual std::string readLink(const CanonPath & path) = 0;
 
-    virtual void dumpPath(const CanonPath & path, Sink & sink);
-
-    /**
-     * Return a corresponding path in the root filesystem, if
-     * possible. This is only possible for filesystems that are
-     * materialized in the root filesystem.
-     */
-    virtual std::optional<std::filesystem::path> getPhysicalPath(const CanonPath & path)
-    {
-        return std::nullopt;
-    }
+    void dumpPath(const CanonPath & path, Sink & sink);
 
     bool operator==(const SourceAccessor & x) const
     {
@@ -171,7 +143,7 @@ public:
 
 };
 
-class SymlinkNotAllowed final : public CloneableError<SymlinkNotAllowed, Error>
+class SymlinkNotAllowed final : public Error
 {
     void anchor() override;
 
@@ -179,14 +151,14 @@ public:
     CanonPath path;
 
     SymlinkNotAllowed(CanonPath path)
-        : CloneableError("relative path '%s' points to a symlink, which is not allowed", path.rel())
+        : Error("relative path '%s' points to a symlink, which is not allowed", path.rel())
         , path(std::move(path))
     {
     }
 
     template<typename... Args>
     SymlinkNotAllowed(CanonPath path, const std::string & fs, Args &&... args)
-        : CloneableError(fs, std::forward<Args>(args)...)
+        : Error(fs, std::forward<Args>(args)...)
         , path(std::move(path))
     {
     }

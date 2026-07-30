@@ -143,9 +143,10 @@ public:
     {
     }
 
+    /* boost::format has no move ctor, so this copies either way */
     template<typename... Args>
     HintFmt(boost::format && fmt, const Args &... args)
-        : fmt(std::move(fmt))
+        : fmt(fmt)
     {
         static_assert(!(std::is_same_v<std::remove_cvref_t<Args>, std::filesystem::path> || ...));
         setExceptions(fmt);

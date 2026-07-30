@@ -67,8 +67,8 @@ std::ostream & showErrorInfo(std::ostream & out, const ErrorInfo & einfo);
  */
 class BaseError : public std::exception
 {
-    /* VTable anchor to avoid weak linkage of the vtable - it breaks
-       dynamic_cast across shared libraries on Darwin. */
+    /* Key function: gives the vtable one definition site instead of a
+       weak copy in every TU that throws. */
     virtual void anchor();
 
 protected:
@@ -94,7 +94,7 @@ public:
     {
     }
 
-    BaseError(HintFmt hint)
+    BaseError(const HintFmt & hint)
         : err{.level = lvlError, .msg = hint}
     {
     }
@@ -149,35 +149,15 @@ public:
      * @param hint Formatted error message
      * @param print Optional, whether to always print (used by `addErrorContext`)
      */
-    void addTrace(HintFmt hint, TracePrint print = TracePrint::Default);
-
-    [[noreturn]] virtual void throwClone() const = 0;
+    void addTrace(const HintFmt & hint, TracePrint print = TracePrint::Default);
 };
 
-template<typename Derived, typename Base>
-class CloneableError : public Base
-{
-    friend Derived;
-    CloneableError() = default;
-    using Base::Base;
-public:
-
-    /**
-     * Rethrow a copy of this exception. Useful when the exception can get
-     * modified when appending traces.
-     */
-    [[noreturn]] void throwClone() const override
-    {
-        throw Derived(static_cast<const Derived &>(*this));
-    }
-};
-
-#define MakeError(newClass, superClass)                             \
-    class newClass : public CloneableError<newClass, superClass>    \
-    {                                                               \
-        void anchor() override;                                     \
-    public:                                                         \
-        using CloneableError<newClass, superClass>::CloneableError; \
+#define MakeError(newClass, superClass)      \
+    class newClass : public superClass       \
+    {                                        \
+        void anchor() override;              \
+    public:                                  \
+        using superClass::superClass;        \
     }
 
 MakeError(Error, BaseError);
@@ -189,7 +169,7 @@ MakeError(UnimplementedError, Error);
  * std::error_code. Use when you want to catch and check an error condition like
  * no_such_file_or_directory (ENOENT) without ifdefs.
  */
-class SystemError : public CloneableError<SystemError, Error>
+class SystemError : public Error
 {
     std::error_code errorCode;
     std::string errorDetails;
@@ -222,7 +202,7 @@ protected:
      * capturing errno/GetLastError().
      */
     SystemError(DisambigHintFmt, std::error_code errorCode, std::string_view errorDetails, const HintFmt & hf)
-        : CloneableError(HintFmt{"%s: %s", hf.str(), errorDetails})
+        : Error(HintFmt{"%s: %s", hf.str(), errorDetails})
         , errorCode(errorCode)
         , errorDetails(errorDetails)
     {
@@ -275,7 +255,7 @@ public:
  * Throw this, but prefer to catch `SystemError` instead, which is the
  * category this belongs to.
  */
-class SysError final : public CloneableError<SysError, SystemError>
+class SysError final : public SystemError
 {
     void anchor() override;
 
@@ -288,7 +268,7 @@ public:
      */
     template<typename... Args>
     SysError(int errNo, Args &&... args)
-        : CloneableError(
+        : SystemError(
               DisambigVarArgs{},
               std::make_error_code(static_cast<std::errc>(errNo)),
               strerror(errNo),
@@ -305,7 +285,7 @@ public:
      * the spot.
      */
     SysError(int errNo, const HintFmt & hf)
-        : CloneableError(DisambigHintFmt{}, std::make_error_code(static_cast<std::errc>(errNo)), strerror(errNo), hf)
+        : SystemError(DisambigHintFmt{}, std::make_error_code(static_cast<std::errc>(errNo)), strerror(errNo), hf)
         , errNo(errNo)
     {
     }

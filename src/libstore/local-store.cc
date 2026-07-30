@@ -66,7 +66,7 @@ const std::string & LocalStoreConfig::logicalStoreDir()
         std::filesystem::path p{NIX_STORE_DIR};
         if (!p.is_absolute())
             throw UsageError("store directory path %s is not an absolute path", PathFmt(p));
-        return canonPath(std::move(p)).string();
+        return canonPath(p).string();
     }();
     return dir;
 }
@@ -128,7 +128,7 @@ static void writeSchemaFile(const std::filesystem::path & schemaPath, int versio
     std::filesystem::rename(tmp, schemaPath);
 }
 
-LocalStore::LocalStore(ref<const Config> config)
+LocalStore::LocalStore(const ref<const Config> & config)
     : StoreDirConfig{*config}
     , config{config}
     , _state(make_ref<Sync<State>>())
@@ -681,7 +681,9 @@ static bool hashingThreadPaysOff()
    per-file hasher next to it. The dump direction got this fix when
    sourceToSink learned to buffer; the restore direction reads through
    the same shape and never did. */
-class AsyncHashSink : public BufferedSink
+namespace { /* internal linkage: keeps the vtable in this TU */
+
+class AsyncHashSink final : public BufferedSink
 {
     HashSink inner;
     bool threaded;
@@ -798,6 +800,8 @@ public:
         }
     }
 };
+
+} // namespace
 
 /* Where a restored file lives, from the tree root and the map key the
    hasher already built. */
@@ -1332,7 +1336,9 @@ public:
 
 /* Forwards restore-sink calls to an inner sink, feeding regular-file
    events to the AsyncFileHasher on the side. */
-struct FileHashingSink : FileSystemObjectSink
+namespace { /* internal linkage: keeps the vtable in this TU */
+
+struct FileHashingSink final : FileSystemObjectSink
 {
     FileSystemObjectSink & inner;
     CanonPath prefix;
@@ -1350,7 +1356,7 @@ struct FileHashingSink : FileSystemObjectSink
         inner.createDirectory(path);
     }
 
-    void createDirectory(const CanonPath & path, DirectoryCreatedCallback callback) override
+    void createDirectory(const CanonPath & path, const DirectoryCreatedCallback & callback) override
     {
         inner.createDirectory(path, [&](FileSystemObjectSink & dirSink, const CanonPath & rel) {
             /* RestoreSink hands back a rerooted sink (rel = root); the
@@ -1416,6 +1422,8 @@ struct FileHashingSink : FileSystemObjectSink
         hasher.fileEnd();
     }
 };
+
+} // namespace
 
 /* restorePath(), optionally capturing per-file hashes. */
 static void restorePathCapturingHashes(
@@ -1753,7 +1761,7 @@ LocalStore::VerificationResult LocalStore::verifyAllValidPaths()
 
 void LocalStore::verifyPath(
     const StorePath & path,
-    fun<bool(const StorePath &)> existsInStoreDir,
+    const fun<bool(const StorePath &)> & existsInStoreDir,
     StorePathSet & done,
     StorePathSet & validPaths,
     bool & errors)
@@ -1784,7 +1792,7 @@ void LocalStore::verifyPath(
         return;
     }
 
-    validPaths.insert(std::move(path));
+    validPaths.insert(path);
 }
 
 

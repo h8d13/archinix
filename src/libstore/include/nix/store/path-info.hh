@@ -58,13 +58,18 @@ struct UnkeyedValidPathInfo
      */
     std::optional<ContentAddress> ca;
 
+    /* Declaring the copy ctor alone would suppress the implicit move
+       ones, and `references` is a set of heap-allocated names. */
     UnkeyedValidPathInfo(const UnkeyedValidPathInfo & other) = default;
+    UnkeyedValidPathInfo(UnkeyedValidPathInfo && other) = default;
+    UnkeyedValidPathInfo & operator=(const UnkeyedValidPathInfo & other) = default;
+    UnkeyedValidPathInfo & operator=(UnkeyedValidPathInfo && other) = default;
 
     UnkeyedValidPathInfo(const StoreDirConfig & store, Hash narHash);
 
     UnkeyedValidPathInfo(std::string storeDir, Hash narHash)
         : storeDir(std::move(storeDir))
-        , narHash(std::move(narHash))
+        , narHash(narHash)
     {
     }
 
@@ -89,7 +94,7 @@ struct ValidPathInfo : UnkeyedValidPathInfo
     bool isContentAddressed(const StoreDirConfig & store) const;
 
     ValidPathInfo(StorePath && path, UnkeyedValidPathInfo info)
-        : UnkeyedValidPathInfo(info)
+        : UnkeyedValidPathInfo(std::move(info))
         , path(std::move(path))
     {
     }

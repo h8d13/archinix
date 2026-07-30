@@ -37,8 +37,8 @@ public:
 struct FileSystemObjectSink
 {
 private:
-    /* VTable anchor to avoid weak linkage of the vtable - it breaks
-       dynamic_cast across shared libraries on Darwin. */
+    /* Key function: gives the vtable one definition site instead of a
+       weak copy in every TU. */
     virtual void anchor();
 
 public:
@@ -57,7 +57,7 @@ public:
      * freshly created directory. Use this when it's important to disallow any
      * intermediate path components from being symlinks.
      */
-    virtual void createDirectory(const CanonPath & path, DirectoryCreatedCallback callback)
+    virtual void createDirectory(const CanonPath & path, const DirectoryCreatedCallback & callback)
     {
         createDirectory(path);
         callback(*this, path);
@@ -81,6 +81,8 @@ private:
     void anchor() override;
 
 public:
+    using FileSystemObjectSink::createDirectory; /* keep the callback overload visible */
+
     void createDirectory(const CanonPath & path) override {}
 
     void createSymlink(const CanonPath & path, const std::string & target) override {}
@@ -91,7 +93,7 @@ public:
 /**
  * Write files at the given path
  */
-struct RestoreSink : FileSystemObjectSink
+struct RestoreSink final : FileSystemObjectSink
 {
 private:
     void anchor() override;
@@ -154,7 +156,7 @@ public:
 
     void createDirectory(const CanonPath & path) override;
 
-    void createDirectory(const CanonPath & path, DirectoryCreatedCallback callback) override;
+    void createDirectory(const CanonPath & path, const DirectoryCreatedCallback & callback) override;
 
     void createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)>) override;
 

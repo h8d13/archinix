@@ -111,7 +111,7 @@ getParentFdAndName(Descriptor dirFd, const std::filesystem::path & dstPath, cons
     return {std::move(parentFd), fd, CanonPath::fromFilename(p.filename().native())};
 }
 
-void RestoreSink::createDirectory(const CanonPath & path, DirectoryCreatedCallback callback)
+void RestoreSink::createDirectory(const CanonPath & path, const DirectoryCreatedCallback & callback)
 {
     if (path.isRoot()) {
         createDirectory(path);

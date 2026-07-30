@@ -42,8 +42,6 @@ class PosixFileSourceAccessor : public SourceAccessor
 {
     friend class PosixDirectorySourceAccessor;
 
-    void anchor() override {}
-
     AutoCloseFD fd;
     std::filesystem::path fsPath;
     /**
@@ -71,20 +69,13 @@ public:
 
     void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override;
 
-    bool pathExists(const CanonPath & path) override;
-
     std::optional<Stat> maybeLstat(const CanonPath & path) override;
+
+    using SourceAccessor::readDirectory; /* keep the callback overload visible */
 
     DirEntries readDirectory(const CanonPath & path) override;
 
     std::string readLink(const CanonPath & path) override;
-
-    std::optional<std::filesystem::path> getPhysicalPath(const CanonPath & path) override
-    {
-        if (path.isRoot())
-            return fsPath;
-        return std::nullopt; /* Definitely doesn't exist. */
-    }
 
     std::string showPath(const CanonPath & path) override
     {
@@ -105,11 +96,6 @@ void PosixFileSourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<
        bytes to the sink. copyFdRange should throw an EndOfFile if we fail to read
        `size` bytes. */
     copyFdRange(fd.get(), /*offset=*/0, size, sink);
-}
-
-bool PosixFileSourceAccessor::pathExists(const CanonPath & path)
-{
-    return path.isRoot();
 }
 
 std::optional<SourceAccessor::Stat> PosixFileSourceAccessor::maybeLstat(const CanonPath & path)
@@ -142,8 +128,6 @@ static unsigned getGlobalDirFdCacheLimit()
 
 class PosixDirectorySourceAccessor : public SourceAccessor
 {
-    void anchor() override {}
-
 public:
     static unsigned getGlobalFdLimit()
     {
@@ -151,7 +135,7 @@ public:
         return res;
     }
 
-    static void registerAccessor(ref<PosixDirectorySourceAccessor> accessor)
+    static void registerAccessor(const ref<PosixDirectorySourceAccessor> & accessor)
     {
         auto reg = globalDirFdCacheRegistry.lock();
         std::erase_if(*reg, [](auto & maybeAccessor) { return maybeAccessor.expired(); });
@@ -196,12 +180,12 @@ private:
         }
     }
 
-    void insertIntoDirFdCache(const CanonPath & key, ref<AutoCloseFD> fd)
+    void insertIntoDirFdCache(const CanonPath & key, const ref<AutoCloseFD> & fd)
     {
         assert(dirFdCache);
         auto cache = dirFdCache->lock();
         auto before = cache->size();
-        cache->upsert(key, std::move(fd));
+        cache->upsert(key, fd);
         globalDirFdCount.fetch_add(cache->size() - before, std::memory_order_relaxed);
     }
 
@@ -218,7 +202,7 @@ private:
      */
     std::pair<Descriptor, std::shared_ptr<AutoCloseFD>> openParent(const CanonPath & path);
 
-    std::function<void(AutoCloseFD, CanonPath)> makeDirFdCallback();
+    std::function<void(AutoCloseFD, const CanonPath &)> makeDirFdCallback();
 
     AutoCloseFD openSubdirectory(const CanonPath & path);
 
@@ -262,20 +246,13 @@ public:
 
     void readDirectory(
         const CanonPath & dirPath,
-        std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath, DirEntries entries)>
-            callback) override;
+        const std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath, DirEntries entries)>
+            & callback) override;
 
     /** Read the entries of an already-open directory. */
     DirEntries readEntriesFrom(AutoCloseFD dirFdOwning, const CanonPath & path);
 
     std::string readLink(const CanonPath & path) override;
-
-    std::optional<std::filesystem::path> getPhysicalPath(const CanonPath & path) override
-    {
-        if (path.isRoot())
-            return fsPath;
-        return std::filesystem::path(fsPath) / path.rel(); /* RHS *must* be a relative path. */
-    }
 
     std::string showPath(const CanonPath & path) override
     {
@@ -287,14 +264,14 @@ public:
     }
 };
 
-std::function<void(AutoCloseFD, CanonPath)> PosixDirectorySourceAccessor::makeDirFdCallback()
+std::function<void(AutoCloseFD, const CanonPath &)> PosixDirectorySourceAccessor::makeDirFdCallback()
 {
     if (!dirFdCache)
         return nullptr;
 
-    return [this](AutoCloseFD fd, CanonPath key) {
+    return [this](AutoCloseFD fd, const CanonPath & key) {
         assert(fd);
-        insertIntoDirFdCache(std::move(key), make_ref<AutoCloseFD>(std::move(fd)));
+        insertIntoDirFdCache(key, make_ref<AutoCloseFD>(std::move(fd)));
     };
 }
 
@@ -330,10 +307,10 @@ std::pair<Descriptor, std::shared_ptr<AutoCloseFD>> PosixDirectorySourceAccessor
     Descriptor startFd = intermediateParentFd ? intermediateParentFd->get() : dirFd.get();
     CanonPath relPath = intermediateParentFd ? parent.removePrefix(anchor) : parent;
 
-    std::function<void(AutoCloseFD, CanonPath)> cb;
+    std::function<void(AutoCloseFD, const CanonPath &)> cb;
     if (auto base = makeDirFdCallback()) {
         if (intermediateParentFd) {
-            cb = [base = std::move(base), prefix = anchor](AutoCloseFD fd, CanonPath relKey) {
+            cb = [base = std::move(base), prefix = anchor](AutoCloseFD fd, const CanonPath & relKey) {
                 base(std::move(fd), prefix / relKey);
             };
         } else {
@@ -343,7 +320,7 @@ std::pair<Descriptor, std::shared_ptr<AutoCloseFD>> PosixDirectorySourceAccessor
 
     try {
         AutoCloseFD parentFdOwning =
-            openFileEnsureBeneathNoSymlinks(startFd, relPath, O_DIRECTORY | O_RDONLY | O_CLOEXEC, 0, std::move(cb));
+            openFileEnsureBeneathNoSymlinks(startFd, relPath, O_DIRECTORY | O_RDONLY | O_CLOEXEC, 0, cb);
         return {parentFdOwning.get(), make_ref<AutoCloseFD>(std::move(parentFdOwning))};
     } catch (SymlinkNotAllowed & e) {
         /* Need to fixup the error message to include the actual path relative to the (possibly) cached fd. */
@@ -518,7 +495,8 @@ try {
 
 void PosixDirectorySourceAccessor::readDirectory(
     const CanonPath & dirPath,
-    std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath, DirEntries entries)> callback)
+    const std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath, DirEntries entries)>
+        & callback)
 {
     auto fd = openSubdirectory(dirPath);
     /* One open, two uses: fdopendir takes ownership of a descriptor, so
@@ -569,22 +547,12 @@ ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root)
         /* A helper class that holds the symlink destination in memory. */
         class SymlinkSourceAccessor : public MemorySourceAccessor
         {
-            std::filesystem::path fsPath;
-
         public:
-            SymlinkSourceAccessor(std::string target, std::filesystem::path fsPath_)
-                : fsPath(std::move(fsPath_))
+            SymlinkSourceAccessor(const std::string & target, const std::filesystem::path & fsPath)
             {
                 MemorySink sink{*this};
                 sink.createSymlink(CanonPath::root, target);
                 displayPrefix = fsPath.native();
-            }
-
-            std::optional<std::filesystem::path> getPhysicalPath(const CanonPath & path) override
-            {
-                if (path.isRoot())
-                    return fsPath;
-                return fsPath / path.rel(); /* RHS must be a relative path. */
             }
 
             std::string showPath(const CanonPath & path) override

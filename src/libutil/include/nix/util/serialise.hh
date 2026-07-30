@@ -17,8 +17,8 @@ namespace nix {
 struct Sink
 {
 private:
-    /* VTable anchor to avoid weak linkage of the vtable - it breaks
-       dynamic_cast across shared libraries on Darwin. */
+    /* Key function: gives the vtable one definition site instead of a
+       weak copy in every TU. */
     virtual void anchor();
 
 public:
@@ -26,11 +26,6 @@ public:
     virtual ~Sink() {}
 
     virtual void operator()(std::string_view data) = 0;
-
-    virtual bool good()
-    {
-        return true;
-    }
 };
 
 
@@ -68,8 +63,8 @@ protected:
 struct Source
 {
 private:
-    /* VTable anchor to avoid weak linkage of the vtable - it breaks
-       dynamic_cast across shared libraries on Darwin. */
+    /* Key function: gives the vtable one definition site instead of a
+       weak copy in every TU. */
     virtual void anchor();
 
 public:
@@ -89,11 +84,6 @@ public:
      */
     virtual size_t read(char * data, size_t len) = 0;
 
-    virtual bool good()
-    {
-        return true;
-    }
-
     /**
      * Read the rest of this `Source` into `sink`.
      */
@@ -101,12 +91,8 @@ public:
 
     /**
      * Read exactly 'len' bytes and write them to 'sink'.
-     *
-     * Virtual in anticipation that some `Source` implementations, like
-     * `FdSource` may eventually be able to provide more performant
-     * implementations of this function.
      */
-    virtual void drainInto(Sink & sink, uint64_t len);
+    void drainInto(Sink & sink, uint64_t len);
 
     virtual void skip(size_t len);
 };
@@ -198,11 +184,6 @@ public:
     ~FdSink();
 
     void writeUnbuffered(std::string_view data) override;
-
-    bool good() override;
-
-private:
-    bool _good = true;
 };
 
 /**
@@ -235,13 +216,10 @@ public:
     FdSource & operator=(const FdSource & s) = delete;
     ~FdSource() = default;
 
-    bool good() override;
     void skip(size_t len) override;
 
 protected:
     size_t readUnbuffered(char * data, size_t len) override;
-private:
-    bool _good = true;
 };
 
 /**
@@ -321,7 +299,7 @@ public:
     {
     }
 
-    virtual void operator()(std::string_view data) override
+    void operator()(std::string_view data) override
     {
         sink1(data);
         sink2(data);

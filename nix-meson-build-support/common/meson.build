@@ -10,6 +10,11 @@ warning_flags = [
   '-Werror=sign-compare',
   '-Werror=return-type',
   '-Werror=non-virtual-dtor',
+  # An override of one overload hides the others for anyone holding the
+  # derived type: SourceAccessor::readDirectory and
+  # FileSystemObjectSink::createDirectory both have a callback form that
+  # went invisible this way.
+  '-Werror=overloaded-virtual',
   '-Wignored-qualifiers',
   '-Wimplicit-fallthrough',
   '-Wno-deprecated-declarations',
@@ -31,11 +36,11 @@ if meson.project_name() in [
   'nix-expr-c',
 ]
   # Catch vtables with vague linkage. All vtables must have a "key" function to make
-  # sure they are emitted as strong symbols (as required by Itanium ABI). This is needed
-  # in certain cases of dynamic linking, where weak symbols are not always coalesced. Otherwise
-  # typeinfo symbols get duplicated and dynamic_cast/exception handling ends up broken on Darwin's
-  # libc++.
+  # sure they are emitted as strong symbols (as required by Itanium ABI), instead of a
+  # weak copy in every TU that sees the class.
   # Search for 'virtual void anchor' in the repo to see how this is done.
+  # Clang-only: under GCC get_supported_arguments() drops it, so the anchor
+  # discipline is only actually checked by a clang build.
   warning_flags += [ '-Werror=weak-vtables' ]
 endif
 
