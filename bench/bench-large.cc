@@ -166,7 +166,7 @@ static void runStages(const std::filesystem::path & tree, const std::filesystem:
 	if (cold)
 		evict(tree);
 	timed("dump->sha256", bytes, [&] {
-		HashSink sink{HashAlgorithm::SHA256};
+		HashSink sink;
 		src.dumpPath(sink);
 		sink.finish();
 	});

@@ -57,11 +57,14 @@ struct StoreDirConfig
     StorePath makeStorePath(std::string_view type, std::string_view hash, std::string_view name) const;
     StorePath makeStorePath(std::string_view type, const Hash & hash, std::string_view name) const;
 
-
-    StorePath makeFixedOutputPath(std::string_view name, const FixedOutputInfo & info) const;
-
-    StorePath makeFixedOutputPathFromCA(std::string_view name, const ContentAddressWithReferences & ca) const;
-
+    /**
+     * Where a NAR with this SHA-256 hash and name lands. One layout,
+     * because there is one way in: upstream's `output:out` digest
+     * (non-SHA256 or flat ingestion) and `text:` variants had no
+     * caller left, and references, which used to be stuffed into the
+     * type string, are refused at the import door.
+     */
+    StorePath makeContentAddressedPath(std::string_view name, const Hash & narHash) const;
 };
 
 } // namespace nix

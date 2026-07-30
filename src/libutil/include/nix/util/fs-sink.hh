@@ -12,7 +12,7 @@ namespace nix {
  *
  * See `FileSystemObjectSink::createRegularFile`.
  */
-struct CreateRegularFileSink : virtual Sink
+struct CreateRegularFileSink : Sink
 {
 private:
     void anchor() override;
@@ -73,29 +73,6 @@ public:
 };
 
 /**
- * An extension of `FileSystemObjectSink` that supports file types
- * that are not supported by Nix's FSO model.
- */
-struct ExtendedFileSystemObjectSink : virtual FileSystemObjectSink
-{
-private:
-    void anchor() override;
-
-public:
-    /**
-     * Create a hard link. The target must be the path of a previously
-     * encountered file relative to the root of the FSO.
-     */
-    virtual void createHardlink(const CanonPath & path, const CanonPath & target) = 0;
-};
-
-/**
- * Recursively copy file system objects from the source into the sink.
- */
-void copyRecursive(
-    SourceAccessor & accessor, const CanonPath & sourcePath, FileSystemObjectSink & sink, const CanonPath & destPath);
-
-/**
  * Ignore everything and do nothing
  */
 struct NullFileSystemObjectSink : FileSystemObjectSink
@@ -154,8 +131,20 @@ public:
      * asynchronously: a rename would bump the just-stamped mtime of
      * the containing directory, so directory metadata must land after
      * that machinery drains.
+     *
+     * Paths are relative to this sink's root, so the caller can do the
+     * deferred work through the root descriptor (which it still holds)
+     * rather than by absolute path from AT_FDCWD: same two syscalls per
+     * directory, but they cannot be redirected by a symlink planted
+     * under the tree being restored.
      */
-    std::vector<std::filesystem::path> * deferCanonicalDirs = nullptr;
+    std::vector<CanonPath> * deferCanonicalDirs = nullptr;
+
+    /**
+     * This sink's directory relative to the root of the restore, which
+     * is what `deferCanonicalDirs` records.
+     */
+    CanonPath relToRoot = CanonPath::root;
 
     explicit RestoreSink(bool startFsync, bool canonical = false)
         : startFsync{startFsync}
@@ -176,40 +165,6 @@ public:
      * holds); no-op for non-canonical sinks and non-directory roots.
      */
     void finishCanonical();
-};
-
-/**
- * Restore a single file at the top level, passing along
- * `receiveContents` to the underlying `Sink`. For anything but a single
- * file, set `regular = true` so the caller can fail accordingly.
- */
-struct RegularFileSink : FileSystemObjectSink
-{
-private:
-    void anchor() override;
-
-public:
-    bool regular = true;
-    Sink & sink;
-
-    RegularFileSink(Sink & sink)
-        : sink(sink)
-    {
-    }
-
-    void createDirectory(const CanonPath & path) override
-    {
-        /* FIXME: Throw an error here. */
-        regular = false;
-    }
-
-    void createSymlink(const CanonPath & path, const std::string & target) override
-    {
-        /* FIXME: Throw an error here. */
-        regular = false;
-    }
-
-    void createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)>) override;
 };
 
 } // namespace nix

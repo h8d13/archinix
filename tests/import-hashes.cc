@@ -21,7 +21,7 @@
 #include <nix/store/globals.hh>
 #include <nix/store/local-store.hh>
 #include <nix/store/store-open.hh>
-#include <nix/util/file-content-address.hh>
+#include <nix/util/archive.hh>
 #include <nix/util/memory-source-accessor.hh>
 #include <nix/util/serialise.hh>
 #include <nix/util/source-accessor.hh>
@@ -44,16 +44,13 @@ static void ok(bool cond, const std::string & desc, const std::string & detail =
 }
 
 // import an in-memory tree with per-file hash capture, import-dir style
-static StorePath importTree(std::shared_ptr<LocalStore> local,
+static StorePath importTree(std::shared_ptr<LocalStore> store,
 	ref<MemorySourceAccessor> acc, std::string_view name,
 	LocalStore::ImportFileHashes & fileHashes)
 {
 	std::optional<StorePath> imported;
 	auto sink = sourceToSink([&](Source & source) {
-		imported = local->addToStoreFromDump(source, name,
-			FileSerialisationMethod::NixArchive,
-			ContentAddressMethod::Raw::NixArchive,
-			HashAlgorithm::SHA256, {}, NoRepair, &fileHashes);
+		imported = store->addToStoreFromDump(source, name, &fileHashes);
 	});
 	SourcePath{acc, CanonPath::root}.dumpPath(*sink);
 	sink->finish();
@@ -71,7 +68,6 @@ int main(int argc, char ** argv)
 	verbosity = lvlError;
 
 	auto store = openStore(fs::absolute(argv[1]));
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 	fs::path linksDir = fs::path(argv[1]) / "nix/store/.links";
 
 	using File = MemorySourceAccessor::File;
@@ -98,8 +94,8 @@ int main(int argc, char ** argv)
 	acc->open(CanonPath("d1/samelink"), File{File::Symlink{.target = "top"}});
 
 	LocalStore::ImportFileHashes fileHashes;
-	auto path = importTree(local, acc, "hashtest", fileHashes);
-	auto realPath = local->toRealPath(path);
+	auto path = importTree(store, acc, "hashtest", fileHashes);
+	auto realPath = store->toRealPath(path);
 
 	/* capture covers exactly the regular files and the symlinks */
 	std::set<std::string> expectedKeys{
@@ -121,8 +117,7 @@ int main(int argc, char ** argv)
 	/* the drift guard: captured hash == from-disk rehash, per file */
 	unsigned mismatches = 0;
 	for (auto & [rel, captured] : fileHashes.files) {
-		auto onDisk = hashPath(makeFSSourceAccessor(realPath + rel),
-			FileSerialisationMethod::NixArchive, HashAlgorithm::SHA256).hash;
+		auto onDisk = hashPath(makeFSSourceAccessor(realPath + rel)).hash;
 		if (captured != onDisk) {
 			fprintf(stderr, "MISMATCH %s: captured %s, disk %s\n", rel.c_str(),
 				captured.to_string(HashFormat::Nix32, true).c_str(),
@@ -139,7 +134,7 @@ int main(int argc, char ** argv)
 	   half is what proves the captured symlink digests are usable as
 	   farm keys and not merely equal to hashPath's. */
 	OptimiseStats stats;
-	local->optimisePath(path, stats, &fileHashes);
+	store->optimisePath(path, stats, &fileHashes);
 	ok(stats.filesLinked == 2, "optimise links the duplicate file and symlink",
 		fmt("linked %d", stats.filesLinked));
 
@@ -165,9 +160,9 @@ int main(int argc, char ** argv)
 	acc2->addFile(CanonPath("fresh"), std::string(300, 'c'));
 
 	LocalStore::ImportFileHashes fileHashes2;
-	auto path2 = importTree(local, acc2, "hashtest2", fileHashes2);
+	auto path2 = importTree(store, acc2, "hashtest2", fileHashes2);
 	OptimiseStats stats2;
-	local->optimisePath(path2, stats2, &fileHashes2);
+	store->optimisePath(path2, stats2, &fileHashes2);
 	ok(fileHashes2.dedupedFiles == 1 && stats2.filesLinked == 0,
 		"second import deduped against the farm while streaming",
 		fmt("deduped %d, linked %d", fileHashes2.dedupedFiles,
@@ -175,7 +170,7 @@ int main(int argc, char ** argv)
 
 	struct stat stTop, stAgain;
 	ok(::lstat((realPath + "/top").c_str(), &stTop) == 0
-			&& ::lstat((local->toRealPath(path2) + "/again").c_str(), &stAgain) == 0
+			&& ::lstat((store->toRealPath(path2) + "/again").c_str(), &stAgain) == 0
 			&& stTop.st_ino == stAgain.st_ino,
 		"shared content collapsed to one inode across paths");
 

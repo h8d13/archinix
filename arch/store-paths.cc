@@ -34,12 +34,11 @@ try {
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::absolute(argv[1]), true);
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	std::vector<std::pair<std::string, time_t>> rows;
-	for (auto & path : local->queryAllValidPaths())
+	for (auto & path : store->queryAllValidPaths())
 		rows.emplace_back(std::string(path.to_string()),
-			local->queryPathInfo(path)->registrationTime);
+			store->queryPathInfo(path)->registrationTime);
 
 	/* sorted here so callers do not have to: store paths come out of
 	   the db in id order, which is arrival order, not name order */

@@ -327,12 +327,6 @@ void createDirs(const std::filesystem::path & path)
 
 //////////////////////////////////////////////////////////////////////
 
-AutoDelete::AutoDelete()
-    : del{false}
-    , recursive(false)
-{
-}
-
 AutoDelete::AutoDelete(const std::filesystem::path & p, bool recursive)
     : _path(p)
     , del(true)
@@ -455,7 +449,7 @@ void moveFile(const std::filesystem::path & oldName, const std::filesystem::path
         auto newPath = newName;
         // For the move to be as atomic as possible, copy to a temporary
         // directory
-        std::filesystem::path temp = createTempDir(os_string_to_string(PathView{newPath.parent_path()}), "rename-tmp");
+        std::filesystem::path temp = createTempDir(newPath.parent_path().native(), "rename-tmp");
         Finally removeTemp = [&]() { std::filesystem::remove(temp); };
         auto tempCopyTarget = temp / "copy-target";
         if (e.code().value() == EXDEV) {
@@ -463,7 +457,7 @@ void moveFile(const std::filesystem::path & oldName, const std::filesystem::path
             warn("can’t rename %s as %s, copying instead", PathFmt(oldName), PathFmt(newName));
             copyFile(oldPath, tempCopyTarget, true);
             std::filesystem::rename(
-                os_string_to_string(PathView{tempCopyTarget}), os_string_to_string(PathView{newPath}));
+                tempCopyTarget.native(), newPath.native());
         }
     }
 }
@@ -558,7 +552,7 @@ std::filesystem::path descriptorToPath(Descriptor fd)
 
 std::filesystem::path defaultTempDir()
 {
-    return getEnvOsNonEmpty("TMPDIR").value_or("/tmp");
+    return getEnvNonEmpty("TMPDIR").value_or("/tmp");
 }
 
 PosixStat lstat(const std::filesystem::path & path)
@@ -721,12 +715,6 @@ void deletePath(const std::filesystem::path & path, uint64_t & bytesFreed)
     // Activity act(*logger, lvlDebug, "recursively deleting path '%1%'", path);
     bytesFreed = 0;
     _deletePath(path, bytesFreed MOUNTEDPATHS_ARG);
-}
-
-void chown(const std::filesystem::path & path, uid_t owner, gid_t group)
-{
-    if (::chown(path.c_str(), owner, group) == -1)
-        throw SysError("changing ownership of %s", PathFmt(path));
 }
 
 } // namespace nix

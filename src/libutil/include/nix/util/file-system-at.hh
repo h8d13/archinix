@@ -46,26 +46,21 @@ PosixStat fstat(Descriptor fd);
 std::optional<PosixStat> maybeFstatat(Descriptor dirFd, const std::filesystem::path & path);
 
 /**
- * Get status of a file relative to a directory file descriptor.
- *
- * @param dirFd Directory file descriptor
- * @param path Relative path to stat
- *
- * @throws SystemError if the path does not exist or on other I/O errors.
- *
- * @pre `path` must be relative (not absolute) and non-empty.
- */
-PosixStat fstatat(Descriptor dirFd, const std::filesystem::path & path);
-
-
-/**
  * Read a symlink relative to a directory file descriptor.
  * On Linux, this also supports reading from O_PATH descriptors with CanonPath::root.
  *
  * @throws SystemError on any I/O errors.
  * @throws Interrupted if interrupted.
  */
-OsString readLinkAt(Descriptor dirFd, const CanonPath & path);
+std::string readLinkAt(Descriptor dirFd, const CanonPath & path);
+
+/**
+ * `setWriteTime` relative to \ref dirFd, not following a symlink in the
+ * final component. For callers that hold a descriptor for the anchor of
+ * a tree they are stamping: it keeps the write inside that tree instead
+ * of resolving an absolute path again from AT_FDCWD.
+ */
+void setWriteTimeAt(Descriptor dirFd, const CanonPath & path, time_t accessedTime, time_t modificationTime);
 
 /**
  * Open a file relative to @p dirFd, ensuring the path stays beneath

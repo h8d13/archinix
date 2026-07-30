@@ -3,11 +3,8 @@
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 
-#include "store-config-private.hh"
 
 namespace nix {
-
-std::string nixVersion = PACKAGE_VERSION;
 
 static bool initLibStoreDone = false;
 

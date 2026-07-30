@@ -31,7 +31,7 @@ using namespace nix;
 
 // export-import.cc's importPaths loop with the CA check inserted
 // between hashing and registration
-static StorePaths importVerified(Store & store, Source & source)
+static StorePaths importVerified(LocalStore & store, Source & source)
 {
 	StorePaths res;
 	while (true) {
@@ -52,13 +52,9 @@ static StorePaths importVerified(Store & store, Source & source)
 		auto path = store.parseStorePath(readString(source));
 		auto references = CommonProto::Serialise<StorePathSet>::read(
 			store, CommonProto::ReadConn{.from = source});
-		auto deriver = readString(source);
-		auto narHash = hashString(HashAlgorithm::SHA256, saved.s);
+		auto narHash = hashString(saved.s);
 
-		auto expected = store.makeFixedOutputPathFromCA(path.name(),
-			ContentAddressWithReferences::withoutRefs(ContentAddress{
-				.method = ContentAddressMethod::Raw::NixArchive,
-				.hash = narHash}));
+		auto expected = store.makeContentAddressedPath(path.name(), narHash);
 		if (path != expected)
 			throw Error(
 				"integrity check failed: stream claims '%s' but its content "
@@ -80,15 +76,9 @@ static StorePaths importVerified(Store & store, Source & source)
 		ValidPathInfo info{path, {store, narHash}};
 		info.references = references;
 		info.narSize = saved.s.size();
-		if (deriver != "")
-			info.deriver = store.parseStorePath(deriver);
-
-		// ignore optional legacy signature
-		if (readInt(source) == 1)
-			readString(source);
 
 		StringSource body{saved.s};
-		store.addToStore(info, body, NoRepair);
+		store.addToStore(info, body);
 		res.push_back(path);
 	}
 	return res;
@@ -109,7 +99,6 @@ try {
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::absolute(argv[1]));
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	FdSource in(STDIN_FILENO);
 	StorePaths paths;
@@ -125,18 +114,18 @@ try {
 	   ever gets a GRUB entry. nixgen-adopt hands out entries later and
 	   nixgen-remove drops entry and root together. */
 	for (auto & path : paths)
-		local->addPermRoot(path,
-			local->config->stateDir / "gcroots"
+		store->addPermRoot(path,
+			store->config->stateDir / "gcroots"
 				/ std::string(path.to_string()));
 
 	OptimiseStats stats;
 	for (auto & path : paths)
-		local->optimisePath(path, stats, nullptr);
+		store->optimisePath(path, stats, nullptr);
 	fprintf(stderr, "imported %zu paths; optimise: linked %lu files, freed %.1f MiB\n",
 		paths.size(), stats.filesLinked, stats.bytesFreed / (1024.0 * 1024.0));
 
 	for (auto & path : paths)
-		printf("%s\n", local->toRealPath(path).c_str());
+		printf("%s\n", store->toRealPath(path).c_str());
 	return 0;
 } catch (std::exception & e) {
 	/* a bad basename, an unreadable store or a full disk must not

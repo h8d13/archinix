@@ -270,7 +270,23 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
     return openFileEnsureBeneathNoSymlinksIterative(dirFd, path, flags, mode, std::move(dirFdCallback));
 }
 
-OsString readLinkAt(Descriptor dirFd, const CanonPath & path)
+void setWriteTimeAt(Descriptor dirFd, const CanonPath & path, time_t accessedTime, time_t modificationTime)
+{
+    struct timespec times[2] = {
+        {
+            .tv_sec = accessedTime,
+            .tv_nsec = 0,
+        },
+        {
+            .tv_sec = modificationTime,
+            .tv_nsec = 0,
+        },
+    };
+    if (utimensat(dirFd, path.rel_c_str(), times, AT_SYMLINK_NOFOLLOW) == -1)
+        throw SysError("changing modification time of %s", PathFmt(descriptorToPath(dirFd) / path.rel()));
+}
+
+std::string readLinkAt(Descriptor dirFd, const CanonPath & path)
 {
     assert(!path.rel().starts_with('/')); /* Just in case the invariant is somehow broken. */
     std::vector<char> buf;
@@ -291,17 +307,6 @@ PosixStat fstat(Descriptor fd)
     PosixStat st;
     if (::fstat(fd, &st)) {
         throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(fd))); });
-    }
-    return st;
-}
-
-PosixStat fstatat(Descriptor dirFd, const std::filesystem::path & path)
-{
-    assert(path.is_relative());
-    assert(!path.empty());
-    PosixStat st;
-    if (::fstatat(dirFd, path.c_str(), &st, AT_SYMLINK_NOFOLLOW)) {
-        throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(dirFd) / path)); });
     }
     return st;
 }

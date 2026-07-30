@@ -11,26 +11,6 @@ namespace nix {
 
 struct Sink;
 
-/**
- * Note there is a decent chance this type soon goes away because the problem is solved another way.
- * See the discussion in https://github.com/NixOS/nix/pull/9985.
- */
-enum class SymlinkResolution {
-    /**
-     * Resolve symlinks in the ancestors only.
-     *
-     * Only the last component of the result is possibly a symlink.
-     */
-    Ancestors,
-
-    /**
-     * Resolve symlinks fully, realpath(3)-style.
-     *
-     * No component of the result will be a symlink.
-     */
-    Full,
-};
-
 MakeError(SourceAccessorError, Error);
 MakeError(FileNotFound, SourceAccessorError);
 MakeError(NotASymlink, SourceAccessorError);
@@ -57,18 +37,6 @@ public:
     SourceAccessor();
 
     virtual ~SourceAccessor() {}
-
-    /**
-     * Return the contents of a file as a string.
-     *
-     * @note Unlike Unix, this method should *not* follow symlinks. Nix
-     * by default wants to manipulate symlinks explicitly, and not
-     * implicitly follow them, as they are frequently untrusted user data
-     * and thus may point to arbitrary locations. Acting on the targets
-     * targets of symlinks should only occasionally be done, and only
-     * with care.
-     */
-    std::string readFile(const CanonPath & path);
 
     /**
      * Write the contents of a file as a sink. `sizeCallback` must be
@@ -134,7 +102,6 @@ public:
          */
         std::optional<uint64_t> narOffset;
 
-        std::string typeString();
     };
 
     virtual Stat lstat(const CanonPath & path);
@@ -151,27 +118,31 @@ public:
     virtual DirEntries readDirectory(const CanonPath & path) = 0;
 
     /**
-     * Variation of readDirectory that receives a SourceAccessor possibly scoped to \ref dirPath.
-     * Primary meant for recursive traversal functions that would benefit from *at-style syscalls
-     * relative to a particular directory.
+     * Variation of readDirectory that receives a SourceAccessor possibly scoped to \ref dirPath,
+     * together with that directory's entries. Primary meant for recursive traversal functions that
+     * would benefit from *at-style syscalls relative to a particular directory.
+     *
+     * The entries come with the accessor because a traversal needs both:
+     * reading them separately opens the directory a second time, and
+     * then the names come from one directory instance while the descent
+     * happens in another.
      *
      * @note Like `readFile`, this method should *not* follow symlinks.
-     * @param callback Caller-provided function invoked with a maximally deeply scoped SourceAccessor and the path that
-     * would have to be prepended to each path relative to dirPath to access a particular file with it.
+     * @param callback Caller-provided function invoked with a maximally deeply scoped SourceAccessor, the path that
+     * would have to be prepended to each path relative to dirPath to access a particular file with it, and the
+     * entries of dirPath.
      */
     virtual void readDirectory(
         const CanonPath & dirPath,
-        std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath)> callback)
+        std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath, DirEntries entries)>
+            callback)
     {
-        callback(*this, dirPath);
+        callback(*this, dirPath, readDirectory(dirPath));
     }
 
     virtual std::string readLink(const CanonPath & path) = 0;
 
     virtual void dumpPath(const CanonPath & path, Sink & sink, PathFilter & filter = defaultPathFilter);
-
-    Hash
-    hashPath(const CanonPath & path, PathFilter & filter = defaultPathFilter, HashAlgorithm ha = HashAlgorithm::SHA256);
 
     /**
      * Return a corresponding path in the root filesystem, if
@@ -197,63 +168,7 @@ public:
 
     virtual std::string showPath(const CanonPath & path);
 
-    /**
-     * Resolve any symlinks in `path` according to the given
-     * resolution mode.
-     *
-     * @param mode might only be a temporary solution for this.
-     * See the discussion in https://github.com/NixOS/nix/pull/9985.
-     */
-    CanonPath resolveSymlinks(const CanonPath & path, SymlinkResolution mode = SymlinkResolution::Full);
-
-    /**
-     * A string that uniquely represents the contents of this
-     * accessor. This is used for caching lookups (see `fetchToStore()`).
-     */
-    std::optional<std::string> fingerprint;
-
-    /**
-     * Return the fingerprint for `path`. This is usually the
-     * fingerprint of the current accessor, but for composite
-     * accessors (like `MountedSourceAccessor`), we want to return the
-     * fingerprint of the "inner" accessor if the current one lacks a
-     * fingerprint.
-     *
-     * So this method is intended to return the most-outer accessor
-     * that has a fingerprint for `path`. It also returns the path that `path`
-     * corresponds to in that accessor.
-     *
-     * For example: in a `MountedSourceAccessor` that has
-     * `/nix/store/foo` mounted,
-     * `getFingerprint("/nix/store/foo/bar")` will return the path
-     * `/bar` and the fingerprint of the `/nix/store/foo` accessor.
-     */
-    virtual std::pair<CanonPath, std::optional<std::string>> getFingerprint(const CanonPath & path)
-    {
-        return {path, fingerprint};
-    }
-
-    /**
-     * Return the maximum last-modified time of the files in this
-     * tree, if available.
-     */
-    virtual std::optional<time_t> getLastModified()
-    {
-        return std::nullopt;
-    }
-
-    /**
-     * Drop any cached state that could go stale across external filesystem
-     * mutation (e.g. cached directory fds).
-     */
-    virtual void invalidateCache() {}
 };
-
-/**
- * Exception thrown when accessing a filtered path (see
- * `FilteringSourceAccessor`).
- */
-MakeError(RestrictedPathError, Error);
 
 class SymlinkNotAllowed final : public CloneableError<SymlinkNotAllowed, Error>
 {
@@ -284,7 +199,7 @@ public:
  *
  * Symlinks in parents of `root` are resolved. Final symlink is not.
  */
-ref<SourceAccessor> makeFSSourceAccessor(
-    std::filesystem::path root, bool trackLastModified = false, FinalSymlink finalSymlink = FinalSymlink::DontFollow);
+ref<SourceAccessor>
+makeFSSourceAccessor(std::filesystem::path root, FinalSymlink finalSymlink = FinalSymlink::DontFollow);
 
 } // namespace nix

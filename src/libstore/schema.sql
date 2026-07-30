@@ -3,9 +3,7 @@ create table if not exists ValidPaths (
     path             text unique not null,
     hash             text not null, -- base16 representation
     registrationTime integer not null,
-    deriver          text,
     narSize          integer,
-    ultimate         integer, -- null implies "false"
     ca               text -- if not null, an assertion that the path is content-addressed; see ValidPathInfo
 );
 

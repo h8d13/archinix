@@ -25,7 +25,7 @@ static void canonicaliseTimestampAndPermissions(const std::filesystem::path & pa
            read-only bit is what makes the .links farm safe to share. */
         mode_t canon = S_ISDIR(st.st_mode) ? 0755 : (st.st_mode & S_IXUSR) ? 0555 : 0444;
         if (mode != canon)
-            chmod(path, (st.st_mode & S_IFMT) | canon);
+            chmod(path, canon);
     }
 
     if (st.st_mtime != mtimeStore) {
@@ -105,12 +105,6 @@ static void canonicalisePathMetaData_(
             canonicalisePathMetaData_(i.path(), options, inodesSeen);
         }
     }
-}
-
-void canonicalisePathMetaData(
-    const std::filesystem::path & path, CanonicalizePathMetadataOptions options, InodesSeen & inodesSeen)
-{
-    canonicalisePathMetaData_(path, options, inodesSeen);
 }
 
 void canonicalisePathMetaData(const std::filesystem::path & path, CanonicalizePathMetadataOptions options)

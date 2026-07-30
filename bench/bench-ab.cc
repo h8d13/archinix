@@ -1,9 +1,11 @@
-// A/B harness for libstore internals: uses ONLY API that exists both
-// at the extraction point and at HEAD (7-arg addToStoreFromDump, no
-// capture; path-based optimisePath), so the same binary source builds
-// against either prefix and LD_LIBRARY_PATH picks the library under
-// test. Phase 1 = fresh import + optimise (cold farm). Phase 2 = same
-// tree under another name (all-dup optimise, the nixgen-commit shape).
+// A/B harness for libstore internals: sticks to the narrow API the
+// store tools themselves use (addToStoreFromDump without capture,
+// path-based optimisePath), so the same source builds against two
+// prefixes of this fork and LD_LIBRARY_PATH picks the library under
+// test. Any header change still breaks it, so build both prefixes from
+// commits that share the API you are measuring.
+// Phase 1 = fresh import + optimise (cold farm). Phase 2 = same tree
+// under another name (all-dup optimise, the nixgen-commit shape).
 // usage: bench-ab <store-root> <tree>
 #include <chrono>
 #include <cstdio>
@@ -13,7 +15,6 @@
 #include <nix/store/globals.hh>
 #include <nix/store/local-store.hh>
 #include <nix/store/store-open.hh>
-#include <nix/util/config-global.hh>
 #include <nix/util/serialise.hh>
 #include <nix/util/source-accessor.hh>
 
@@ -38,22 +39,20 @@ int main(int argc, char ** argv)
 
 	initLibStore();
 	verbosity = lvlError;
-	globalConfig.set("build-users-group", "");
-	/* the path-based optimisePath is a no-op unless auto-optimise is
-	   on (upstream gate); both versions carry the setting */
-	globalConfig.set("auto-optimise-store", "true");
 
-	auto store = openStore(std::filesystem::absolute(argv[1]));
-	auto local = store.dynamic_pointer_cast<LocalStore>();
+	/* the path-based optimisePath is a no-op unless auto-optimise is
+	   on, and the setting is per store config now (there is no global
+	   nix.conf here), so build the config rather than calling
+	   openStore() */
+	auto config = make_ref<LocalStore::Config>(std::filesystem::absolute(argv[1]));
+	config->localSettings.autoOptimiseStore = true;
+	auto store = config->openStore();
 	auto acc = makeFSSourceAccessor(std::filesystem::absolute(argv[2]));
 
 	auto import = [&](const char * name) {
 		std::optional<StorePath> imported;
 		auto sink = sourceToSink([&](Source & source) {
-			imported = local->addToStoreFromDump(source, name,
-				FileSerialisationMethod::NixArchive,
-				ContentAddressMethod::Raw::NixArchive,
-				HashAlgorithm::SHA256, {}, NoRepair);
+			imported = store->addToStoreFromDump(source, name);
 		});
 		SourcePath{acc, CanonPath::root}.dumpPath(*sink);
 		sink->finish();
@@ -62,8 +61,8 @@ int main(int argc, char ** argv)
 
 	std::optional<StorePath> a, b;
 	timed("import gen-a (cold)", [&] { a = import("gen-a"); });
-	timed("optimise gen-a", [&] { local->optimisePath(local->toRealPath(*a), NoRepair); });
+	timed("optimise gen-a", [&] { store->optimisePath(store->toRealPath(*a)); });
 	timed("import gen-b (dup)", [&] { b = import("gen-b"); });
-	timed("optimise gen-b (dup)", [&] { local->optimisePath(local->toRealPath(*b), NoRepair); });
+	timed("optimise gen-b (dup)", [&] { store->optimisePath(store->toRealPath(*b)); });
 	return 0;
 }

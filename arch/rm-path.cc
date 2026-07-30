@@ -9,8 +9,6 @@
 
 #include <nix/store/gc-store.hh>
 #include <nix/store/globals.hh>
-#include <nix/store/local-fs-store.hh>
-#include <nix/store/store-cast.hh>
 #include <nix/store/store-open.hh>
 
 using namespace nix;
@@ -26,26 +24,19 @@ try {
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::absolute(argv[1]));
-	auto & gcStore = require<GcStore>(*store);
+	auto gcroots = store->config->stateDir / "gcroots";
 
-	auto & fsStore = require<LocalFSStore>(*store);
-	auto gcroots = fsStore.config.stateDir / "gcroots";
-
-	GCOptions::SpecificPaths specific;
+	GCOptions opts;
 	for (int i = 2; i < argc; i++) {
 		StorePath path{argv[i]};
 		/* pre-roots generations have no link: ENOENT is fine */
 		std::error_code ec;
 		std::filesystem::remove(gcroots / std::string(path.to_string()), ec);
-		specific.paths.insert(std::move(path));
+		opts.paths.insert(std::move(path));
 	}
 
-	GCOptions opts;
-	opts.action = GCOptions::gcDeleteSpecific;
-	opts.pathsToDelete = std::move(specific);
-
 	GCResults results;
-	gcStore.collectGarbage(opts, results);
+	store->collectGarbage(opts, results);
 	printf("deleted %zu paths, freed %.1f MiB\n",
 		results.paths.size(), results.bytesFreed / (1024.0 * 1024.0));
 	return 0;

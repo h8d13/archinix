@@ -54,12 +54,11 @@ try {
 	initLibStore();
 
 	auto store = openStore(std::filesystem::absolute(root), true);
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	/* verifyStore reports through the logger and returns true when it
-	   found something wrong; NoRepair because detect-only is the
-	   contract above */
-	bool errors = local->verifyStore(checkContents, NoRepair);
+	   found something wrong: detect-only, there is no repair flag to
+	   pass */
+	bool errors = store->verifyStore(checkContents);
 
 	if (errors) {
 		fprintf(stderr, "store has problems (see above)\n");

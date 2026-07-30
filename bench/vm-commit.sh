@@ -12,6 +12,11 @@
 #   base   first commit onto a fresh store   (nothing to dedup)
 #   pkgs   commit after installing packages  (mostly dup + new content)
 #   noop   commit again, nothing changed     (everything dedups)
+# Each phase reports wall clock, the sectors it moved, and what it cost
+# in memory (see bench/commit-inbox.sh for which two memory numbers and
+# why): on a box the commit's page cache and the tmpfs overlay upper
+# come out of the same RAM, so a phase can be fast on the host and
+# thrash here.
 # The middle one is the real update shape and the reason for PKGS:
 # synthetic trees have to guess a size distribution and a dedup
 # topology, and guessing it wrong is easy (an earlier generator here
@@ -50,23 +55,17 @@ export SERIAL_CMD_TIMEOUT
 mkdir -p build/tmp
 LOG=build/tmp/vm-commit-$LABEL.log
 
-# The in-box helper: time a command and charge it the store disk's
-# sector deltas (/sys/block/vda/stat fields 3 and 7). It goes over the
-# wire base64'd: serial-sh.py sends one line and waits for a prompt, so
-# a heredoc would hang, and hand-escaping a nested quoting mess through
-# two shells is how you end up debugging the harness instead of the
-# store.
-HELPER=$(printf '%s\n' \
-	'P=$1; shift' \
-	'read -r _ _ RD0 _ _ _ WR0 _ < /sys/block/vda/stat' \
-	'S=$(date +%s%N)' \
-	'"$@"' \
-	'E=$(date +%s%N)' \
-	'read -r _ _ RD1 _ _ _ WR1 _ < /sys/block/vda/stat' \
-	'echo BENCHLINE $P wall_ms=$(( (E - S) / 1000000 )) rd_mib=$(( (RD1 - RD0) / 2048 )) wr_mib=$(( (WR1 - WR0) / 2048 ))' \
-	| base64 -w0)
-
-set -- "echo $HELPER | base64 -d > /tmp/bench.sh"
+# The in-box helper (bench/commit-inbox.sh: wall clock, store disk
+# sectors, cgroup memory peak) goes over the wire base64'd and in
+# chunks: serial-sh.py sends one line and waits for a prompt, so a
+# heredoc would hang, and the tty line discipline drops anything past
+# ~4 KiB in one line.
+B64=$(base64 -w0 bench/commit-inbox.sh)
+set -- "rm -f /tmp/bench.b64"
+for chunk in $(echo "$B64" | fold -w 1000); do
+	set -- "$@" "echo -n $chunk >> /tmp/bench.b64"
+done
+set -- "$@" "base64 -d < /tmp/bench.b64 > /tmp/bench.sh"
 set -- "$@" "sh /tmp/bench.sh base nixgen-commit base"
 if [ -n "$PKGS" ]; then
 	# -Sy not -Syu: a full upgrade rewrites the whole root and turns

@@ -41,13 +41,12 @@ try {
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::absolute(argv[1]), true);
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	/* 1. already a full basename? cheapest check, and it is what the
 	   other two forms resolve *to*, so try it first */
 	try {
 		StorePath exact{token};
-		if (local->isValidPath(exact)) {
+		if (store->isValidPath(exact)) {
 			printf("%s\n", std::string(exact.to_string()).c_str());
 			return 0;
 		}
@@ -59,7 +58,7 @@ try {
 	   Any length up to the full 32 chars: nixgen-listid prints 8, and
 	   the whole point of an id is that you can type it. */
 	if (token.size() <= StorePath::HashLen) {
-		auto hits = local->queryPathsByHashPrefix(token);
+		auto hits = store->queryPathsByHashPrefix(token);
 		if (hits.size() == 1) {
 			printf("%s\n", std::string(hits.begin()->to_string()).c_str());
 			return 0;
@@ -77,7 +76,7 @@ try {
 	   has no index for this, so scan the valid set: it is small (one
 	   row per generation) and correctness beats a directory glob. */
 	std::vector<std::string> matches;
-	for (auto & path : local->queryAllValidPaths())
+	for (auto & path : store->queryAllValidPaths())
 		if (path.name() == token)
 			matches.push_back(std::string(path.to_string()));
 

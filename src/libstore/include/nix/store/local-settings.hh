@@ -66,10 +66,22 @@ struct LocalSettings : GCSettings
      */
     bool autoOptimiseStore = false;
 
-    /**
-     * Maximum size of NARs before spilling them to disk.
+        /**
+     * Threads issuing the import's dedup swaps (`link` + `rename` over
+     * a file whose content the link farm already holds). 0 does them
+     * inline on the hashing thread, which is where they used to live.
+     *
+     * This is not a hashing knob: hashing stays one thread, since the
+     * digest that names a store path is a serial pass over one stream.
+     * The swaps are device round trips, which is what overlaps.
+     *
+     * One is the measured default (see bench/BASELINE): the gain is
+     * getting the swaps off the hashing thread, not issuing them
+     * concurrently, and more threads were flat to worse on NVMe. A
+     * device with millisecond metadata ops may want two or three, which
+     * is what the knob is for.
      */
-    size_t narBufferSize = 32 * 1024 * 1024;
+    size_t dedupThreads = 1;
 
     /**
      * Tolerate symlink components in the store directory path.

@@ -81,7 +81,6 @@ int main(int argc, char ** argv)
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::path(root));
-	auto local = store.dynamic_pointer_cast<LocalStore>();
 
 	/* Populate: heavy cross-path duplication (every thread wants the
 	   same link farm entries), nested dirs (permission toggling). */
@@ -130,7 +129,7 @@ int main(int argc, char ** argv)
 	auto runOptimise = [&] {
 		try {
 			OptimiseStats s;
-			local->optimiseStore(s);
+			store->optimiseStore(s);
 		} catch (std::exception & e) {
 			fprintf(stderr, "optimise threw: %s\n", e.what());
 			optimiseErrors++;
@@ -152,8 +151,8 @@ int main(int argc, char ** argv)
 	/* Clean converge: one pass relinks whatever chaos delinked, the
 	   next must be a no-op. */
 	OptimiseStats clean1, clean2;
-	local->optimiseStore(clean1);
-	local->optimiseStore(clean2);
+	store->optimiseStore(clean1);
+	store->optimiseStore(clean2);
 	ok(clean2.filesLinked == 0, "optimise converges",
 		fmt("second clean pass linked %d", clean2.filesLinked));
 
@@ -221,8 +220,8 @@ int main(int argc, char ** argv)
 				wideBefore[f.path().string()] = readFileStr(f.path());
 
 		OptimiseStats w1, w2;
-		local->optimisePath(wide, w1);
-		local->optimisePath(wide, w2);
+		store->optimisePath(wide, w1);
+		store->optimisePath(wide, w2);
 
 		ok(w1.filesLinked > 0, "single-path optimise links",
 			fmt("linked %d", w1.filesLinked));

@@ -27,51 +27,36 @@ mkdir -p "$REPO/build/tmp"
 TMP=$(mktemp -d "$REPO/build/tmp/iso.XXXXXX")
 trap 'unshare -r rm -rf "$TMP"' EXIT
 
-# Existing nixarch generations are reused so grub/squash tweaks rebuild
-# the ISO without re-running pacman. REBUILD=1 discards them first (any
-# change to setup-boot.sh or the initcpio hook invalidates them).
-if [ -n "$REBUILD" ]; then
-	for g in "$SDIR"/*-nixarch-1; do
-		[ -d "$g" ] || continue
-		LD_LIBRARY_PATH=$P/lib "$REPO/build/rm-path" \
-			"$STORE" "$(basename "$g")"
-	done
-fi
-# name reuse means several *-nixarch-1 paths can coexist (mtimes are
-# canonicalised, no "newest" to pick): refuse to guess
-GEN1=
+# Every run mints gen 1 from the base: any edit to setup-boot.sh or an
+# arch/iso/initcpio-* file invalidates a kept generation without saying
+# so, and name reuse lets several *-nixarch-1 paths coexist (mtimes are
+# canonicalised, so there is no "newest" to pick). Clear them first.
 for g in "$SDIR"/*-nixarch-1; do
 	[ -d "$g" ] || continue
-	[ -z "$GEN1" ] || {
-		echo "multiple nixarch-1 generations in $SDIR, REBUILD=1 to clear:" >&2
-		ls -d "$SDIR"/*-nixarch-1 >&2
-		exit 1
-	}
-	GEN1=$g
+	LD_LIBRARY_PATH=$P/lib "$REPO/build/rm-path" \
+		"$STORE" "$(basename "$g")"
 done
 
 # --- gen 1: base + kernel + nixgen hook -------------------------------
 # generation.sh sandbox with the box tooling (arch/nixgen) and iso
 # scaffolding (initcpio hooks, config, import-dir payload) injected at
 # /run/inject
-[ -n "$GEN1" ] || {
-	mkdir "$TMP/inject"
-	cp "$REPO"/arch/nixgen/nixgen-* "$TMP/inject/"
-	cp "$REPO/arch/iso/setup-boot.sh" "$REPO/arch/iso/mkinitcpio.conf" \
-		"$REPO"/arch/iso/initcpio-* "$TMP/inject/"
-	mkdir "$TMP/inject/payload"
-	cp "$REPO/build/import-dir" "$REPO/build/rm-path" \
-		"$REPO/build/export-path" "$REPO/build/import-path" \
-		"$REPO/build/store-paths" "$REPO/build/store-resolve" \
-		"$REPO/build/verify-store" \
-		"$P/lib"/libnixstore.so* \
-		"$P/lib"/libnixutil.so* "$TMP/inject/payload/"
-	# sh -e: run via interpreter ignores the shebang's -e; without it a
-	# failed setup step imports a broken generation instead of aborting
-	INJECT=$TMP/inject GENOUT=$TMP/gen1path arch/generation.sh \
-		"$STORE" "$BASE" nixarch-1 "sh -e /run/inject/setup-boot.sh"
-	GEN1=$(cat "$TMP/gen1path")
-}
+mkdir "$TMP/inject"
+cp "$REPO"/arch/nixgen/nixgen-* "$TMP/inject/"
+cp "$REPO/arch/iso/setup-boot.sh" "$REPO/arch/iso/mkinitcpio.conf" \
+	"$REPO"/arch/iso/initcpio-* "$TMP/inject/"
+mkdir "$TMP/inject/payload"
+cp "$REPO/build/import-dir" "$REPO/build/rm-path" \
+	"$REPO/build/export-path" "$REPO/build/import-path" \
+	"$REPO/build/store-paths" "$REPO/build/store-resolve" \
+	"$REPO/build/verify-store" \
+	"$P/lib"/libnixstore.so* \
+	"$P/lib"/libnixutil.so* "$TMP/inject/payload/"
+# sh -e: run via interpreter ignores the shebang's -e; without it a
+# failed setup step imports a broken generation instead of aborting
+INJECT=$TMP/inject GENOUT=$TMP/gen1path arch/generation.sh \
+	"$STORE" "$BASE" nixarch-1 "sh -e /run/inject/setup-boot.sh"
+GEN1=$(cat "$TMP/gen1path")
 echo "gen1: $GEN1"
 
 # --- squash the store ---------------------------------------------------

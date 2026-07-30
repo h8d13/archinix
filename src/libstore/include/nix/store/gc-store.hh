@@ -1,131 +1,46 @@
 #pragma once
-///@file
+/**
+ * @file
+ *
+ * Garbage collection options and results. The collector itself is
+ * `LocalStore::collectGarbage`: with one store type there is no
+ * gc-capability mixin to dispatch through.
+ */
 
 #include "nix/store/store-api.hh"
-#include <boost/unordered/unordered_flat_map.hpp>
-#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
-typedef boost::unordered_flat_map<
-    StorePath,
-    boost::unordered_flat_set<std::string, StringViewHash, std::equal_to<>>,
-    std::hash<StorePath>>
-    Roots;
+/**
+ * Store paths that a symlink under `<state>/gcroots` points at.
+ * Which link named them is not kept: the collector only asks whether a
+ * path is rooted, and rm-path unroots before it deletes.
+ */
+using Roots = StorePathSet;
 
 /**
- * Garbage collector operation:
- *
- * - `gcReturnLive`: return the set of paths reachable from
- *   (i.e. in the closure of) the roots.
- *
- * - `gcReturnDead`: return the set of paths not reachable from
- *   the roots.
- *
- * - `gcDeleteDead`: actually delete the latter set.
- *
- * - `gcDeleteSpecific`: delete the paths listed in
- *    `pathsToDelete`, insofar as they are not reachable.
+ * What to delete. There is one collection mode: the paths named here
+ * go, or the call fails saying why. No whole-store sweep (nothing
+ * becomes garbage on its own here: a generation stays rooted until
+ * rm-path unroots it) and no live/dead query (rooted is the whole
+ * answer, references do not exist).
  */
-enum class GCAction {
-    gcReturnLive,
-    gcReturnDead,
-    gcDeleteDead,
-    gcDeleteSpecific,
-};
-
 struct GCOptions
 {
-    using GCAction = nix::GCAction;
-    using enum GCAction;
-
-    struct WholeStore
-    {};
-
-    struct SpecificPaths
-    {
-        StorePathSet paths;
-
-        /**
-         * Allow dead referrers of candidate paths to also be deleted.
-         */
-        bool deleteReferrers = false;
-    };
-
-    GCAction action{gcDeleteDead};
-
-    /**
-     * If `ignoreLiveness` is set, then reachability from the roots is
-     * ignored (dangerous!).  However, the paths must still be
-     * unreferenced *within* the store (i.e., there can be no other
-     * store paths that depend on them).
-     */
-    bool ignoreLiveness{false};
-
-    /**
-     * The paths from which to delete.
-     */
-    using GCPaths = std::variant<WholeStore, SpecificPaths>;
-    GCPaths pathsToDelete;
-
-    /**
-     * Stop after at least `maxFreed` bytes have been freed.
-     */
-    uint64_t maxFreed{std::numeric_limits<uint64_t>::max()};
+    StorePathSet paths;
 };
 
 struct GCResults
 {
     /**
-     * Depending on the action, the GC roots, or the paths that would
-     * be or have been deleted.
+     * The paths that were deleted.
      */
     StringSet paths;
 
     /**
-     * For `gcDeleteDead` and `gcDeleteSpecific`, the number of bytes that were freed.
+     * The number of bytes that were freed.
      */
     uint64_t bytesFreed = 0;
-};
-
-/**
- * Mix-in class for \ref Store "stores" which expose a notion of garbage
- * collection.
- *
- * Garbage collection will allow deleting paths which are not
- * transitively "rooted".
- *
- * The notion of GC roots actually not part of this class.
- *
- *  - The base `Store` class has `Store::addTempRoot()` because for a store
- *    that doesn't support garbage collection at all, a temporary GC root is
- *    safely implementable as no-op.
- *
- *    @todo actually this is not so good because stores are *views*.
- *    Some views have only a no-op temp roots even though others to the
- *    same store allow triggering GC. For instance one can't add a root
- *    over ssh, but that doesn't prevent someone from gc-ing that store
- *    accessed via SSH locally).
- *
- *  - The derived `LocalFSStore` class has `LocalFSStore::addPermRoot`,
- *    which is not part of this class because it relies on the notion of
- *    an ambient file system. There are stores (`ssh-ng://`, for one),
- *    that *do* support garbage collection but *don't* expose any file
- *    system, and `LocalFSStore::addPermRoot` thus does not make sense
- *    for them.
- */
-struct GcStore : public virtual Store
-{
-private:
-    void anchor() override;
-
-public:
-    inline static std::string operationName = "Garbage collection";
-
-    /**
-     * Perform a garbage collection.
-     */
-    virtual void collectGarbage(const GCOptions & options, GCResults & results) = 0;
 };
 
 } // namespace nix

@@ -4,37 +4,9 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <typeinfo>
 
-#include "nix/util/demangle.hh"
 
 namespace nix {
-
-/**
- * Exception thrown by ref::cast() when dynamic_pointer_cast fails.
- * Inherits from std::bad_cast for semantic correctness, but carries a message with type info.
- */
-class bad_ref_cast : public std::bad_cast
-{
-    std::string msg;
-
-public:
-    bad_ref_cast(std::string msg)
-        : msg(std::move(msg))
-    {
-    }
-
-    bad_ref_cast(bad_ref_cast &&) = default;
-    bad_ref_cast(const bad_ref_cast &) = default;
-    bad_ref_cast & operator=(bad_ref_cast &&) = default;
-    bad_ref_cast & operator=(const bad_ref_cast &) = default;
-    ~bad_ref_cast() override;
-
-    const char * what() const noexcept override
-    {
-        return msg.c_str();
-    }
-};
 
 /**
  * Concept for implicit ref covariance: From* must be implicitly convertible to To*.
@@ -121,25 +93,10 @@ public:
         return std::forward<decltype(self)>(self).get_ptr();
     }
 
-    template<typename T2>
-    ref<T2> cast() const
-    {
-        auto casted = std::dynamic_pointer_cast<T2>(p);
-        if (!casted)
-            throw bad_ref_cast(
-                "ref<" + demangle(typeid(T).name()) + "> cannot be cast to ref<" + demangle(typeid(T2).name()) + ">");
-        return ref<T2>(std::move(casted));
-    }
-
-    template<typename T2>
-    std::shared_ptr<T2> dynamic_pointer_cast() const
-    {
-        return std::dynamic_pointer_cast<T2>(p);
-    }
-
     /**
      * Implicit conversion to ref of base type (covariance).
-     * Downcasts are rejected; use .cast() (throws bad_ref_cast) or .dynamic_pointer_cast() (returns nullptr) instead.
+     * Downcasts are rejected: with one store type there is nothing to
+     * downcast to.
      */
     template<typename T2>
         requires RefImplicitlyUpcastableTo<T, T2>

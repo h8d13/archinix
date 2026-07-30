@@ -1,31 +1,11 @@
 #include "nix/store/gc-store.hh"
-#include "nix/store/local-settings.hh"
 #include "nix/store/local-store.hh"
 #include "nix/store/path.hh"
-#include "nix/util/environment-variables.hh"
-#include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
-#include "nix/util/serialise.hh"
-#include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
-#include "nix/store/posix-fs-canonicalise.hh"
 
-#include "store-config-private.hh"
-
-#include <boost/unordered/unordered_flat_map.hpp>
-#include <boost/unordered/unordered_flat_set.hpp>
-#include <queue>
-#include <thread>
 #include <errno.h>
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <variant>
-#if HAVE_STATVFS
-#  include <sys/statvfs.h>
-#endif
-#  include <poll.h>
-#  include <sys/socket.h>
-#  include <sys/un.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -71,19 +51,12 @@ std::filesystem::path LocalStore::addPermRoot(const StorePath & storePath, const
     return gcRoot;
 }
 
+/* A root is a symlink into the store, made by addPermRoot and nothing
+   else: the indirect (`gcroots/auto`) layer and the regular-file root
+   are both gone, so a link that does not resolve into the store is
+   simply not a root. */
 void LocalStore::findRoots(const std::filesystem::path & path, std::filesystem::file_type type, Roots & roots)
 {
-    auto foundRoot = [&](const std::filesystem::path & path, const std::filesystem::path & target) {
-        try {
-            auto storePath = toStorePath(target.string()).first;
-            if (isValidPath(storePath))
-                roots[std::move(storePath)].emplace(path.string());
-            else
-                printInfo("skipping invalid root from %1% to %2%", PathFmt(path), PathFmt(target));
-        } catch (BadStorePath &) {
-        }
-    };
-
     try {
 
         if (type == std::filesystem::file_type::unknown)
@@ -98,32 +71,14 @@ void LocalStore::findRoots(const std::filesystem::path & path, std::filesystem::
 
         else if (type == std::filesystem::file_type::symlink) {
             auto target = readLink(path);
-            if (isInStore(target.string()))
-                foundRoot(path, target);
-
-            /* Handle indirect roots. */
-            else {
-                auto parentPath = path.parent_path();
-                target = absPath(target, &parentPath);
-                if (!pathExists(target)) {
-                    if (isInDir(path, config->stateDir / gcRootsDir / "auto")) {
-                        printInfo("removing stale link from %1% to %2%", PathFmt(path), PathFmt(target));
-                        tryUnlink(path);
-                    }
-                } else {
-                    if (!std::filesystem::is_symlink(target))
-                        return;
-                    auto target2 = readLink(target);
-                    if (isInStore(target2.string()))
-                        foundRoot(target, target2);
-                }
+            if (!isInStore(target.string()))
+                return;
+            try {
+                auto storePath = toStorePath(target.string()).first;
+                if (isValidPath(storePath))
+                    roots.insert(std::move(storePath));
+            } catch (BadStorePath &) {
             }
-        }
-
-        else if (type == std::filesystem::file_type::regular) {
-            auto storePath = maybeParseStorePath(storeDir + "/" + std::string(baseNameOf(path.string())));
-            if (storePath && isValidPath(*storePath))
-                roots[std::move(*storePath)].emplace(path.string());
         }
 
     }
@@ -147,32 +102,15 @@ void LocalStore::findRoots(const std::filesystem::path & path, std::filesystem::
     }
 }
 
-void LocalStore::findRootsNoTemp(Roots & roots)
-{
-    /* Process direct roots in {gcroots,profiles}. */
-    findRoots(config->stateDir / gcRootsDir, std::filesystem::file_type::unknown, roots);
-    findRoots(config->stateDir / "profiles", std::filesystem::file_type::unknown, roots);
-}
-
-struct GCLimitReached
-{};
-
+/* Deleting named paths is the only collection this store does. There
+   is no whole-store sweep and no live/dead query: rm-path names what
+   goes, and what it names is either rooted (refused) or gone. */
 void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 {
-    bool shouldDelete = options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific;
-
-    boost::unordered_flat_set<StorePath, std::hash<StorePath>> roots, dead, alive;
-
-    /* Return early if nothing to delete */
-    if (std::visit(
-            overloaded{
-                [](const GCOptions::SpecificPaths & pathsToDelete) { return pathsToDelete.paths.empty(); },
-                [](const GCOptions::WholeStore & _) { return false; }},
-            options.pathsToDelete))
+    if (options.paths.empty())
         return;
 
-    if (shouldDelete)
-        deletePath(reservedPath);
+    deletePath(reservedPath);
 
     /* Acquire the global GC root. Note: we don't use fdGCLock
        here because then in auto-gc mode, another thread could
@@ -182,21 +120,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
     /* Find the roots.  Since we've grabbed the GC lock, the set of
        permanent roots cannot increase now. */
-    printInfo("finding garbage collector roots...");
-    Roots rootMap;
-    if (!options.ignoreLiveness)
-        findRootsNoTemp(rootMap);
+    Roots roots;
+    findRoots(config->stateDir / gcRootsDir, std::filesystem::file_type::unknown, roots);
 
-    for (auto & i : rootMap)
-        roots.insert(i.first);
-
-    /* Synchronisation point for testing, see tests/functional/gc-non-blocking.sh. */
-    if (auto p = getEnv("_NIX_TEST_GC_SYNC_2"))
-        readFile(*p);
-
-    /* Helper function that deletes a path from the store and throws
-       GCLimitReached if we've deleted enough garbage. */
-    auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
+    auto deleteFromStore = [&](std::string_view baseName) {
         assert(!std::filesystem::path(baseName).is_absolute());
         /* Using `std::string` since this is the logical store dir. Hopefully that is the right choice. */
         std::string path = storeDir + "/" + std::string(baseName);
@@ -214,199 +141,40 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             }
         }
 
-        printInfo("deleting '%1%'", path);
-
         results.paths.insert(path);
 
         uint64_t bytesFreed;
-        deleteStorePath(realPath, bytesFreed, isKnownPath);
+        deleteStorePath(realPath, bytesFreed);
 
         results.bytesFreed += bytesFreed;
-
-        if (results.bytesFreed > options.maxFreed) {
-            printInfo("deleted more than %d bytes; stopping", options.maxFreed);
-            throw GCLimitReached();
-        }
     };
 
-    boost::unordered_flat_map<StorePath, StorePathSet, std::hash<StorePath>> referrersCache;
+    /* A generation is an independent, self-contained tree: import-dir
+       creates them reference-free and import-path refuses a stream
+       that claims references, so a path's closure is the path itself.
+       That is why this is one decision per path and not a graph walk:
+       no referrer edges to follow, so nothing else can be dragged in
+       or held alive by the path under consideration. The Refs table
+       and its `on delete restrict` FK stay as the backstop: bypass the
+       door and invalidatePathChecked throws PathInUse instead of data
+       being lost silently. */
+    for (auto & path : options.paths) {
+        checkInterrupt();
 
-    /* Helper function that visits all paths reachable from `start`
-       via the referrers edges and optionally derivers and derivation
-       output edges. If none of those paths are roots, then all
-       visited paths are garbage and are deleted. */
-    auto maybeDeleteReferrersClosure = [&](const StorePath & start) {
-        StorePathSet visited;
-        std::queue<StorePath> todo;
+        if (roots.contains(path))
+            throw Error(
+                "cannot delete path '%1%' since it is still a garbage "
+                "collector root",
+                printStorePath(path));
 
-        auto enqueue = [&](const StorePath & path) {
-            if (visited.insert(path).second)
-                todo.push(path);
-        };
-
-        /* A generation is an independent, self-contained tree:
-           import-dir creates them reference-free and import-path
-           refuses a stream that claims references, so a path's closure
-           is the path itself. The Refs table and its `on delete
-           restrict` FK stay as the backstop: if that door check were
-           ever bypassed, deleting a referenced path fails loudly
-           instead of losing it silently. */
-        auto markAlive = [&](const StorePath & p) { alive.insert(p); };
-
-        enqueue(start);
-
-        while (auto path = pop(todo)) {
-            checkInterrupt();
-
-            /* Bail out if we've previously discovered that this path
-               is alive. */
-            if (alive.contains(*path)) {
-                debug("cannot delete '%s' because '%s' is alive", printStorePath(start), printStorePath(*path));
-                alive.insert(start);
-                return;
-            }
-
-            /* If we've previously deleted this path, we don't have to
-               handle it again. */
-            if (dead.contains(*path))
-                continue;
-
-            /* If this is a root, bail out. */
-            if (roots.contains(*path)) {
-                debug("cannot delete '%s' because it's a root", printStorePath(*path));
-                alive.insert(start);
-                return markAlive(*path);
-            }
-
-            if (std::visit(
-                    overloaded{
-                        [&](const GCOptions::SpecificPaths & pathsToDelete) {
-                            if (!pathsToDelete.deleteReferrers && !pathsToDelete.paths.contains(*path)) {
-                                debug(
-                                    "cannot delete '%s' because '%s' is not in the specified paths to delete",
-                                    printStorePath(start),
-                                    printStorePath(*path));
-                                return true;
-                            }
-                            return false;
-                        },
-                        [](const GCOptions::WholeStore & _) { return false; },
-                    },
-                    options.pathsToDelete))
-                return;
-
-            if (isValidPath(*path)) {
-
-                /* Visit the referrers of this path. */
-                auto i = referrersCache.find(*path);
-                if (i == referrersCache.end()) {
-                    StorePathSet referrers;
-                    queryGCReferrers(*path, referrers);
-                    referrersCache.emplace(*path, std::move(referrers));
-                    i = referrersCache.find(*path);
-                }
-                for (auto & p : i->second)
-                    enqueue(p);
-            }
+        try {
+            invalidatePathChecked(path);
+            deleteFromStore(path.to_string());
+        } catch (PathInUse & e) {
+            // If we end up here, it's likely a new occurrence
+            // of https://github.com/NixOS/nix/issues/11923
+            printError("BUG: %s", e.what());
         }
-        for (auto & path : topoSortPaths(visited)) {
-            if (!dead.insert(path).second)
-                continue;
-            if (shouldDelete) {
-                try {
-                    invalidatePathChecked(path);
-                    deleteFromStore(path.to_string(), true);
-                    referrersCache.erase(path);
-                } catch (PathInUse & e) {
-                    // If we end up here, it's likely a new occurrence
-                    // of https://github.com/NixOS/nix/issues/11923
-                    printError("BUG: %s", e.what());
-                }
-            }
-        }
-    };
-
-    try {
-        /* Either delete all garbage paths, or just the specified paths. */
-        std::visit(
-            overloaded{
-                [&](const GCOptions::SpecificPaths & pathsToDelete) {
-                    switch (options.action) {
-                    case GCOptions::gcDeleteDead:
-                        printInfo("deleting garbage within specified paths...");
-                        break;
-                    case GCOptions::gcDeleteSpecific:
-                        printInfo("deleting specified paths...");
-                        break;
-                    case GCOptions::gcReturnDead:
-                    case GCOptions::gcReturnLive:
-                        printInfo("determining live/dead paths...");
-                    }
-
-                    for (auto & i : pathsToDelete.paths) {
-                        maybeDeleteReferrersClosure(i);
-
-                        if (options.action == GCOptions::gcDeleteSpecific && !dead.contains(i))
-                            throw Error(
-                                "Cannot delete path '%1%' since it is still alive. "
-                                "To find out why, use: "
-                                "nix-store --query --roots and nix-store --query --referrers",
-                                printStorePath(i));
-                        else if (!dead.contains(i))
-                            debug("cannot delete '%s' because it's still alive", printStorePath(i));
-                    }
-                },
-                [&](const GCOptions::WholeStore & _) {
-                    if (options.maxFreed == 0)
-                        return;
-
-                    switch (options.action) {
-                    case GCOptions::gcDeleteDead:
-                        printInfo("deleting garbage...");
-                        break;
-                    case GCOptions::gcDeleteSpecific:
-                        throw Error("Cannot delete the entire store");
-                    case GCOptions::gcReturnDead:
-                    case GCOptions::gcReturnLive:
-                        printInfo("determining live/dead paths...");
-                    }
-
-                    AutoCloseDir dir(opendir(config->realStoreDir.string().c_str()));
-                    if (!dir)
-                        throw SysError("opening directory %1%", PathFmt(config->realStoreDir));
-
-                    /* Read the store and delete all paths that are invalid or
-                    unreachable. We don't use readDirectory() here so that
-                    GCing can start faster. */
-                    auto linksName = linksDir.filename();
-                    struct dirent * dirent;
-                    while (errno = 0, dirent = readdir(dir.get())) {
-                        checkInterrupt();
-                        std::string name = dirent->d_name;
-                        if (name == "." || name == ".." || name == linksName)
-                            continue;
-
-                        if (auto storePath = maybeParseStorePath(storeDir + "/" + name))
-                            maybeDeleteReferrersClosure(*storePath);
-                        else
-                            deleteFromStore(name, false);
-                    }
-                },
-            },
-            options.pathsToDelete);
-    } catch (GCLimitReached & e) {
-    }
-
-    if (options.action == GCOptions::gcReturnLive) {
-        for (auto & i : alive)
-            results.paths.insert(printStorePath(i));
-        return;
-    }
-
-    if (options.action == GCOptions::gcReturnDead) {
-        for (auto & i : dead)
-            results.paths.insert(printStorePath(i));
-        return;
     }
 
     /* Unlink all files in /nix/store/.links that have a link count of 1,
@@ -414,47 +182,25 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
        safely deleted.  FIXME: race condition with optimisePath(): we
        might see a link count of 1 just before optimisePath() increases
        the link count. */
-    if (options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific) {
-        printInfo("deleting unused links...");
+    AutoCloseDir dir(opendir(linksDir.string().c_str()));
+    if (!dir)
+        throw SysError("opening directory %1%", PathFmt(linksDir));
 
-        AutoCloseDir dir(opendir(linksDir.string().c_str()));
-        if (!dir)
-            throw SysError("opening directory %1%", PathFmt(linksDir));
+    struct dirent * dirent;
+    while (errno = 0, dirent = readdir(dir.get())) {
+        checkInterrupt();
+        std::string name = dirent->d_name;
+        if (name == "." || name == "..")
+            continue;
+        auto path = linksDir / name;
 
-        int64_t actualSize = 0, unsharedSize = 0;
+        if (lstat(path).st_nlink != 1)
+            continue;
 
-        struct dirent * dirent;
-        while (errno = 0, dirent = readdir(dir.get())) {
-            checkInterrupt();
-            std::string name = dirent->d_name;
-            if (name == "." || name == "..")
-                continue;
-            auto path = linksDir / name;
+        unlink(path);
 
-            auto st = lstat(path);
-
-            if (st.st_nlink != 1) {
-                actualSize += st.st_size;
-                unsharedSize += (st.st_nlink - 1) * st.st_size;
-                continue;
-            }
-
-            printMsg(lvlTalkative, "deleting unused link %1%", PathFmt(path));
-
-            unlink(path);
-
-            /* Do not account for deleted file here. Rely on deletePath()
-               accounting.  */
-        }
-
-        int64_t overhead =
-            [&] {
-                auto st = stat(linksDir);
-                return st.st_blocks * 512ULL;
-            }()
-            ;
-
-        printInfo("note: hard linking is currently saving %s", renderSize(unsharedSize - actualSize - overhead));
+        /* Do not account for deleted file here. Rely on deletePath()
+           accounting.  */
     }
 
     /* Deliberately no VACUUM here: a generation is one ValidPaths row,

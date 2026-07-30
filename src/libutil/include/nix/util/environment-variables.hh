@@ -19,25 +19,9 @@ namespace nix {
 std::optional<std::string> getEnv(const std::string & key);
 
 /**
- * Like `getEnv`, but using `OsString` to avoid coercions.
+ * Like `getEnv`, but nullopt when the variable is set to the empty
+ * string as well as when it is unset.
  */
-std::optional<OsString> getEnvOs(const OsString & key);
-
-/**
- * Like `getEnv`, but using `OsString` to avoid coercions.
- */
-OsStringMap getEnvOs();
-
-/**
- * Like `getEnvNonEmpty`, but using `OsString` to avoid coercions.
- * Returns nullopt if the env variable is not set or set to "".
- */
-std::optional<OsString> getEnvOsNonEmpty(const OsString & key);
-
-/**
- * Get the entire environment.
- */
-StringMap getEnv();
-
+std::optional<std::string> getEnvNonEmpty(const std::string & key);
 
 } // namespace nix

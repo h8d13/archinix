@@ -135,15 +135,74 @@ AsyncFileHasher (per-file digests, streaming dedup), each on its own
 thread behind a 64-slot queue. Roughly half the CPU is kernel time, so
 syscall counts are the thing to watch, not just wall clock.
 
-                    original   buffered+filter   +canonical restore   +edge wake
-futex                939,993      415,188            ~436,000            385,384
-newfstatat           188,153      155,072             121,991            121,995
-llistxattr            33,082       33,082                   1                  1
-chmod (path)          25,416       25,416               1,811              1,811
-geteuid               33,085       33,085                   3                  3
-getpid                     -            -               9,738                  0
-task-clock            2116 ms     ~1580 ms            ~1570 ms           ~1570 ms
-wall                  1.31 s      ~1.02 s              0.97 s             0.97 s
+                    original   buffered+filter   +canonical restore   +edge wake   now
+futex                939,993      415,188            ~436,000            385,384    170,915
+newfstatat           188,153      155,072             121,991            121,995    121,989
+llistxattr            33,082       33,082                   1                  1          1
+chmod (path)          25,416       25,416               1,811              1,811      1,360
+geteuid               33,085       33,085                   3                  3          3
+getpid                     -            -               9,738                  0          8
+task-clock            2116 ms     ~1580 ms            ~1570 ms           ~1570 ms    1870 ms
+wall                  1.31 s      ~1.02 s              0.97 s             0.97 s     0.67 s
+
+The `now` column is 2026-07-30 on the same tree and box. Two of its
+moves are not from the changes named above, so do not read the +edge
+wake column as current:
+
+- futex 385,384 -> 170,915 and wall 0.97 -> 0.67 s came with the
+  buffered AsyncHashSink and the dedup-swap thread, which landed after
+  that column was written. It was 2x stale.
+- chmod 1,811 -> 1,582 -> 1,360: the middle number is where the
+  canonical restore left it, the last one is makeWritable
+  (optimise-store.cc) no longer writing back a mode it just read, since
+  dirs canonicalise to 0755 which already has S_IWUSR. The paired lstat
+  stays: the mode is what the guard tests.
+- getpid 8 is glibc/sqlite startup, not a loop.
+
+Same import against a 3666 MiB / 49,932-entry firmware tree (arch-base +
+/usr/lib/{firmware,modules,gcc} + 26 .so over 20 MiB): futex 505,648,
+newfstatat 183,442, chmod 3,518, llistxattr 1, geteuid 3, wall 4.30 s,
+task-clock 6,750 ms. Everything metadata-shaped is flat per entry across
+6.5x more bytes per entry; only write and futex scale with bytes. perf
+puts 75% of user CPU in libcrypto, 19% in libc memcpy, 4% in this code,
+at 0.6 CPUs utilised: a large import is disk-bound, which is the same
+conclusion the digest section reaches from the other side.
+
+Two fixes landed from the syscall audit, both syscall-neutral or
+better, measured on arch-base (1,359 dirs, 31.7k files):
+
+- Deferred directory canonicalisation goes through the restore sink's
+  root descriptor instead of by absolute path. `chmod(dir, 0755)` was
+  the one write in an import that followed symlinks, while every
+  openat2 beside it carries RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH and the
+  mtime call already passed AT_SYMLINK_NOFOLLOW. The deferred list now
+  holds root-relative CanonPaths, and the loop calls
+  fchmodatTryNoFollow + setWriteTimeAt against the root fd: same two
+  syscalls per directory, and on this kernel the first is one
+  fchmodat2, not an open+fchmod+close. Bare path chmod per import:
+  1,360 -> 2, and the 2 left are the store dir's own 0700 gate.
+  fchmodat2 1,358, utimensat unchanged.
+
+- The dump side opened every source directory twice, once for the entry
+  list and once for the scoped descent (BASELINE's own profile shows the
+  pair). The callback form of SourceAccessor::readDirectory now hands
+  back the entries it read, so there is one open per directory and a
+  dup for fdopendir (which takes ownership of a descriptor). Source-side
+  opens 2/dir -> 1/dir + 1 dup; total O_DIRECTORY for an arch-base
+  import 2,717 with 1,359 dups, against 1,359 directories. It also
+  closes a TOCTOU shape: the names and the descent that follows them now
+  come from the same directory inode, which matters when the tree being
+  dumped is a live overlay root.
+
+- The NAR case hack is gone (archive.cc). It was a macOS
+  file-name-collision workaround, off by default and set by nothing, but
+  the dump side still copied every directory's entry names into a second
+  StringMap to undo a suffix that is never added: 1,075,872 B at peak and
+  11,125 blocks live at once, more than the map it copied. The restore
+  side kept a case-insensitive index for the same reason. Both removed
+  along with caseHackSuffix and CaseInsensitiveCompare; dump now iterates
+  the entries it was handed. arch-base import peak 62.3 -> 59.8 MiB,
+  wall neutral.
 
 sourceToSink was unbuffered while its mirror image sinkToSource has
 always wrapped its side in a 32 KiB CoroBufferedSink, with a comment
@@ -328,6 +387,122 @@ Real tree (arch-base + /usr/lib/{firmware,modules,gcc} + every >20 MiB
 
 Note the last line is not free and is not counted anywhere else: the
 restore returns with the whole generation dirty in page cache.
+
+## commit memory, per phase   (bench-commit, i5-14600KF, NVMe ext4)
+
+What a commit HOLDS, as opposed to what it dirties. bench-commit
+samples its own RSS every 10 ms per phase; the dirty NAR pages a
+commit leaves behind are page cache, not RSS, and are measured in the
+box instead (bench/vm-commit.sh reports the cgroup's memory.peak next
+to a sampled anon peak). SYNC=1 throughout, MiB:
+
+  tree              files    import peak (end)   optimise peak (end)
+  arch-base         31.7k       62.3 (28.0)          31.1 (30.4)
+  arch-base x2      63.4k       70.6 (38.8)          45.0 (43.8)
+  arch-base    CAPTURE=0        53.8 (19.5)          24.1 (22.4)
+  arch-base x2 CAPTURE=0        53.8 (14.2)          20.5 (18.3)
+
+The x2 tree is two cp -al copies of arch-base in one root: same bytes,
+double the entries, so a line that moves between the two rows scales
+with file count and one that does not is fixed cost.
+
+Capture off, import peak is identical at both sizes (53.8 MiB): the
+import streams, and its footprint is the pipeline (two hash threads, a
+64-slot queue, the 32 KiB sink buffer), not the tree. Capture on adds
+~270 B per file at the peak and ~340 B per file resident afterwards:
+that is ImportFileHashes, one entry per file carrying its digest, kept
+alive for the optimise pass that follows. Extrapolating, a 1M-file
+generation would pay ~300 MiB for capture alone, on a box whose
+overlay upper is a tmpfs competing for the same RAM.
+
+Three heap fixes landed after this table was measured, so the import
+column is now lower than every row above (arch-base, capture on, min of
+3: import peak 62.3 -> 27.2-28.0 MiB, end 28.0 -> 26.0-27.9, wall
+0.423 -> 0.410-0.425 s, store path byte-identical, streamed dedup still
+swaps 23,586 files on a re-import):
+
+- The in-memory dump shortcut is gone (local-store.cc). It kept the
+  first narBufferSize (32 MiB) of a NAR in a heap buffer so a small path
+  could skip the temp dir, and it was 67% of the import's heap plus ~745
+  reallocs, filled and discarded on every real commit because a
+  generation dwarfs 32 MiB. Every dump now restores into the temp path
+  and moves. The narBufferSize setting and ChainSource (its only user)
+  went with it.
+- HashSink buffers 1 KiB, not BufferedSink's 32 KiB default (hash.cc).
+  The only writes it coalesces are the NAR framing tokens, a few dozen
+  bytes per file; content chunks are larger than any buffer and bypass
+  it. One per file and per symlink: 55,309 allocate/free pairs of 32 KiB,
+  1.81 GB of churn on a 552 MiB tree.
+- tryDedup's farm probe builds its path in a buffer the worker reuses,
+  and only materialises a std::filesystem::path on a hit
+  (local-store.cc). On a first commit every probe misses, so that was
+  ~6 allocations per file thrown away.
+
+That is the knob if a small box ever runs out: capture buys ~3x on
+optimise (see the bench-import numbers above) and costs O(files)
+memory; nothing else in the commit path is O(tree).
+
+## digest: multi-buffer and tree hash, measured and discarded
+
+Asked whether the NAR digest is worth parallelising, two ways: OpenSSL
+multi-buffer SHA-256, or a tree hash over chunks. bench-digest.cc
+measures the ceiling both aim at; bench-large gives the stage rates it
+would have to beat. i5-14600KF (SHA-NI present), 1 GiB buffer, min of 3.
+
+  SHA-256, 1 thread                    2.37 GiB/s
+  leaves/tree, T=2  4  8  16   4.72 / 9.30 / 18.25 / 27.50 GiB/s
+                               (1.99 / 3.93 / 7.71 / 11.62x)
+
+  same with SHA-NI masked off (OPENSSL_ia32cap=":~0x20000000"):
+  SHA-256, 1 thread                    0.67 GiB/s
+  leaves/tree, T=2  4  8  16   1.34 / 2.64 / 4.25 /  7.68 GiB/s
+
+Cross-checked against `openssl speed -evp sha256`: 2550917k = 2.37
+GiB/s, masked 717400k = 0.67 GiB/s. The tree row equals the leaves row
+to three digits: combining T 32-byte digests costs nothing measurable,
+so a tree hash's cost is exactly its leaf parallelism.
+
+Stage rates on arch-base (545 MiB NAR), same box:
+
+  dump->null            5130.2 MiB/s
+  dump->sha256          1621.9 MiB/s
+  dump->s2s->null       4206.6 MiB/s
+  dump->s2s->restore    1864.5 MiB/s
+  flush (sync)           327.1 MiB/s
+
+Back out the digest alone from dump->null and dump->sha256 and you get
+~2370 MiB/s, i.e. the hardware rate: the digest stage already runs at
+SHA-NI speed and overlaps the dump.
+
+DISCARDED, on two grounds.
+
+Headroom: writeback is 327 MiB/s here and the sync barrier was the
+largest single term of every large-tree commit measured (0.6-11.4 s).
+The digest has ~7x headroom over that, so making it 11x faster buys
+nothing. Even with SHA-NI masked off, 0.67 GiB/s is still 2x the flush
+rate. The digest only becomes the binding term on a CPU without SHA-NI
+attached to storage faster than ~700 MiB/s (a pre-Ice-Lake Intel
+desktop with an NVMe, say) -- if that shape ever matters, the fix is
+threads this code already has, not a new hash.
+
+Compatibility: the NAR SHA-256 *is* the store path and the export
+integrity check. A tree hash is a different digest, so it renames every
+path and invalidates every existing generation and GRUB entry. It can
+only ever be an extra internal checksum, never the path hash.
+
+And multi-buffer specifically is not reachable: OpenSSL 3.6.3 exports
+only the single-stream API (SHA256_*, EVP_sha256) plus the stitched TLS
+ciphers; the multi-block assembly is internal, confirmed by `nm -D` on
+libcrypto.so.3 and by grepping the installed headers. It would need
+isa-l_crypto or intel-ipsec-mb as a new dependency, to chase a ceiling
+that is not binding, on the one pass (per-file capture hashes) that is
+already spread across threads.
+
+Noted while measuring: libutil's hash.cc still calls the low-level
+SHA256_Init/Update/Final, MD5_* and SHA1_* trio, deprecated since
+OpenSSL 3.0 (they compile only with -Wno-deprecated-declarations, which
+the meson build sets globally). bench-digest.cc uses EVP instead;
+hash.cc should follow before OpenSSL 4 removes them.
 
 ## why a large commit chokes, and where the cost actually is
 
@@ -774,3 +949,149 @@ has to run before the dump, so it cannot ride the import's own walk.
   tree); the existing 80 ms repaint throttle and the cached isTTY()
   check keep that to a lock and a clock read, and off a terminal to a
   bool. Both figures still only grow, so repaints never need to erase.
+
+## DISCARDED: fanning per-file hashing across threads
+
+An import hashes twice: the whole-NAR digest that names the store path,
+and a per-file digest per regular file that dedup is driven from. The
+first is one SHA-256 over one stream and unsplittable by construction.
+The second is per-file independent, so it looked like the place to use
+the cores a box has. Built (a pool of N workers, one file to one
+worker, round robin, per-worker digest maps merged at the end),
+measured, reverted. Import seconds, min of interleaved rounds, two
+shapes: base into an empty store and the same tree again (everything
+dedups, the re-commit shape).
+
+803 MiB / 41,040 entries:
+
+  workers            1      2      3      4      8
+  20 CPUs, base   0.549  0.535    -    0.524  0.531
+  20 CPUs, noop   0.693  0.572    -    0.574  0.581
+   6 CPUs, base   0.570  0.576  0.590  0.594    -
+   6 CPUs, noop   0.730  0.618  0.638  0.642    -
+
+2538 MiB / 144,925 entries (/usr/lib/{firmware,modules} + the
+generation above + /usr/share/{doc,icons,locale}):
+
+  config       base    noop
+  CAPTURE=0   1.496   2.072
+  1 worker    1.776   2.424
+  2 workers   1.796   2.010
+  4 workers   1.735   2.138
+  8 workers   1.776   2.110
+
+Why it went, and this is the part worth keeping: **the work is not
+there.** CAPTURE=0 removes per-file hashing entirely, so it is the
+floor of everything else in an import, and it is 88% of the wall. That
+floor is the serial whole-NAR SHA-256 plus the restore's writes: this
+host hashes at 2.53 GB/s (openssl speed, SHA-NI), so one pass over the
+803 MiB tree is ~0.33 s of its 0.486 s floor, and no thread count
+divides it.
+
+The residue over the floor is ~55 ms on the small tree and ~0.28 s on
+the large one, and in both cases it is FLAT across 1 / 2 / 4 / 8
+workers. Hash CPU would halve on every doubling, so the residue is not
+hash CPU. It is per-file cost on the restore thread, and a tree with
+the bytes and almost no files pins that down -- 2049 MiB in 4 files:
+
+    CAPTURE=0   0.855
+    1 worker    0.864
+    2 workers   0.863
+
+Nine milliseconds on 2 GiB of content. So the per-byte path is free,
+and what an import pays per file it pays on the one thread that parses
+the NAR and writes the tree. More consumers cannot touch it.
+
+- The one real gain was not hashing: -17% on the dedup-heavy re-commit
+  at two workers, at both tree sizes (0.693 -> 0.572, 2.424 -> 2.010),
+  from the lstat + link + rename per duplicate file, which is the only
+  serial work that lived in that thread. That part was kept, without
+  any of the hashing changes: see "the dedup swap, handed off" below.
+- Correctness held throughout, for the record: identical store path at
+  1, 4 and 8 workers, identical file/dedup/optimise counts,
+  tests/run.sh green.
+- NOT the confound: per-worker queue depth (the pool split the 64
+  chunks in flight across workers). Rebuilt with a full 64 each: base
+  0.531 / 0.516 / 0.522 and noop 0.594 / 0.561 / 0.581 at 2 / 4 / 8,
+  within noise of the split.
+- What this leaves as the honest lever for a big generation: the
+  restore thread's per-file cost. 145k files against a 1.5 s CAPTURE=0
+  floor is ~10 us per file on one thread, and it is single-threaded
+  because a NAR is one stream parsed in order. That is a different
+  change from this one, and it is not a thread count.
+## the dedup swap, handed off
+
+The swap is the tail of a streamed dedup: the file was just restored,
+its digest matches a link farm entry, so `link` the farm inode to a temp
+name and `rename` it over the copy. Two journaled metadata operations,
+device round trips rather than CPU, and on a re-commit nearly every file
+takes them (101,075 of 144,925 entries on the large tree). They ran on
+the hashing thread, in front of the next file's digest.
+
+They now go to their own thread. The farm probe (one lstat, against a
+dentry the farm keeps warm) stays where it was, so a file that is not a
+duplicate never touches the queue -- which is what keeps a first commit
+identical. LocalSettings::dedupThreads, 0 = inline as before.
+
+Import seconds, min of interleaved rounds (5 on the middle tree, 3 on
+the others), noop = the same tree imported a second time:
+
+  tree                    dups   phase  inline    1      2      4      8
+  582 MiB, 31,723 files  23,586  base    0.436  0.430  0.437  0.446    -
+                                 noop    0.546  0.482  0.507  0.487    -
+  803 MiB, 38,431 files  30,209  base    0.569  0.563  0.561  0.553  0.560
+                                 noop    0.724  0.604  0.623  0.611  0.680
+  2538 MiB, 144,925 e.  101,075  base    1.816  1.767  1.769  1.783    -
+                                 noop    2.457  1.985  2.084  2.107    -
+
+- PROMOTED, one thread: -12% / -17% / -19% on the three trees, and the
+  base rows are flat, which is the isolation this was built for. Dup
+  counts identical at every setting (23,586 / 30,209 / 101,075), so the
+  work done is the same work, just not in the way of the digests.
+- One thread, not several, and that is the interesting part: the gain is
+  pipelining, not concurrency. Getting the swaps off the hashing thread
+  is worth all of it; issuing them from 2, 4 or 8 threads is flat to
+  worse (8 is the worst row on the middle tree). Kept as a count rather
+  than a bare thread because a device with millisecond metadata ops --
+  the USB-class flash in the run-real.sh note above, 1-2 ms/op against
+  NVMe's ~10 us -- is the one case where two or three in flight could
+  overlap, and the host cannot measure that. Untested there.
+- Reproduce: DEDUPT=n bench/bench-commit <store> g1 <tree> for base,
+  again with g2 into the same store for noop. Noise bursts happen (one
+  round measured 5.417 s where its neighbours measured 2.1), which is
+  what the min over interleaved rounds is for.
+- Ordering, since a swap bumps the containing directory's mtime and the
+  restore defers directory canonicalisation to the end:
+  AsyncFileHasher::close joins the hashing thread first and drains the
+  swap pool second, and the caller's dirs loop runs after both.
+
+## SCHED_RR for the import writer   (IMPLEMENTED, UNMEASURED)
+
+The writer is the sourceToSink worker: it runs the reader callback, so
+on an import it is the restore, and it is the only thread that writes
+(6.05 s inside write() on one tid, 0.00 s on every other, from the
+strace above). It now raises itself to minimum SCHED_RR priority with
+SCHED_RESET_ON_FORK, opt-in through nix::realtimeWriter, which
+arch/import-dir.cc sets by default and RT=0 turns off.
+
+The claim is narrow: it addresses the gap between runnable and running
+for a thread that is blocked most of an import and shares the machine
+with two SHA-256 loops that will use a whole slice. On one or two vCPUs
+that gap is real. It does nothing whatsoever about balance_dirty_pages,
+which is what the two 3.22 s writes above are, and three changes in
+that family have already measured negative.
+
+Fail-soft is verified on the host, which is all the host can show:
+unprivileged, RT=1 prints
+  warning: could not set SCHED_RR priority 1 for the import writer:
+  Operation not permitted (needs cap_sys_nice or RLIMIT_RTPRIO)
+and the import runs at normal priority (0.550 s, unchanged).
+
+Measuring it needs the box, because it needs the capability:
+nixgen-commit runs import-dir as root, and arch/iso/setup-boot.sh also
+sets cap_sys_nice on the binary (captured by savemeta, replayed by
+restmeta, since NAR carries no xattrs). The A/B is
+  RT=0 sh /tmp/bench.sh <phase> nixgen-commit <name>
+against the default, at CPUS=1 and 2 where the effect can exist at all.
+Until that runs, this is a change with a mechanism and no number, and
+it should be read as such.

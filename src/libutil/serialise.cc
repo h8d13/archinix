@@ -1,5 +1,6 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/file-descriptor.hh"
+#include "nix/util/scheduling.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/util.hh"
@@ -32,17 +33,11 @@ void TeeSink::anchor() {}
 
 void FinishSink::anchor() {}
 
-void LambdaSink::anchor() {}
-
 void NullSink::anchor() {}
-
-void FramedSink::anchor() {}
 
 void Source::anchor() {}
 
 void BufferedSource::anchor() {}
-
-void RestartableSource::anchor() {}
 
 void FdSource::anchor() {}
 
@@ -52,15 +47,7 @@ void StringSource::anchor() {}
 
 void LambdaSource::anchor() {}
 
-void FramedSource::anchor() {}
-
 void LengthSource::anchor() {}
-
-void EnsureRead::anchor() {}
-
-void ChainSource::anchor() {}
-
-void SizedSource::anchor() {}
 
 void BufferedSink::operator()(std::string_view data)
 {
@@ -127,11 +114,6 @@ void Source::operator()(char * data, size_t len)
         data += n;
         len -= n;
     }
-}
-
-void Source::operator()(std::string_view data)
-{
-    (*this)((char *) data.data(), data.size());
 }
 
 void Source::drainInto(Sink & sink)
@@ -202,16 +184,6 @@ size_t FdSource::readUnbuffered(char * data, size_t len)
 bool FdSource::good()
 {
     return _good;
-}
-
-void FdSource::restart()
-{
-    if (!isSeekable)
-        throw Error("can't seek to the start of a file");
-    buffer.reset();
-    read = bufPosIn = bufPosOut = 0;
-    if (lseek(fd, 0, SEEK_SET) == -1)
-        throw SysError("seeking to the start of a file");
 }
 
 void FdSource::skip(size_t len)
@@ -297,7 +269,7 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
        libstore. The buffers are recycled rather than allocated per
        chunk: at 32 KiB a piece a multi-GiB import is hundreds of
        thousands of them. */
-    struct SourceToSink : BufferedSink, FinishSink
+    struct SourceToSink : FinishSink
     {
         /* both bases pin the vtable with their own anchor override, so
            this one has to name the final overrider */
@@ -337,8 +309,8 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
                     free_.push_back(std::move(consuming));
                 }
                 /* Before the throw, not after it: reading a Source past
-                   EndOfFile has to keep throwing (ChainSource and
-                   drainInto both do it by design, and the coroutine
+                   EndOfFile has to keep throwing (drainInto does it
+                   by design, and the coroutine
                    this replaced re-threw every time). Left stale, the
                    recycle above makes consuming empty while consumed
                    still holds the last chunk's length, so the next call
@@ -365,6 +337,11 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
         void start()
         {
             worker = std::thread([this] {
+                /* this thread is the write side of an import (it runs
+                   the reader callback, which restores to disk), so it
+                   is the one the realtimeWriter opt-in is about; see
+                   scheduling.cc for which thread and why */
+                setWriterScheduling();
                 try {
                     LambdaSource source([this](char * out, size_t out_len) { return pull(out, out_len); });
                     reader(source);
@@ -481,31 +458,6 @@ void writeStrings(const T & ss, Sink & sink)
         sink << i;
 }
 
-Sink & operator<<(Sink & sink, const Strings & s)
-{
-    writeStrings(s, sink);
-    return sink;
-}
-
-Sink & operator<<(Sink & sink, const StringSet & s)
-{
-    writeStrings(s, sink);
-    return sink;
-}
-
-Sink & operator<<(Sink & sink, const Error & ex)
-{
-    auto & info = ex.info();
-    sink << "Error" << info.level << "Error" // removed
-         << info.msg.str() << 0              // FIXME: info.errPos
-         << info.traces.size();
-    for (auto & trace : info.traces) {
-        sink << 0; // FIXME: trace.pos
-        sink << trace.hint.str();
-    }
-    return sink;
-}
-
 void readPadding(size_t len, Source & source)
 {
     if (len % 8) {
@@ -515,16 +467,6 @@ void readPadding(size_t len, Source & source)
         if (zero)
             throw SerialisationError("non-zero padding");
     }
-}
-
-size_t readString(char * buf, size_t max, Source & source)
-{
-    auto len = readNum<size_t>(source);
-    if (len > max)
-        throw SerialisationError("string is too long");
-    source(buf, len);
-    readPadding(len, source);
-    return len;
 }
 
 std::string readString(Source & source, size_t max)
@@ -538,42 +480,9 @@ std::string readString(Source & source, size_t max)
     return res;
 }
 
-Source & operator>>(Source & in, std::string & s)
-{
-    s = readString(in);
-    return in;
-}
-
-template<class T>
-T readStrings(Source & source)
-{
-    auto count = readNum<size_t>(source);
-    T ss;
-    while (count--)
-        ss.insert(ss.end(), readString(source));
-    return ss;
-}
-
-template Strings readStrings(Source & source);
-template StringSet readStrings(Source & source);
-
 void StringSink::operator()(std::string_view data)
 {
     s.append(data);
-}
-
-size_t ChainSource::read(char * data, size_t len)
-{
-    if (useSecond) {
-        return source2.read(data, len);
-    } else {
-        try {
-            return source1.read(data, len);
-        } catch (EndOfFile &) {
-            useSecond = true;
-            return this->read(data, len);
-        }
-    }
 }
 
 } // namespace nix

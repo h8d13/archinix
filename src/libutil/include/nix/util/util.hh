@@ -152,12 +152,6 @@ char getSizeUnitSuffix(SizeUnit unit);
 std::string renderSize(int64_t value, bool align = false);
 
 /**
- * Parse a string into a float.
- */
-template<class N>
-std::optional<N> string2Float(const std::string_view s);
-
-/**
  * Convert a little-endian integer to host order.
  */
 template<typename T>
@@ -221,13 +215,6 @@ constexpr char treeConn[] = "├───";
 constexpr char treeLast[] = "└───";
 constexpr char treeLine[] = "│   ";
 constexpr char treeNull[] = "    ";
-
-/**
- * Remove common leading whitespace from the lines in the string
- * 's'. For example, if every line is indented by at least 3 spaces,
- * then we remove 3 spaces from the start of every line.
- */
-std::string stripIndentation(std::string_view s);
 
 /**
  * Get a pointer to the contents of a `std::optional` if it is set, or a

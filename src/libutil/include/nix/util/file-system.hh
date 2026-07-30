@@ -273,8 +273,6 @@ class AutoDelete
     bool del;
     bool recursive;
 public:
-    AutoDelete();
-
     AutoDelete(AutoDelete && x) noexcept
     {
         _path = std::move(x._path);
@@ -393,15 +391,6 @@ bool chmodIfNeeded(const std::filesystem::path & path, mode_t mode, mode_t mask 
  * wrapper) to avoid TOCTOU issues.
  */
 void chmod(const std::filesystem::path & path, mode_t mode);
-
-/**
- * Change ownership of a file, throwing an exception on error.
- *
- * @param path Path to the file to change the ownership for.
- * @param owner New owner user ID.
- * @param group New owner group ID.
- */
-void chown(const std::filesystem::path & path, uid_t owner, gid_t group);
 
 /**
  * Remove a file, throwing an exception on error.

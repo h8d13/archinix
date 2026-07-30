@@ -105,7 +105,7 @@ VariantT<RegularContents, recur>::operator<=>(const VariantT<RegularContents, re
 /**
  * An source accessor for an in-memory file system.
  */
-struct MemorySourceAccessor : virtual SourceAccessor
+struct MemorySourceAccessor : SourceAccessor
 {
 private:
     void anchor() override;

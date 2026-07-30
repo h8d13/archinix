@@ -39,11 +39,6 @@ int main(int argc, char ** argv)
 	verbosity = lvlError;
 
 	auto store = openStore(std::filesystem::path(root));
-	auto local = store.dynamic_pointer_cast<LocalStore>();
-	if (!local) {
-		fprintf(stderr, "not a LocalStore\n");
-		return 1;
-	}
 
 	// deterministic content pool, ~256 bytes each
 	std::mt19937 rng(42);
@@ -69,14 +64,14 @@ int main(int argc, char ** argv)
 	});
 
 	OptimiseStats s1, s2;
-	timed("optimise pass1 (cold)", [&] { local->optimiseStore(s1); });
+	timed("optimise pass1 (cold)", [&] { store->optimiseStore(s1); });
 	printf("  linked %lu files, freed %.1f MiB\n",
 		s1.filesLinked, s1.bytesFreed / (1024.0 * 1024.0));
 	timed("optimise pass2 (warm)", [&] {
 		for (unsigned i = 0; i < warmLoops; i++) {
 			// fresh stats per loop: report the last pass, not a sum
 			OptimiseStats s;
-			local->optimiseStore(s);
+			store->optimiseStore(s);
 			s2 = s;
 		}
 	});

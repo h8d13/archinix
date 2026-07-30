@@ -12,11 +12,6 @@ struct Source;
 
 // items being serialized
 class StorePath;
-struct ContentAddress;
-struct DrvOutput;
-struct Realisation;
-enum struct BuildResultSuccessStatus : uint8_t;
-enum struct BuildResultFailureStatus : uint8_t;
 
 /**
  * Shared serializers between the worker protocol, serve protocol, and a
@@ -67,16 +62,7 @@ struct CommonProto
     }
 
 template<>
-DECLARE_COMMON_SERIALISER(std::string);
-template<>
 DECLARE_COMMON_SERIALISER(StorePath);
-template<>
-DECLARE_COMMON_SERIALISER(ContentAddress);
-template<>
-DECLARE_COMMON_SERIALISER(DrvOutput);
-template<>
-DECLARE_COMMON_SERIALISER(Realisation);
-template<>
 
 #define COMMA_ ,
 template<typename T>
@@ -88,35 +74,6 @@ DECLARE_COMMON_SERIALISER(std::tuple<Ts...>);
 
 template<typename K, typename V, typename Compare>
 DECLARE_COMMON_SERIALISER(std::map<K COMMA_ V COMMA_ Compare>);
-#undef COMMA_
-
-/**
- * These use the empty string for the null case, relying on the fact
- * that the underlying types never serialize to the empty string.
- *
- * We do this instead of a generic std::optional<T> instance because
- * ordinal tags (0 or 1, here) are a bit of a compatibility hazard. For
- * the same reason, we don't have a std::variant<T..> instances (ordinal
- * tags 0...n).
- *
- * We could the generic instances and then these as specializations for
- * compatibility, but that's proven a bit finnicky, and also makes the
- * worker protocol harder to implement in other languages where such
- * specializations may not be allowed.
- */
-template<>
-DECLARE_COMMON_SERIALISER(std::optional<StorePath>);
-template<>
-DECLARE_COMMON_SERIALISER(std::optional<ContentAddress>);
-
-/**
- * The success and failure codes never overlay in enum tag values in the wire formats
- */
-using BuildResultStatus = std::variant<BuildResultSuccessStatus, BuildResultFailureStatus>;
-
-template<>
-DECLARE_COMMON_SERIALISER(BuildResultStatus);
-
 #undef COMMA_
 
 } // namespace nix
