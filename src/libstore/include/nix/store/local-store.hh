@@ -229,7 +229,10 @@ public:
      */
     struct ImportFileHashes
     {
-        std::map<std::string, Hash> files;
+        /* transparent comparator: optimisePath looks entries up by a
+           view into the path it already holds, without building a
+           std::string per file to do it */
+        std::map<std::string, Hash, std::less<>> files;
 
         /**
          * Files replaced by a hard link into the link farm while the

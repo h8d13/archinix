@@ -241,7 +241,10 @@ void LocalStore::optimisePath_(
            later dedup against that hash. Cheap to check: st is already
            in hand. */
         if (ctx.fileHashes && st.st_mtime == mtimeStore) {
-            auto rel = path.native().substr(ctx.fileHashesBase);
+            /* a view into `path`, not a copy: this is a lookup key for
+               one find() and the map compares transparently */
+            std::string_view rel = path.native();
+            rel.remove_prefix(ctx.fileHashesBase);
             if (rel.empty())
                 rel = "/";
             if (auto it = ctx.fileHashes->files.find(rel); it != ctx.fileHashes->files.end())
@@ -249,11 +252,15 @@ void LocalStore::optimisePath_(
         }
         return hashPath(makeFSSourceAccessor(path)).hash;
     }();
-    debug("%s has hash '%s'", PathFmt(path), hash.to_string(HashFormat::Nix32, true));
+    /* the encode is an argument, so it runs whether or not the debug
+       level is on: one string per file, and the link path below needs
+       the same digits anyway */
+    auto hashStr = hash.to_string(HashFormat::Nix32, false);
+    debug("%s has hash '%s'", PathFmt(path), hashStr);
 
     /* Check if this is a known hash. Single component parse: this runs
        once per file. */
-    std::filesystem::path linkPath{linksDir.native() + '/' + hash.to_string(HashFormat::Nix32, false)};
+    std::filesystem::path linkPath{linksDir.native() + '/' + hashStr};
 
     auto stLink = maybeLstat(linkPath);
 

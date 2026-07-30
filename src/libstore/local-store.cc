@@ -1029,7 +1029,9 @@ class AsyncFileHasher
        otherwise (events per file are strictly ordered either way, so
        the digests are identical) */
     std::string key;
-    std::unique_ptr<HashSink> hash;
+    /* in place, not on the heap: a fresh digest state per file is one
+       allocation the worker does not need to make */
+    std::optional<HashSink> hash;
     uint64_t size = 0;
     /* scratch for tryDedup's farm probe, reused across files */
     std::string linkBuf;
@@ -1040,7 +1042,7 @@ class AsyncFileHasher
     void begin(std::string k)
     {
         key = std::move(k);
-        hash = std::make_unique<HashSink>();
+        hash.emplace();
         *hash << narVersionMagic1 << "(" << "type" << "regular";
     }
 

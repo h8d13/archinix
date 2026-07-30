@@ -1095,3 +1095,63 @@ restmeta, since NAR carries no xattrs). The A/B is
 against the default, at CPUS=1 and 2 where the effect can exist at all.
 Until that runs, this is a change with a mechanism and no number, and
 it should be read as such.
+
+## heap churn on the import path (tests/dhat.sh)
+
+DHAT over bench-import (400 files x 8 KiB, synthetic tree, both capture
+modes plus both optimise passes), total bytes allocated / blocks:
+
+  58,670,987 / 46,908   before
+  32,426,540 / 46,072   after the restore buffer fix
+  31,712,074 / 39,709   after the rest
+
+What was there, in the order DHAT ranked it:
+
+- RestoreSink::createRegularFile built a fresh FdSink per file, so
+  every regular file in a NAR malloc'd and freed a 32 KiB write
+  buffer: 13.1 MiB per import here, the top site by bytes, and only
+  8 KiB of each buffer was ever touched. A NAR is depth-first, so at
+  most one file is open at a time; the sink now parks one buffer in
+  `RestoreSink::fileBuf` and hands it down to the subdirectory sinks.
+  One 32 KiB block for the whole restore.
+- MemorySourceAccessor::readFile streamed its contents through a
+  StringSource, and drainInto's no-length overload ends by catching
+  EndOfFile: an exception object per file, with a boost::format inside
+  it (~7 allocations each before the unwind). The contents are already
+  one contiguous buffer, so it writes them straight to the sink.
+- optimisePath_ encoded the hash twice per file, once for a debug()
+  argument that is formatted whether or not the level is on.
+- ImportFileHashes::files takes std::less<>, so the per-file lookup key
+  is a view into the path optimisePath_ already holds instead of a
+  substr copy.
+- AsyncFileHasher's per-file HashSink is a std::optional member rather
+  than a make_unique.
+
+Wall clock, bench/ab.sh HEAD (arch-base, 10 interleaved pairs):
+
+                        old min/median   new min/median
+  import gen-a (cold)    1.180 / 1.587    1.188 / 1.594
+  import gen-b (dup)     1.345 / 1.721    1.286 / 1.763
+  optimise gen-a         0.470 / 0.595    0.490 / 0.599
+  optimise gen-b (dup)   0.485 / 0.607    0.445 / 0.609
+
+Unmoved, and that is the expected result: perf over the same import
+(perf record --call-graph dwarf, arch-base) spends 55-58% of cycles in
+libcrypto, 23-25% in libc, and 13-16% in both nix libraries together.
+The tree is hashed about twice (NAR digest plus the per-file digests
+that name farm entries), 582 MiB x 2 against openssl's 2.24 GB/s
+SHA-NI sha256 on this box, which is most of the import's wall clock on
+its own. Allocation counts are the honest metric for this change; the
+same conclusion as the restore-queue buffering above.
+
+A first 6-pair run reported -8% to -21% on every phase. It was one run
+where all four phases came out fast at once, and min-of-pairs took it
+at face value; bench/ab.sh prints the median beside the min now,
+because that is the shape a whole-run burst makes.
+
+Left alone: readDirectoryIgnoringInodes is now the largest single site
+(9.5 MiB, 290 blocks) and none of it is ours -- glibc's opendir
+allocates a ~32 KiB DIR buffer per directory, of which the walk reads
+about 350 bytes. Replacing it means hand-rolling getdents64 against a
+reused buffer, which is a real option on a Linux-only fork but buys a
+malloc/free pair per directory, not per file.

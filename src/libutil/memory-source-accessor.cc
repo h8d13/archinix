@@ -76,8 +76,11 @@ void MemorySourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<voi
         overloaded{
             [&](const File::Regular & r) {
                 sizeCallback(r.contents.size());
-                StringSource source{r.contents};
-                source.drainInto(sink);
+                /* the contents are already one contiguous buffer:
+                   streaming them through a StringSource ended every
+                   file with a thrown EndOfFile, which is an exception
+                   object (and a boost::format inside it) per file */
+                sink(r.contents);
             },
             [&](const File::Directory &) { throw NotARegularFile("file '%s' is not a regular file", showPath(path)); },
             [&](const File::Symlink &) { throw SymlinkNotAllowed(path, "file '%s' is a symlink", showPath(path)); },

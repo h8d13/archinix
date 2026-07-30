@@ -148,6 +148,18 @@ public:
      */
     CanonPath relToRoot = CanonPath::root;
 
+    /**
+     * The write buffer of the file currently being restored, parked
+     * here between files. Every regular file gets its own sink over
+     * its own descriptor, and each of those would otherwise malloc a
+     * fresh 32 KiB buffer: on an import that is one malloc/free pair
+     * per file, and the buffer is oversized for most of them. A NAR is
+     * depth-first, so at most one file is open at a time and one
+     * buffer serves the whole restore; it is handed down to the
+     * subdirectory sinks and taken back when their subtree closes.
+     */
+    std::unique_ptr<char[]> fileBuf;
+
     explicit RestoreSink(bool startFsync, bool canonical = false)
         : startFsync{startFsync}
         , canonical{canonical}

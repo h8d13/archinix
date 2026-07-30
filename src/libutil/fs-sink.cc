@@ -136,7 +136,9 @@ void RestoreSink::createDirectory(const CanonPath & path, const DirectoryCreated
     if (!dirSink.dirFd)
         throw SysError("opening directory %s", PathFmt(dirSink.dstPath));
 
+    dirSink.fileBuf = std::move(fileBuf);
     callback(dirSink, CanonPath::root);
+    fileBuf = std::move(dirSink.fileBuf);
     /* NAR is depth-first: this directory is complete, nothing touches
        it again, so its metadata canonicalises now through the fd */
     dirSink.finishCanonical();
@@ -251,8 +253,12 @@ void RestoreSink::createRegularFile(const CanonPath & path, fun<void(CreateRegul
     );
     if (!crf.fd)
         throw NativeSysError("creating file %1%", PathFmt(append(dstPath, path)));
+    /* lend the restore's buffer for this file, take it back once the
+       writer has drained it (see `fileBuf`) */
+    crf.sink.buffer = std::move(fileBuf);
     func(crf);
     crf.flush();
+    fileBuf = std::move(crf.sink.buffer);
     if (canonical) {
         if (!umaskPreservesCanonicalModes() && !crf.madeExecutable
             && fchmod(crf.fd.get(), 0444) == -1)
