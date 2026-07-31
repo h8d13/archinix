@@ -94,17 +94,7 @@ FdSink::~FdSink()
 void FdSink::writeUnbuffered(std::string_view data)
 {
     written += data.size();
-    try {
-        writeFull(fd, data);
-    } catch (SystemError & e) {
-        _good = false;
-        throw;
-    }
-}
-
-bool FdSink::good()
-{
-    return _good;
+    writeFull(fd, data);
 }
 
 void Source::operator()(char * data, size_t len)
@@ -173,17 +163,10 @@ size_t BufferedSource::read(char * data, size_t len)
 size_t FdSource::readUnbuffered(char * data, size_t len)
 {
     auto n = nix::read(fd, {reinterpret_cast<std::byte *>(data), len});
-    if (n == 0) {
-        _good = false;
+    if (n == 0)
         throw EndOfFile(std::string(*endOfFileError));
-    }
     read += n;
     return n;
-}
-
-bool FdSource::good()
-{
-    return _good;
 }
 
 void FdSource::skip(size_t len)
@@ -291,7 +274,7 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
         std::exception_ptr failure;
 
         SourceToSink(fun<void(Source &)> reader)
-            : reader(reader)
+            : reader(std::move(reader))
         {
         }
 
@@ -425,7 +408,7 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
         }
     };
 
-    return std::make_unique<SourceToSink>(reader);
+    return std::make_unique<SourceToSink>(std::move(reader));
 }
 
 void writePadding(size_t len, Sink & sink)

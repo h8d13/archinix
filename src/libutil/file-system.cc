@@ -443,8 +443,8 @@ void moveFile(const std::filesystem::path & oldName, const std::filesystem::path
     try {
         std::filesystem::rename(oldName, newName);
     } catch (std::filesystem::filesystem_error & e) {
-        auto oldPath = oldName;
-        auto newPath = newName;
+        const auto & oldPath = oldName;
+        const auto & newPath = newName;
         // For the move to be as atomic as possible, copy to a temporary
         // directory
         std::filesystem::path temp = createTempDir(newPath.parent_path().native(), "rename-tmp");

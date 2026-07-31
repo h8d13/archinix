@@ -160,7 +160,7 @@ public:
      * Open the local store, creating its skeleton and database if the
      * root does not hold one yet.
      */
-    LocalStore(ref<const Config> params);
+    LocalStore(const ref<const Config> & params);
 
     ~LocalStore();
 
@@ -229,7 +229,10 @@ public:
      */
     struct ImportFileHashes
     {
-        std::map<std::string, Hash> files;
+        /* transparent comparator: optimisePath looks entries up by a
+           view into the path it already holds, without building a
+           std::string per file to do it */
+        std::map<std::string, Hash, std::less<>> files;
 
         /**
          * Files replaced by a hard link into the link farm while the
@@ -340,7 +343,7 @@ protected:
 
     void verifyPath(
         const StorePath & path,
-        fun<bool(const StorePath &)> existsInStoreDir,
+        const fun<bool(const StorePath &)> & existsInStoreDir,
         StorePathSet & done,
         StorePathSet & validPaths,
         bool & errors);

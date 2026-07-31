@@ -139,7 +139,7 @@ static AutoCloseFD openFileEnsureBeneathNoSymlinksIterative(
     const CanonPath & path,
     int flags,
     mode_t mode,
-    std::function<void(AutoCloseFD dirFd, CanonPath relPath)> dirFdCallback)
+    const std::function<void(AutoCloseFD dirFd, const CanonPath & relPath)> & dirFdCallback)
 {
     AutoCloseFD parentFd;
     auto nrComponents = std::ranges::distance(path);
@@ -185,7 +185,7 @@ static AutoCloseFD openFileEnsureBeneathNoSymlinksIterative(
         }
 
         if (dirFdCallback && parentFd)
-            dirFdCallback(std::move(parentFd), std::move(prevRelPath));
+            dirFdCallback(std::move(parentFd), prevRelPath);
 
         parentFd = std::move(parentFd2);
     }
@@ -225,7 +225,7 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
     const CanonPath & path,
     int flags,
     mode_t mode,
-    std::function<void(AutoCloseFD dirFd, CanonPath relPath)> dirFdCallback)
+    const std::function<void(AutoCloseFD dirFd, const CanonPath & relPath)> & dirFdCallback)
 {
     /* Just in case the invariant is somehow broken. */
     assert(!path.rel().starts_with('/'));
@@ -267,7 +267,7 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
     }
 #endif
 
-    return openFileEnsureBeneathNoSymlinksIterative(dirFd, path, flags, mode, std::move(dirFdCallback));
+    return openFileEnsureBeneathNoSymlinksIterative(dirFd, path, flags, mode, dirFdCallback);
 }
 
 void setWriteTimeAt(Descriptor dirFd, const CanonPath & path, time_t accessedTime, time_t modificationTime)

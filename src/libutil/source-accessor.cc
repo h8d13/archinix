@@ -23,11 +23,6 @@ SourceAccessor::SourceAccessor()
 {
 }
 
-bool SourceAccessor::pathExists(const CanonPath & path)
-{
-    return maybeLstat(path).has_value();
-}
-
 SourceAccessor::Stat SourceAccessor::lstat(const CanonPath & path)
 {
     if (auto st = maybeLstat(path))

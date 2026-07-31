@@ -107,10 +107,6 @@ VariantT<RegularContents, recur>::operator<=>(const VariantT<RegularContents, re
  */
 struct MemorySourceAccessor : SourceAccessor
 {
-private:
-    void anchor() override;
-
-public:
     using File = fso::VariantT<std::string, true>;
 
     std::optional<File> root;
@@ -123,10 +119,11 @@ public:
     }
 
     void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override;
-    using SourceAccessor::readFile;
 
-    bool pathExists(const CanonPath & path) override;
     std::optional<Stat> maybeLstat(const CanonPath & path) override;
+
+    using SourceAccessor::readDirectory; /* keep the callback overload visible */
+
     DirEntries readDirectory(const CanonPath & path) override;
     std::string readLink(const CanonPath & path) override;
 
@@ -143,7 +140,7 @@ public:
      */
     File * open(const CanonPath & path, std::optional<File> create);
 
-    SourcePath addFile(CanonPath path, std::string && contents);
+    SourcePath addFile(const CanonPath & path, std::string && contents);
 };
 
 /**
@@ -161,6 +158,8 @@ public:
         : dst(dst)
     {
     }
+
+    using FileSystemObjectSink::createDirectory; /* keep the callback overload visible */
 
     void createDirectory(const CanonPath & path) override;
 

@@ -106,7 +106,7 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
     const CanonPath & path,
     int flags,
     mode_t mode = 0,
-    std::function<void(AutoCloseFD dirFd, CanonPath relPath)> dirFdCallback = nullptr);
+    const std::function<void(AutoCloseFD dirFd, const CanonPath & relPath)> & dirFdCallback = nullptr);
 
 /**
  * Wrapper around Linux's openat2 syscall introduced in Linux 5.6.

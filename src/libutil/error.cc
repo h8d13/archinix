@@ -24,7 +24,7 @@ void SystemError::anchor() {}
 
 void SysError::anchor() {}
 
-void BaseError::addTrace(HintFmt hint, TracePrint print)
+void BaseError::addTrace(const HintFmt & hint, TracePrint print)
 {
     err.traces.push_front(Trace{.hint = hint, .print = print});
 }

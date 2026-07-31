@@ -35,7 +35,7 @@ struct SourcePath
      */
     void readFile(Sink & sink, fun<void(uint64_t)> sizeCallback = [](uint64_t size) {}) const
     {
-        return accessor->readFile(path, sink, sizeCallback);
+        return accessor->readFile(path, sink, std::move(sizeCallback));
     }
 
     /**

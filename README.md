@@ -17,6 +17,7 @@ Build depends on: `meson`, `ninja`, C++23 compiler:
 pacman -S --needed meson ninja gcc pkgconf boost openssl sqlite
 ```
 
+
 API reference: [`src/README.md`](src/) covers the store layer as it
 stands here (layout, calls in order, a working consumer). Headers
 install to `include/nix/{util,store}/`; upstream's
