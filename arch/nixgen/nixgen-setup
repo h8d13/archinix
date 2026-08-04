@@ -19,9 +19,9 @@
 #        installed entry: the single-disk persistent-state flow
 #        -u creates a login user before the commit, the only point where
 #        the account and its home end up in the same generation
-#        --encrypt puts LUKS2 under that data partition (nixgen-crypt),
-#        the only encryptable thing here: the store is GRUB's to read
-#        and the root filesystem is an overlay, not a partition
+#        --encrypt puts LUKS2 under that data partition and stamps the
+#        unlock onto the entry; nixgen-crypt holds the table, and why
+#        it is the only encryptable thing here
 # the store is 0700 root:root and the work below mounts, imports or
 # writes it: bail here rather than at whichever privileged call
 # happens to fail first, which reads as a missing file
@@ -116,8 +116,8 @@ fi
 # Plain -S against the generation's baked db: versions match the
 # running snapshot, no partial upgrade (-Sy <pkg> is never right). A
 # stale generation's versions may be gone from live mirrors; the
-# consistent way forward is a full update, not a db refresh here
-# unquoted below on purpose: empty without --encrypt, one word with it
+# consistent way forward is a full update, not a db refresh here.
+# CRYPTPKG unquoted: empty without --encrypt, one word with it
 CRYPTPKG=
 [ -z "$ENC" ] || CRYPTPKG=$(crypt_pkg)
 pacman -S --needed --noconfirm grub dosfstools "$(fs_pkg "$FS")" $CRYPTPKG || {
@@ -128,9 +128,9 @@ pacman -S --needed --noconfirm grub dosfstools "$(fs_pkg "$FS")" $CRYPTPKG || {
 
 # data before store: the data size is known, the store takes the rest,
 # so no size arithmetic. GRUB finds the store by label, never by number
-DATAPART=${PART}2 STOREPART=${PART}2
+STOREPART=${PART}2 DATAPART=
 if [ -n "$DATA" ]; then
-	STOREPART=${PART}3
+	STOREPART=${PART}3 DATAPART=${PART}2
 	sfdisk -q "$DEV" <<EOF
 label: gpt
 start=1MiB, size=64MiB, type=uefi
@@ -169,14 +169,14 @@ trap cleanup EXIT
 mkdir "$T/esp" "$T/store" "$T/data"
 
 # LUKS goes under the filesystem, so mkfs and the seeding below work on
-# the mapper. NIXDATA stays on the filesystem inside, which is what the
-# boot looks up
+# the mapper. KPARAMS carries its trailing space, so an unencrypted
+# install stamps the entry with exactly what it did before
 DATADEV=$DATAPART KPARAMS=
 if [ -n "$ENC" ]; then
 	crypt_format "$DATAPART"
 	crypt_open "$DATAPART"
 	DATADEV=/dev/mapper/$NIXGEN_CRYPT_NAME
-	KPARAMS=" $(crypt_params "$DATAPART")"
+	KPARAMS="$(crypt_params "$DATAPART") "
 fi
 [ -z "$DATA" ] || fs_mkfs "$FS" "$DATADEV" NIXDATA
 
@@ -215,7 +215,7 @@ if [ -n "$DATA" ]; then
 	/usr/local/lib/nixgen-seedstate "$T/data" \
 		$(/usr/local/lib/nixgen-statepaths persistent)
 	umount "$T/data"
-	sed -i "s|^\tlinux .*|&$KPARAMS nixdata=NIXDATA|" \
+	sed -i "s|^\tlinux .*|& ${KPARAMS}nixdata=NIXDATA|" \
 		"$T/store/entries.cfg"
 fi
 umount "$T/store"
