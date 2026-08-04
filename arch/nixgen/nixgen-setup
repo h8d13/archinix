@@ -19,19 +19,24 @@
 #        installed entry: the single-disk persistent-state flow
 #        -u creates a login user before the commit, the only point where
 #        the account and its home end up in the same generation
+#        --encrypt puts LUKS2 under that data partition (nixgen-crypt),
+#        the only encryptable thing here: the store is GRUB's to read
+#        and the root filesystem is an overlay, not a partition
 # the store is 0700 root:root and the work below mounts, imports or
 # writes it: bail here rather than at whichever privileged call
 # happens to fail first, which reads as a missing file
 [ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 . /usr/local/lib/nixgen-fs
+. /usr/local/lib/nixgen-crypt
 
-DEV= NAME= FS=ext4 DATA= NEWUSER=
+DEV= NAME= FS=ext4 DATA= NEWUSER= ENC=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--fs) FS=$2; shift 2 ;;
 	--fs=*) FS=${1#--fs=}; shift ;;
 	--data) DATA=$2; shift 2 ;;
 	--data=*) DATA=${1#--data=}; shift ;;
+	--encrypt) ENC=1; shift ;;
 	-u|--user) NEWUSER=$2; shift 2 ;;
 	-u=*) NEWUSER=${1#-u=}; shift ;;
 	--user=*) NEWUSER=${1#--user=}; shift ;;
@@ -50,7 +55,7 @@ is_supported_fs "$FS" || exit 1
 	# the list comes from the table, so a filesystem added there shows
 	# up here without touching this script
 	echo "usage: $0 <device> [name] [--fs <type>]" \
-		"[--data <size>] [-u <user>]" >&2
+		"[--data <size>] [--encrypt] [-u <user>]" >&2
 	echo "  <type>: $(echo "$NIXGEN_FS_ALL" | tr ' ' '|') (default ext4)" >&2
 	for f in $NIXGEN_FS_ALL; do
 		printf '  %-6s mkfs from %s\n' "$f" "$(fs_pkg "$f")" >&2
@@ -64,6 +69,21 @@ is_supported_fs "$FS" || exit 1
 		"nothing would ever mount" >&2
 	exit 1
 }
+# the data partition is the only encryptable one, so there is nothing
+# for --encrypt to act on without --data
+if [ -n "$ENC" ]; then
+	[ -n "$DATA" ] || {
+		echo "--encrypt without --data: no data partition" >&2
+		exit 1
+	}
+	# fixed mapper name (the boot entry names the container by it), so
+	# a taken one is a collision. Checked before cleanup() can close a
+	# mapper it did not open
+	[ ! -b "/dev/mapper/$NIXGEN_CRYPT_NAME" ] || {
+		echo "refusing: /dev/mapper/$NIXGEN_CRYPT_NAME is open" >&2
+		exit 1
+	}
+fi
 case $DEV in
 *[0-9]) PART="${DEV}p" ;;
 *) PART="$DEV" ;;
@@ -97,7 +117,10 @@ fi
 # running snapshot, no partial upgrade (-Sy <pkg> is never right). A
 # stale generation's versions may be gone from live mirrors; the
 # consistent way forward is a full update, not a db refresh here
-pacman -S --needed --noconfirm grub dosfstools "$(fs_pkg "$FS")" || {
+# unquoted below on purpose: empty without --encrypt, one word with it
+CRYPTPKG=
+[ -z "$ENC" ] || CRYPTPKG=$(crypt_pkg)
+pacman -S --needed --noconfirm grub dosfstools "$(fs_pkg "$FS")" $CRYPTPKG || {
 	echo "setup: dep install failed (stale generation?);" \
 		"nixgen-update + reboot, then retry" >&2
 	exit 1
@@ -105,7 +128,7 @@ pacman -S --needed --noconfirm grub dosfstools "$(fs_pkg "$FS")" || {
 
 # data before store: the data size is known, the store takes the rest,
 # so no size arithmetic. GRUB finds the store by label, never by number
-STOREPART=${PART}2
+DATAPART=${PART}2 STOREPART=${PART}2
 if [ -n "$DATA" ]; then
 	STOREPART=${PART}3
 	sfdisk -q "$DEV" <<EOF
@@ -124,8 +147,10 @@ fi
 udevadm settle --timeout=10
 mkfs.fat -F 32 -n NIXBOOT "${PART}1"
 fs_mkfs "$FS" "$STOREPART" NIXSTORE
-[ -z "$DATA" ] || fs_mkfs "$FS" "${PART}2" NIXDATA
 
+# trap armed before the first cryptsetup open, not just before the
+# first mount: a mapper left behind by a failed mkfs is a device the
+# next run refuses on
 T=$(mktemp -d /run/nixgen-setup.XXXXXX)
 cleanup() {
 	for m in "$T/esp" "$T/store" "$T/data"; do
@@ -133,10 +158,27 @@ cleanup() {
 			umount "$m"
 		fi
 	done
+	# after the unmounts: a mapper carrying a mounted filesystem
+	# cannot close
+	if [ -b "/dev/mapper/$NIXGEN_CRYPT_NAME" ]; then
+		crypt_close
+	fi
 	rm -rf "$T"
 }
 trap cleanup EXIT
 mkdir "$T/esp" "$T/store" "$T/data"
+
+# LUKS goes under the filesystem, so mkfs and the seeding below work on
+# the mapper. NIXDATA stays on the filesystem inside, which is what the
+# boot looks up
+DATADEV=$DATAPART KPARAMS=
+if [ -n "$ENC" ]; then
+	crypt_format "$DATAPART"
+	crypt_open "$DATAPART"
+	DATADEV=/dev/mapper/$NIXGEN_CRYPT_NAME
+	KPARAMS=" $(crypt_params "$DATAPART")"
+fi
+[ -z "$DATA" ] || fs_mkfs "$FS" "$DATADEV" NIXDATA
 
 # GRUB's whole job is finding the store partition and deferring to its
 # entries.cfg, which commit/update/adopt append to
@@ -162,16 +204,23 @@ mount "$STOREPART" "$T/store"
 /usr/local/bin/nixgen-commit "$NAME" "$T/store"
 if [ -n "$DATA" ]; then
 	# seed from the running root (what the user shaped is what the
-	# installed /home starts as), then stamp the flag into the entry
+	# installed /home starts as), then stamp the flags into the entry
 	# commit just wrote: a fresh store has exactly that one entry, so
-	# the sed cannot touch anything else
-	mount "${PART}2" "$T/data"
+	# the sed cannot touch anything else. rd.luks.name= rides the entry
+	# for the same reason nixdata= does, which disks a boot unlocks is
+	# a property of the entry and not of the generation, so later
+	# commits and updates inherit it from the running cmdline
+	# (nixgen-entry)
+	mount "$DATADEV" "$T/data"
 	/usr/local/lib/nixgen-seedstate "$T/data" \
 		$(/usr/local/lib/nixgen-statepaths persistent)
 	umount "$T/data"
-	sed -i 's|^\tlinux .*|& nixdata=NIXDATA|' "$T/store/entries.cfg"
+	sed -i "s|^\tlinux .*|&$KPARAMS nixdata=NIXDATA|" \
+		"$T/store/entries.cfg"
 fi
 umount "$T/store"
 
 [ -z "$NEWUSER" ] || echo "user: $NEWUSER (committed with the generation)"
+[ -z "$ENC" ] || echo "data partition encrypted (keep the passphrase," \
+	"there is no second keyslot)"
 echo "installed: $NAME on $DEV (unplug the installer medium, reboot)"

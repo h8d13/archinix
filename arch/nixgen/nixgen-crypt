@@ -1,0 +1,65 @@
+# LUKS2 for the persistent data partition. Sourced, not run: host
+# scripts take it from the repo, in-box scripts from
+# /usr/local/lib/nixgen-crypt.
+#
+# The data partition only, on purpose. GRUB reads the store before any
+# kernel exists, so encrypting that one puts a second crypto stack
+# (unaccelerated, small heap) and a second prompt between the box and
+# its own kernel. And the root filesystem is not a partition at all: an
+# overlay of an immutable store path and a tmpfs upper, so writes that
+# were never committed never reach a disk. What is left worth
+# encrypting is /home and the other state rows, which is exactly what
+# NIXDATA holds.
+#
+# Nothing here is read by anything but the kernel, so there are no
+# cipher or pbkdf knobs either: the cryptsetup defaults
+# (aes-xts-plain64, argon2id) have no constraint to work around.
+NIXGEN_CRYPT_NAME=nixdata
+
+# installed on demand by setup/data, like the mkfs tools: the dep stays
+# out of every generation
+crypt_pkg() {
+	echo cryptsetup
+}
+
+# LUKS2 container on a partition, one passphrase prompt.
+# --batch-mode drops cryptsetup's overwrite confirmation (callers
+# already made the user type the device path back) and with it the
+# passphrase verification: the crypt_open that follows is the
+# verification, and a typo surfaces there, while the disk still holds
+# nothing but a header.
+crypt_format() {
+	cryptsetup --batch-mode --type luks2 luksFormat "$1"
+}
+
+# open at /dev/mapper/$NIXGEN_CRYPT_NAME. The NIXDATA label stays on
+# the filesystem inside, so run-nixdata.mount keeps looking the
+# partition up the same way and the data generator needs no arm for
+# this at all
+crypt_open() {
+	cryptsetup open "$1" "$NIXGEN_CRYPT_NAME"
+}
+
+crypt_close() {
+	cryptsetup close "$NIXGEN_CRYPT_NAME"
+}
+
+# header UUID: what rd.luks.name= on the boot entry names it by
+crypt_uuid() {
+	cryptsetup luksUUID "$1"
+}
+
+# The pair of cmdline words that unlock it, for stamping onto an entry.
+# The timeout bounds waiting for the DEVICE, which is the thing a
+# detached data disk makes it wait for; the unencrypted path costs the
+# same 10s probe before it proceeds volatile. Not nofail, which reads
+# like the same idea and is not: it means nothing waits for the unlock
+# either, so the passphrase prompt is posted and then walked past, and
+# switch-root takes the agent with it. Nothing else in the initrd
+# requires cryptsetup.target (sysinit.target only wants it), so a
+# missing disk still degrades to a volatile boot rather than failing
+# one.
+crypt_params() {
+	echo "rd.luks.name=$(crypt_uuid "$1")=$NIXGEN_CRYPT_NAME" \
+		"rd.luks.options=$(crypt_uuid "$1")=x-systemd.device-timeout=10s"
+}

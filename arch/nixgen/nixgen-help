@@ -83,7 +83,7 @@ COMMANDS
               like -remove/-switch/-diffid. Refuses paths without a
               kernel+initramfs and duplicate entries.
 
-       nixgen-data <partition> [--fs <type>]
+       nixgen-data <partition> [--fs <type>] [--encrypt]
               Format a partition as the persistent data disk (label
               NIXDATA) and seed it from the running root. Persistent
               rows of /etc/nixgen/state (default /home, /var/log) then
@@ -94,9 +94,13 @@ COMMANDS
               disk) those paths stay in the RAM upper as usual.
               Committed/updated entries inherit the flag from the
               running cmdline. --fs as in nixgen-setup (ext4 default).
+              --encrypt puts LUKS2 under it and prints the
+              rd.luks.name= to add next to nixdata=; the initramfs
+              opens it from there, so there is no crypttab and nothing
+              about it lives in a generation.
 
        nixgen-setup <device> [name] [--fs <type>] [--data <size>]
-                    [-u <user>]
+                    [--encrypt] [-u <user>]
               Install onto a disk from inside the box: GPT (ESP +
               NIXSTORE), standalone GRUB, fresh store seeded with a
               commit of the running root. --fs picks the store filesystem (ext4 default,
@@ -104,7 +108,15 @@ COMMANDS
               them. --data carves a NIXDATA partition of <size> on the
               same disk (same fs), seeds it and stamps nixdata=NIXDATA
               into the installed entry: single-disk persistent state
-              without a separate nixgen-data run. -u useradd -m's a
+              without a separate nixgen-data run. --encrypt takes that
+              partition, and only that one: the store is GRUB's to read
+              before any kernel exists, and the root filesystem is an
+              overlay of an immutable store path and a tmpfs upper, so
+              uncommitted writes never reach a disk to begin with. What
+              is left worth encrypting is /home and the other state
+              rows, which is what NIXDATA holds. One prompt in early
+              boot, no second keyslot, no header backup: keep the
+              passphrase. -u useradd -m's a
               user before the commit, so the account lands in the
               generation. Do it here: /etc rides the generation while
               /home rides the data partition, so a useradd on the
@@ -112,7 +124,7 @@ COMMANDS
               and strands the home for the next uid to inherit. Its
               password is a write like root's: set it, commit it. GRUB has to read the store to load a generation's
               kernel, which is what limits the choice. Deps (grub,
-              dosfstools, the filesystem's own progs) install on demand
+              dosfstools, cryptsetup, the filesystem's own progs) install on demand
               into the ephemeral upper: needs network, gone at reboot.
               UEFI only; unplug a NIXSTORE-labeled installer stick
               before first boot (GRUB searches by label).
@@ -155,7 +167,9 @@ INTERNALS
               is the store's source of truth, while the directory also
               carries the .links dedup farm and half-written imports.
 
-       Off the command surface (/usr/local/lib): nixgen-entry writes
+       Off the command surface (/usr/local/lib): nixgen-crypt is the
+       LUKS2 table setup and data format the data partition through,
+       and the only encryption in the system; nixgen-entry writes
        entries.cfg atomically and GC-roots the entry's generation
        (shared by commit/update/adopt); nixgen-seedstate first-time
        seeds state dirs onto the data partition; nixgen-statepaths is

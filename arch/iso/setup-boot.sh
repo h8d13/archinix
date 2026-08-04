@@ -121,9 +121,10 @@ install -m755 "$I/nixgen-help" /usr/local/bin/nixgen-help
 install -m755 "$I/nixgen-savemeta" /usr/local/bin/nixgen-savemeta
 install -m755 "$I/nixgen-restmeta" /usr/local/bin/nixgen-restmeta
 install -m755 "$I/nixgen-data" /usr/local/bin/nixgen-data
-# sourced table, not a command: /usr/local/lib keeps it out of the
+# sourced tables, not commands: /usr/local/lib keeps them out of the
 # nixgen-* command surface (nixgen-help drift check globs bin/)
 install -Dm644 "$I/nixgen-fs" /usr/local/lib/nixgen-fs
+install -Dm644 "$I/nixgen-crypt" /usr/local/lib/nixgen-crypt
 # internal pieces, same reasoning: the entries.cfg writer shared by
 # commit/update/adopt and the state seeder the generated units call
 install -Dm755 "$I/nixgen-entry" /usr/local/lib/nixgen-entry
