@@ -8,28 +8,39 @@
 # across generations instead of branching with them. Fully opt-in:
 # entries without nixdata= keep the volatile behavior, and a detached
 # disk costs a 10s probe before the boot proceeds volatile.
-# usage: nixgen-data <partition> [--fs <type>]
+# usage: nixgen-data <partition> [--fs <type>] [--encrypt]
 #        fs default ext4 (nixgen-fs table; no GRUB constraint here,
 #        the kernel just has to mount it)
+#        --encrypt puts LUKS2 under it (nixgen-crypt) and prints the
+#        cmdline words that unlock it, to go on the entry next to
+#        nixdata=
 # the store is 0700 root:root and the work below mounts, imports or
 # writes it: bail here rather than at whichever privileged call
 # happens to fail first, which reads as a missing file
 [ "$(id -u)" = 0 ] || { echo "${0##*/}: needs root" >&2; exit 1; }
 . /usr/local/lib/nixgen-fs
+. /usr/local/lib/nixgen-crypt
 
-DEV= FS=ext4
+DEV= FS=ext4 ENC=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--fs) FS=$2; shift 2 ;;
 	--fs=*) FS=${1#--fs=}; shift ;;
+	--encrypt) ENC=1; shift ;;
 	-*) echo "unknown option: $1" >&2; exit 1 ;;
 	*) DEV=$1; shift ;;
 	esac
 done
 is_supported_fs "$FS" || exit 1
 [ -b "$DEV" ] || {
-	echo "usage: $0 <partition> [--fs <type>]" >&2
+	echo "usage: $0 <partition> [--fs <type>] [--encrypt]" >&2
 	echo "  <type>: $(echo "$NIXGEN_FS_ALL" | tr ' ' '|') (default ext4)" >&2
+	exit 1
+}
+# same mapper collision check as nixgen-setup, and before cleanup()
+# exists for the same reason
+[ -z "$ENC" ] || [ ! -b "/dev/mapper/$NIXGEN_CRYPT_NAME" ] || {
+	echo "refusing: /dev/mapper/$NIXGEN_CRYPT_NAME is open" >&2
 	exit 1
 }
 # persistent rows only: volatile rows never touch this partition (the
@@ -53,27 +64,48 @@ read -r reply
 
 # same on-demand dep pattern as nixgen-setup: mkfs tools stay out of
 # the generations, land in the ephemeral upper
-pacman -S --needed --noconfirm "$(fs_pkg "$FS")" || {
+# CRYPTPKG unquoted: empty without --encrypt, one word with it
+CRYPTPKG=
+[ -z "$ENC" ] || CRYPTPKG=$(crypt_pkg)
+pacman -S --needed --noconfirm "$(fs_pkg "$FS")" $CRYPTPKG || {
 	echo "data: dep install failed (stale generation?);" \
 		"nixgen-update + reboot, then retry" >&2
 	exit 1
 }
-fs_mkfs "$FS" "$DEV" NIXDATA
 
-# seed now, from the running root: the upper's current /home is what
-# the user expects to find after rebooting persistent, and a reboot
-# would drop it (the boot-time seeder only sees the pristine lower)
+# armed before the first cryptsetup open, not just before the mount:
+# same reason as nixgen-setup
 T=$(mktemp -d /run/nixgen-data.XXXXXX)
 cleanup() {
 	if mountpoint -q "$T"; then
 		umount "$T"
 	fi
+	# after the unmount: a mapper carrying a mounted fs cannot close
+	if [ -b "/dev/mapper/$NIXGEN_CRYPT_NAME" ]; then
+		crypt_close
+	fi
 	rm -rf "$T"
 }
 trap cleanup EXIT
-mount "$DEV" "$T"
+
+# LUKS goes under the filesystem, so the mkfs and seed below work on
+# the mapper. KPARAMS carries its trailing space, so the unencrypted
+# line below reads exactly as it did before
+TARGET=$DEV KPARAMS=
+if [ -n "$ENC" ]; then
+	crypt_format "$DEV"
+	crypt_open "$DEV"
+	TARGET=/dev/mapper/$NIXGEN_CRYPT_NAME
+	KPARAMS="$(crypt_params "$DEV") "
+fi
+fs_mkfs "$FS" "$TARGET" NIXDATA
+
+# seed now, from the running root: the upper's current /home is what
+# the user expects to find after rebooting persistent, and a reboot
+# would drop it (the boot-time seeder only sees the pristine lower)
+mount "$TARGET" "$T"
 /usr/local/lib/nixgen-seedstate "$T" $PATHS
 
 echo "data partition ready on $DEV (label NIXDATA)"
-echo "boot with nixdata=NIXDATA appended to a GRUB entry's linux line"
+echo "boot with ${KPARAMS}nixdata=NIXDATA appended to a GRUB entry's linux line"
 echo "(edit /nixstoredev/entries.cfg); commit/update entries inherit it"
