@@ -128,7 +128,8 @@ COMMANDS
               install on demand
               into the ephemeral upper: needs network, gone at reboot.
               UEFI only; unplug a NIXSTORE-labeled installer stick
-              before first boot (GRUB searches by label).
+              before first boot (GRUB searches by label). An ISO runs
+              its store from RAM, so its own stick is a valid target.
 
 INTERNALS
        nixgen-savemeta <root>

@@ -8,7 +8,8 @@
 # UEFI only, Secure Boot off. Everything on the target is lost; the
 # device path must be typed back. GRUB finds the store by label: if
 # the installer medium is itself a NIXSTORE disk (flashed stick),
-# unplug it before first boot.
+# unplug it before first boot. An ISO runs its store from RAM
+# (initcpio-nixgen-store), so its own medium is a valid target.
 # usage: nixgen-setup <device> [name] [--fs <type>] [--data <size>]
 #                     [-u <user>]
 #        name default nixarch-install, fs default ext4 (nixgen-fs holds
@@ -223,4 +224,4 @@ umount "$T/store"
 [ -z "$NEWUSER" ] || echo "user: $NEWUSER (committed with the generation)"
 [ -z "$ENC" ] || echo "data partition encrypted (keep the passphrase," \
 	"there is no second keyslot)"
-echo "installed: $NAME on $DEV (unplug the installer medium, reboot)"
+echo "installed: $NAME on $DEV (reboot)"

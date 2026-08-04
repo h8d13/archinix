@@ -30,6 +30,16 @@ done
 kill "$QPID" 2>/dev/null || true
 wait "$QPID" 2>/dev/null || true
 
-grep -a "NIXARCH BOOT OK" "$LOG" && echo "PASS (${WAITED}s)" || {
+grep -a "NIXARCH BOOT OK" "$LOG" || {
 	echo "FAIL: marker not in $LOG"; exit 1;
 }
+# the hook falls back to the medium when the copy fails, so a green
+# boot alone does not say which path ran. Only a SERIAL=1 image puts
+# that output here, hence the two separate failures
+grep -aq ":: nixgen:" "$LOG" || {
+	echo "FAIL: no store-hook output; rebuild SERIAL=1"; exit 1;
+}
+grep -a "boot medium released" "$LOG" || {
+	echo "FAIL: store not copied to RAM"; exit 1;
+}
+echo "PASS (${WAITED}s)"

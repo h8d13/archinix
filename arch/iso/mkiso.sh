@@ -6,6 +6,7 @@
 # initcpio hook), squash the whole store, wrap in GRUB ISO.
 #
 # usage: mkiso.sh <store-root> <base-store-path>
+#        SERIAL=1 puts userspace boot output on ttyS0 (see CONSOLE below)
 cd "$(dirname "$0")/../.."
 REPO=$PWD
 
@@ -81,6 +82,12 @@ cp "$GEN1/boot/vmlinuz-linux" "$ISO/boot/vmlinuz-linux"
 cp "$GEN1/boot/initramfs-linux.img" "$ISO/boot/initramfs-linux.img"
 
 G1=$(basename "$GEN1")
+# /dev/console is the last console=, and it is where userspace boot
+# output goes: default it to the screen, since a box with no serial
+# port would otherwise boot silent. SERIAL=1 hands it to ttyS0 for
+# headless runs (boot-test.sh reads it). printk goes to both either way
+CONSOLE="console=ttyS0,115200 console=tty0"
+[ -z "$SERIAL" ] || CONSOLE="console=tty0 console=ttyS0,115200"
 cat > "$ISO/boot/grub/grub.cfg" <<EOF
 set default=0
 set timeout=5
@@ -89,7 +96,7 @@ set timeout=5
 # systemd-gpt-auto-generator must not go looking for a root partition of
 # its own and race the generated sysroot.mount
 menuentry "nixarch ISO (read-only): $G1" {
-	linux /boot/vmlinuz-linux nixgen=$G1 nixlabel=$LABEL rd.systemd.gpt_auto=0 console=ttyS0,115200 console=tty0
+	linux /boot/vmlinuz-linux nixgen=$G1 nixlabel=$LABEL rd.systemd.gpt_auto=0 $CONSOLE
 	initrd /boot/initramfs-linux.img
 }
 
