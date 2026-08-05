@@ -115,6 +115,11 @@ if [ -n "\$nixdev" ]; then
 fi
 EOF
 
-grub-mkrescue -o "$REPO/build/nixarch.iso" "$ISO" -volid "$LABEL"
+# --locales=: grub bundles whatever translations the build host has
+# under /usr/share/locale, so the ISO grew or shrank with the builder
+# (the CI container strips all but en*, a workstation carries 43, and
+# mkrescue writes each .mo twice) -- 10 MiB of drift for a menu that is
+# one generated entry. Dropping them makes the size host-independent.
+grub-mkrescue --locales= -o "$REPO/build/nixarch.iso" "$ISO" -volid "$LABEL"
 ls -lh "$REPO/build/nixarch.iso"
 echo "boot test: arch/tests/boot-test.sh"
